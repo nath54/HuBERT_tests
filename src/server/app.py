@@ -524,15 +524,36 @@ def get_live_scaling_status() -> Optional[Dict]:
     import subprocess
     import glob
     import re
+    import time
+    from datetime import datetime, timedelta
 
     # Check if process is running
     p = subprocess.run(["pgrep", "-f", "scale_pretrain_benchmark"], capture_output=True, text=True)
     is_running = (p.returncode == 0 and len(p.stdout.strip()) > 0)
 
-    # Check scaling history file
+    # Check live status JSON
+    live_status_path = Path("logs/pretrain_status_live.json")
+    live_data = {}
+    if live_status_path.exists():
+        try:
+            with open(live_status_path, "r", encoding="utf-8") as f:
+                live_data = json.load(f)
+        except Exception:
+            pass
+
+    # If process is running or heartbeat is fresh (< 90s), mark running
+    heartbeat_fresh = (time.time() - live_data.get("last_heartbeat", 0)) < 90
+    if heartbeat_fresh:
+        is_running = True
+
+    # If not running and no live data exists at all, bail out to state.pretrain_status
+    if not is_running and not live_data:
+        return None
+
+    # Check scaling milestones file
     scaling_file = Path("logs/scaling_benchmark_history.json")
     milestones = []
-    tier = "mini"
+    tier = live_data.get("tier", "mini")
     params_m = 8.05
     if scaling_file.exists():
         try:
@@ -554,119 +575,140 @@ def get_live_scaling_status() -> Optional[Dict]:
         except Exception:
             pass
 
-    # Find task log
-    logs = glob.glob(os.path.expanduser("~/.gemini/antigravity/brain/*/.system_generated/tasks/*.log"))
-    target_log = None
-    for l in sorted(logs, key=os.path.getmtime, reverse=True)[:10]:
+    # Persistent step history tracking
+    step_history_file = Path("logs/scaling_benchmark_step_history.json")
+    history = []
+    if step_history_file.exists():
         try:
-            with open(l, "r", errors="ignore") as f:
-                head = f.read(1500)
-                if "scale_pretrain_benchmark" in head or "LARGE-SCALE HUBERT PRE-TRAINING" in head:
-                    target_log = l
-                    break
+            with open(step_history_file, "r", encoding="utf-8") as f:
+                history = json.load(f)
         except Exception:
-            pass
+            history = []
 
-    if not target_log:
-        return None
+    # If history is empty, populate from milestone anchors
+    if not history and milestones:
+        for m in milestones:
+            if m["step"] > 0:
+                history.append({
+                    "step": m["step"],
+                    "loss": m["loss"],
+                    "accuracy": 1.0,
+                    "masked_accuracy_pct": 1.0,
+                    "cumulative_audio_sec": m["hours"] * 3600.0,
+                    "cumulative_audio_hours": m["hours"],
+                    "disk_bytes_used": 0,
+                    "active_voices": ["piper"],
+                    "active_voice": "piper",
+                })
 
-    try:
-        with open(target_log, "r", errors="ignore") as f:
-            lines = f.readlines()
-    except Exception:
-        return None
-
+    # Search for any task logs across all sessions for detailed historical lines
+    logs = glob.glob(os.path.expanduser("~/.gemini/antigravity/brain/*/.system_generated/tasks/*.log"))
+    clean_recent_logs = []
     step_pattern = re.compile(
         r"Step\s+(\d+)/(\d+)\s+\|\s+Loss:\s+([\d\.]+)\s+\|\s+Masked Acc:\s+([\d\.]+)%\s+\|\s+Audio In-RAM:\s+([\d\.]+)s\s+\(([\d\.]+)h\)\s+\|\s+(\d+)\s+Disk Bytes\s+\|\s+Voices:\s+\[(.*?)\]"
     )
-    milestone_pattern = re.compile(
-        r"Milestone Results:\s+Pre-train Hours:\s+([\d\.]+)h\s+\|\s+Loss:\s+([\d\.]+)\s+\|\s+LibriSpeech WER:\s+([\d\.]+)%\s+\|\s+CER:\s+([\d\.]+)%\s+\|\s+PER:\s+([\d\.]+)%"
-    )
 
-    history = []
-    latest_step = None
-    clean_recent_logs = []
-
-    for line in lines:
-        if "Missing phoneme from id map" in line:
-            continue
-        line_clean = line.strip()
-        if line_clean:
-            clean_recent_logs.append(line_clean)
-        m = step_pattern.search(line)
-        if m:
-            entry = {
-                "step": int(m.group(1)),
-                "total_steps": int(m.group(2)),
-                "loss": float(m.group(3)),
-                "accuracy": float(m.group(4)),
-                "masked_accuracy_pct": float(m.group(4)),
-                "cumulative_audio_sec": float(m.group(5)),
-                "cumulative_audio_hours": float(m.group(6)),
-                "disk_bytes_used": int(m.group(7)),
-                "active_voices": [v.strip() for v in m.group(8).split(",")],
-                "active_voice": m.group(8),
-            }
-            history.append(entry)
-            latest_step = entry
-
-        ms = milestone_pattern.search(line)
-        if ms:
-            m_hours = float(ms.group(1))
-            if not any(abs(m["hours"] - m_hours) < 0.01 for m in milestones):
-                milestones.append({
-                    "step": latest_step["step"] if latest_step else 0,
-                    "hours": m_hours,
-                    "loss": float(ms.group(2)),
-                    "wer": float(ms.group(3)),
-                    "cer": float(ms.group(4)),
-                    "per": float(ms.group(5)),
-                    "sample_pred": "",
-                })
-
-    if not latest_step:
-        return None
-
-    # Check if real-time live status JSON exists
-    live_status_path = Path("logs/pretrain_status_live.json")
-    live_data = {}
-    if live_status_path.exists():
+    for l in sorted(logs, key=os.path.getmtime, reverse=True)[:25]:
         try:
-            with open(live_status_path, "r", encoding="utf-8") as f:
-                live_data = json.load(f)
+            with open(l, "r", errors="ignore") as f:
+                head = f.read(2000)
+                if "scale_pretrain_benchmark" in head or "LARGE-SCALE HUBERT PRE-TRAINING" in head:
+                    f.seek(0)
+                    for line in f:
+                        if "Missing phoneme from id map" in line:
+                            continue
+                        line_clean = line.strip()
+                        if line_clean:
+                            clean_recent_logs.append(line_clean)
+                        m = step_pattern.search(line)
+                        if m:
+                            st = int(m.group(1))
+                            if not any(h["step"] == st for h in history):
+                                history.append({
+                                    "step": st,
+                                    "total_steps": int(m.group(2)),
+                                    "loss": float(m.group(3)),
+                                    "accuracy": float(m.group(4)),
+                                    "masked_accuracy_pct": float(m.group(4)),
+                                    "cumulative_audio_sec": float(m.group(5)),
+                                    "cumulative_audio_hours": float(m.group(6)),
+                                    "disk_bytes_used": int(m.group(7)),
+                                    "active_voices": [v.strip() for v in m.group(8).split(",")],
+                                    "active_voice": m.group(8),
+                                })
         except Exception:
             pass
 
+    # Append current live step to history if live_data is present
+    current_step = live_data.get("step")
+    if current_step and not any(h["step"] == current_step for h in history):
+        new_entry = {
+            "step": current_step,
+            "total_steps": live_data.get("total_steps", 625),
+            "loss": live_data.get("loss", 4.3),
+            "accuracy": live_data.get("masked_accuracy_pct", 1.0),
+            "masked_accuracy_pct": live_data.get("masked_accuracy_pct", 1.0),
+            "cumulative_audio_sec": live_data.get("cumulative_audio_sec", 0.0),
+            "cumulative_audio_hours": live_data.get("cumulative_audio_hours", 0.0),
+            "disk_bytes_used": 0,
+            "active_voices": live_data.get("active_voices", []),
+            "active_voice": live_data.get("active_voice", ""),
+        }
+        history.append(new_entry)
+        history.sort(key=lambda x: x["step"])
+        try:
+            with open(step_history_file, "w", encoding="utf-8") as f:
+                json.dump(history, f, indent=2)
+        except Exception:
+            pass
+
+    history.sort(key=lambda x: x["step"])
+
+    # Extract current stats
+    step = live_data.get("step", history[-1]["step"] if history else 0)
+    total_steps = live_data.get("total_steps", 625)
+    loss = live_data.get("loss", history[-1]["loss"] if history else 4.5)
+    acc = live_data.get("masked_accuracy_pct", history[-1]["accuracy"] if history else 1.0)
+    audio_sec = live_data.get("cumulative_audio_sec", history[-1]["cumulative_audio_sec"] if history else 0.0)
+    audio_hours = live_data.get("cumulative_audio_hours", history[-1]["cumulative_audio_hours"] if history else 0.0)
+    active_voice = live_data.get("active_voice", history[-1].get("active_voice", "piper") if history else "piper")
+    active_voices = live_data.get("active_voices", history[-1].get("active_voices", []) if history else [])
+    avg_step_sec = live_data.get("avg_step_sec", 12.5)
+
     eta_formatted = live_data.get("eta_formatted")
     estimated_finish_time = live_data.get("estimated_finish_time")
-    avg_step_sec = live_data.get("avg_step_sec", 13.2)
-
-    if not eta_formatted and latest_step:
-        from datetime import datetime, timedelta
-        rem_steps = max(0, latest_step["total_steps"] - latest_step["step"])
-        rem_evals = max(0, (latest_step["total_steps"] - latest_step["step"]) // 125)
+    if not eta_formatted and step > 0:
+        rem_steps = max(0, total_steps - step)
+        rem_evals = max(0, rem_steps // 125)
         eta_seconds = (rem_steps * avg_step_sec) + (rem_evals * 35.0)
         h = int(eta_seconds // 3600)
         m = int((eta_seconds % 3600) // 60)
         eta_formatted = f"{h}h {m:02d}m" if h > 0 else f"{m}m"
         estimated_finish_time = (datetime.now() + timedelta(seconds=eta_seconds)).strftime("%H:%M:%S")
 
+    # If clean_recent_logs is sparse, synthesise from recent history entries
+    if len(clean_recent_logs) < 10 and history:
+        for h in history[-20:]:
+            clean_recent_logs.append(
+                f"Step {h['step']:4d}/{total_steps} | Loss: {h['loss']:.4f} | Masked Acc: {h.get('masked_accuracy_pct', 1.0):.1f}% | Audio: {h['cumulative_audio_hours']:.3f}h | Voices: [{h.get('active_voice', '')}]"
+            )
+
     return {
         "is_running": is_running,
         "source": "scaling_benchmark",
         "tier": tier,
         "parameters_m": params_m,
-        "step": latest_step["step"],
-        "total_steps": latest_step["total_steps"],
-        "loss": latest_step["loss"],
-        "accuracy": latest_step["accuracy"],
-        "masked_accuracy_pct": latest_step["accuracy"],
-        "cumulative_audio_sec": latest_step["cumulative_audio_sec"],
-        "cumulative_audio_hours": latest_step["cumulative_audio_hours"],
-        "disk_space_saved_mb": round((latest_step["cumulative_audio_sec"] * 32000) / 1024 / 1024, 2),
+        "step": step,
+        "total_steps": total_steps,
+        "loss": loss,
+        "accuracy": acc,
+        "masked_accuracy_pct": acc,
+        "cumulative_audio_sec": audio_sec,
+        "cumulative_audio_hours": audio_hours,
+        "disk_space_saved_mb": round((audio_sec * 32000) / 1024 / 1024, 2),
         "disk_bytes_used": 0,
-        "active_voice": latest_step["active_voice"],
-        "active_voices": latest_step["active_voices"],
+        "active_voice": active_voice,
+        "active_voices": active_voices,
         "eta_formatted": eta_formatted or "--",
         "estimated_finish_time": estimated_finish_time or "--",
         "avg_step_sec": round(avg_step_sec, 2),
