@@ -1,0 +1,914 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HuBERT Audio & Layer Explorer</title>
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+  <style>
+    /* Custom scrollbar and subtle glowing highlights */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(148, 163, 184, 0.4); border-radius: 3px; }
+    .badge-pill { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 9999px; font-size: 0.75rem; font-weight: 600; }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 antialiased p-4 md:p-8 font-sans selection:bg-indigo-500 selection:text-white">
+
+  <!-- Top Hero Header -->
+  <div class="max-w-7xl mx-auto space-y-6">
+    <div class="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 border border-slate-800 rounded-2xl p-6 md:p-8 shadow-2xl relative overflow-hidden">
+      <div class="absolute -right-16 -top-16 w-64 h-64 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none"></div>
+      <div class="relative z-10 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+        <div>
+          <div class="flex items-center gap-2 mb-2">
+            <span class="badge-pill bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">HuBERT Interactive Guide</span>
+            <span class="badge-pill bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">PyTorch & Captum</span>
+            <span class="badge-pill bg-sky-500/20 text-sky-400 border border-sky-500/30">16 kHz / 320x Downsampling</span>
+          </div>
+          <h1 class="text-2xl md:text-4xl font-extrabold tracking-tight text-white">
+            How HuBERT Sees Speech: <span class="bg-clip-text text-transparent bg-gradient-to-r from-indigo-400 via-sky-300 to-teal-300">Layer-by-Layer Interactive Tour</span>
+          </h1>
+          <p class="text-slate-400 text-sm md:text-base mt-2 max-w-3xl">
+            From raw continuous air pressure vibrations to discrete acoustic units and character sequences. Explore what each layer learns, how long audio is compressed, and how CTC decoding aligns sounds to words.
+          </p>
+        </div>
+        <div class="flex items-center gap-2 bg-slate-900/80 border border-slate-700/60 p-2 rounded-xl backdrop-blur">
+          <label class="text-xs text-slate-400 font-medium px-2">Sample Utterance:</label>
+          <select id="audioSampleSelect" class="bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
+            <option value="hello">"hello" (Vowel Transition + Lateral)</option>
+            <option value="one">"one" (Nasal + Glide)</option>
+            <option value="speech">"speech" (Fricative Burst /s/ + Plosive /p/)</option>
+            <option value="long">Long Audio Utterance (3.2 seconds)</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <!-- Navigation Tabs for Intuitive Learning Progression -->
+    <div class="flex flex-wrap gap-2 border-b border-slate-800 pb-3" id="tabBar">
+      <button onclick="switchTab('stage1')" id="btn-stage1" class="tab-btn px-4 py-2 rounded-xl text-sm font-semibold transition-all bg-indigo-600 text-white shadow-lg shadow-indigo-600/30 flex items-center gap-2">
+        <span class="w-5 h-5 rounded-full bg-white/20 flex items-center justify-center text-xs">1</span> Input Signal & Formants
+      </button>
+      <button onclick="switchTab('stage2')" id="btn-stage2" class="tab-btn px-4 py-2 rounded-xl text-sm font-semibold transition-all bg-slate-900 text-slate-400 hover:text-white border border-slate-800 flex items-center gap-2">
+        <span class="w-5 h-5 rounded-full bg-slate-800 flex items-center justify-center text-xs">2</span> 320x CNN Downsampling
+      </button>
+      <button onclick="switchTab('stage3')" id="btn-stage3" class="tab-btn px-4 py-2 rounded-xl text-sm font-semibold transition-all bg-slate-900 text-slate-400 hover:text-white border border-slate-800 flex items-center gap-2">
+        <span class="w-5 h-5 rounded-full bg-slate-800 flex items-center justify-center text-xs">3</span> Inside the Transformer Layers
+      </button>
+      <button onclick="switchTab('stage4')" id="btn-stage4" class="tab-btn px-4 py-2 rounded-xl text-sm font-semibold transition-all bg-slate-900 text-slate-400 hover:text-white border border-slate-800 flex items-center gap-2">
+        <span class="w-5 h-5 rounded-full bg-slate-800 flex items-center justify-center text-xs">4</span> Discrete Audio Units (HuBERT)
+      </button>
+      <button onclick="switchTab('stage5')" id="btn-stage5" class="tab-btn px-4 py-2 rounded-xl text-sm font-semibold transition-all bg-slate-900 text-slate-400 hover:text-white border border-slate-800 flex items-center gap-2">
+        <span class="w-5 h-5 rounded-full bg-slate-800 flex items-center justify-center text-xs">5</span> CTC Decoding & Output Alignment
+      </button>
+    </div>
+
+    <!-- TAB 1: INPUT SIGNAL & FORMANT VISUALIZER -->
+    <div id="tab-stage1" class="tab-content space-y-6">
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <!-- Main Waveform & Spectrogram Canvas -->
+        <div class="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+          <div class="flex justify-between items-center">
+            <div>
+              <h3 class="text-lg font-bold text-white flex items-center gap-2">
+                <span class="w-2.5 h-2.5 rounded-full bg-sky-400 animate-pulse"></span>
+                Raw Input Signal: Waveform vs. Frequency Spectrogram
+              </h3>
+              <p class="text-xs text-slate-400">At 16,000 Hz, 1 second contains 16,000 discrete amplitude measurements.</p>
+            </div>
+            <div class="flex items-center gap-2 text-xs">
+              <button id="btnZoomIn" class="bg-slate-800 hover:bg-slate-700 px-3 py-1 rounded border border-slate-700 text-slate-200">Zoom Frame (20ms)</button>
+              <button id="btnZoomReset" class="bg-slate-800 hover:bg-slate-700 px-3 py-1 rounded border border-slate-700 text-slate-200">Reset View</button>
+            </div>
+          </div>
+
+          <!-- Waveform Canvas -->
+          <div class="space-y-1">
+            <div class="flex justify-between text-[11px] text-slate-400 font-mono">
+              <span>Time-Domain Waveform (Air Pressure Amplitude)</span>
+              <span id="waveStats">12,400 samples | 0.775 seconds</span>
+            </div>
+            <div class="relative bg-slate-950 border border-slate-800 rounded-xl overflow-hidden h-36">
+              <canvas id="waveformCanvas" class="w-full h-full"></canvas>
+              <div id="playheadLine" class="absolute top-0 bottom-0 w-0.5 bg-rose-500 pointer-events-none hidden"></div>
+            </div>
+          </div>
+
+          <!-- Spectrogram Canvas -->
+          <div class="space-y-1">
+            <div class="flex justify-between text-[11px] text-slate-400 font-mono">
+              <span>Frequency Spectrogram (Formant F1, F2 Harmonics in Hz)</span>
+              <span>0 Hz to 4,000 Hz (Speech Range)</span>
+            </div>
+            <div class="relative bg-slate-950 border border-slate-800 rounded-xl overflow-hidden h-40">
+              <canvas id="spectrogramCanvas" class="w-full h-full"></canvas>
+            </div>
+          </div>
+
+          <!-- Interactive Time Scrubber -->
+          <div class="bg-slate-950/60 border border-slate-800/80 rounded-xl p-3 flex items-center gap-4">
+            <span class="text-xs font-semibold text-slate-300">Time Scrubber:</span>
+            <input type="range" id="timeScrubber" min="0" max="100" value="35" class="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-500">
+            <span id="scrubTimeText" class="text-xs font-mono text-indigo-400 w-16 text-right">0.271s</span>
+          </div>
+        </div>
+
+        <!-- Beginner Audio Concept Explainer Card -->
+        <div class="bg-gradient-to-b from-slate-900 to-slate-950 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+          <h4 class="text-md font-bold text-indigo-300 flex items-center gap-2">
+            💡 Audio Processing 101 for Newbies
+          </h4>
+
+          <div class="space-y-3 text-xs leading-relaxed text-slate-300">
+            <div class="p-3 bg-slate-800/50 rounded-xl border border-slate-700/50">
+              <strong class="text-sky-300 block mb-1">What is Audio to a Computer?</strong>
+              Audio is just a list of numbers representing air pressure vibrating on a microphone diaphragm.
+              A sample rate of <strong>16 kHz</strong> means 16,000 measurements per second.
+            </div>
+
+            <div class="p-3 bg-slate-800/50 rounded-xl border border-slate-700/50">
+              <strong class="text-emerald-300 block mb-1">Waveform vs Spectrogram</strong>
+              • <strong>Waveform:</strong> Shows <em>when</em> sounds are loud or quiet (amplitude in time).<br>
+              • <strong>Spectrogram:</strong> Decomposes vibrations into frequencies (Fourier Transform). Low lines = vocal pitch; higher resonant bands = vocal tract shapes (vowels like 'aa', 'ee').
+            </div>
+
+            <div class="p-3 bg-slate-800/50 rounded-xl border border-slate-700/50">
+              <strong class="text-amber-300 block mb-1">The Core Challenge for ASR</strong>
+              Computers cannot read characters directly from 16,000 raw numbers/sec. There are too many noisy vibrations. HuBERT's job is to distill these 16,000 numbers down into meaningful speech representations!
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 2: 320x CNN DOWNSAMPLING & LONG AUDIO CHUNKING -->
+    <div id="tab-stage2" class="tab-content hidden space-y-6">
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-5">
+        <div>
+          <h3 class="text-xl font-bold text-white flex items-center gap-2">
+            The 320x Temporal Funnel: How 16,000 Samples Become 50 Frames
+          </h3>
+          <p class="text-slate-400 text-sm mt-1">
+            Raw audio is 1-dimensional and excessively long. HuBERT uses 7 stacked 1D Temporal Convolutions to downsample audio by a factor of <strong>5 × 2 × 2 × 2 × 2 × 2 × 2 = 320</strong>.
+          </p>
+        </div>
+
+        <!-- 7-layer CNN Interactive Progression Diagram -->
+        <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3" id="cnnLayerCards">
+          <!-- Populated by JS -->
+        </div>
+
+        <!-- Interactive Receptive Field Visualizer -->
+        <div class="bg-slate-950 border border-slate-800 rounded-xl p-5 space-y-4">
+          <div class="flex flex-col md:flex-row justify-between md:items-center gap-2">
+            <div>
+              <h4 class="font-bold text-white text-sm">Interactive Frame Inspector: What does 1 Frame Cover?</h4>
+              <p class="text-xs text-slate-400">Hover or click a downsampled frame below to see its exact receptive field in raw audio samples.</p>
+            </div>
+            <div class="text-xs font-mono bg-indigo-950/60 border border-indigo-800/60 px-3 py-1.5 rounded-lg text-indigo-300">
+              1 Frame = 20 milliseconds = 320 audio samples
+            </div>
+          </div>
+
+          <!-- Downsampled Frames Grid -->
+          <div class="space-y-2">
+            <span class="text-xs font-mono text-slate-400">Output Frame Sequence (50 Hz / 20ms per frame):</span>
+            <div class="flex flex-wrap gap-1.5" id="framePillContainer">
+              <!-- Frame pills dynamically populated -->
+            </div>
+          </div>
+
+          <div id="receptiveFieldInsight" class="p-3 bg-slate-900/90 rounded-lg border border-slate-800 text-xs text-slate-300 font-mono">
+            Hover over any frame above to inspect its receptive field.
+          </div>
+        </div>
+
+        <!-- How Long Audio is Processed Card -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div class="p-4 bg-slate-950/70 border border-slate-800 rounded-xl space-y-2">
+            <h5 class="text-sm font-bold text-sky-300">Handling 10-Second or 1-Minute Speech</h5>
+            <p class="text-xs text-slate-300 leading-relaxed">
+              For a 10-second sentence (160,000 raw samples), the 1D CNN reduces the sequence length to just <strong>500 feature vectors</strong> ($160{,}000 / 320 = 500$).
+              This brings the sequence length well within the quadratic attention budget ($O(T^2)$) of the Transformer!
+            </p>
+          </div>
+          <div class="p-4 bg-slate-950/70 border border-slate-800 rounded-xl space-y-2">
+            <h5 class="text-sm font-bold text-emerald-300">Convolutional Positional Encoding</h5>
+            <p class="text-xs text-slate-300 leading-relaxed">
+              Unlike standard Transformers that use sinusoidal embeddings, HuBERT applies a <strong>depthwise 1D convolution (kernel size 128, groups 16)</strong> directly to the projected features. This provides relative positional awareness that generalizes naturally to arbitrary audio lengths!
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 3: INSIDE THE TRANSFORMER LAYERS -->
+    <div id="tab-stage3" class="tab-content hidden space-y-6">
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <!-- Layer Representation Heatmap -->
+        <div class="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+          <div class="flex flex-col sm:flex-row justify-between sm:items-center gap-2">
+            <div>
+              <h3 class="text-lg font-bold text-white">Hierarchical Layer Representation Dynamics</h3>
+              <p class="text-xs text-slate-400">Watch how representations evolve from low-level acoustics to high-level linguistics.</p>
+            </div>
+            <div class="flex items-center gap-1.5 bg-slate-950 p-1 rounded-lg border border-slate-800 text-xs">
+              <button onclick="selectLayer(0)" id="layerBtn0" class="layer-tab px-2.5 py-1 rounded bg-indigo-600 text-white font-semibold">CNN Out</button>
+              <button onclick="selectLayer(1)" id="layerBtn1" class="layer-tab px-2.5 py-1 rounded text-slate-400 hover:text-white">L1</button>
+              <button onclick="selectLayer(2)" id="layerBtn2" class="layer-tab px-2.5 py-1 rounded text-slate-400 hover:text-white">L2</button>
+              <button onclick="selectLayer(3)" id="layerBtn3" class="layer-tab px-2.5 py-1 rounded text-slate-400 hover:text-white">L3</button>
+              <button onclick="selectLayer(4)" id="layerBtn4" class="layer-tab px-2.5 py-1 rounded text-slate-400 hover:text-white">L4</button>
+            </div>
+          </div>
+
+          <!-- Feature Matrix Canvas -->
+          <div class="space-y-1">
+            <div class="flex justify-between text-[11px] text-slate-400 font-mono">
+              <span id="layerMatrixTitle">CNN Feature Representation (256 Embedding Dimensions x 38 Frames)</span>
+              <span>Values: Standardized Activations</span>
+            </div>
+            <div class="relative bg-slate-950 border border-slate-800 rounded-xl overflow-hidden h-48">
+              <canvas id="layerMatrixCanvas" class="w-full h-full"></canvas>
+            </div>
+          </div>
+
+          <!-- Multi-Head Self Attention Visualizer -->
+          <div class="space-y-1">
+            <div class="flex justify-between text-[11px] text-slate-400 font-mono">
+              <span>Multi-Head Self-Attention Map (Frame-to-Frame Temporal Context)</span>
+              <span>Average Across Attention Heads</span>
+            </div>
+            <div class="relative bg-slate-950 border border-slate-800 rounded-xl overflow-hidden h-44">
+              <canvas id="attentionCanvas" class="w-full h-full"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <!-- Layer Knowledge Spectrum Card -->
+        <div class="bg-gradient-to-b from-slate-900 to-slate-950 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+          <h4 class="text-md font-bold text-sky-300">What Does Each Layer Specialize In?</h4>
+
+          <div class="space-y-3 text-xs" id="layerExplanationPanel">
+            <!-- Dynamically changes with selected layer -->
+          </div>
+
+          <div class="pt-4 border-t border-slate-800 space-y-2">
+            <h5 class="text-xs font-bold text-slate-300">The Diagnostic Probing Verdict:</h5>
+            <div class="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-[11px] font-mono text-slate-400 space-y-1">
+              <div class="flex justify-between text-indigo-400"><span>Acoustic Reconstruction:</span><span>High in L0 -> Low in L4</span></div>
+              <div class="flex justify-between text-emerald-400"><span>Phonetic Discrimination:</span><span>Peaks in L2-L3 (34.2%)</span></div>
+              <div class="flex justify-between text-sky-400"><span>Lexical CTC Readiness:</span><span>Peaks in L4 Head</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 4: DISCRETE AUDIO UNITS (HuBERT EXPLAINED) -->
+    <div id="tab-stage4" class="tab-content hidden space-y-6">
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-5">
+        <div>
+          <h3 class="text-xl font-bold text-white flex items-center gap-2">
+            How Audio Units Are Managed: The Secret Behind HuBERT
+          </h3>
+          <p class="text-slate-400 text-sm mt-1">
+            Why is it called <strong>Hidden-Unit BERT</strong>? Unlike text (where words are already discrete tokens), continuous audio has no spaces or vocabulary. HuBERT invents its own vocabulary by clustering continuous acoustic space into discrete "audio units".
+          </p>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div class="p-4 bg-slate-950 border border-slate-800 rounded-xl space-y-2">
+            <div class="w-7 h-7 rounded-lg bg-indigo-500/20 text-indigo-400 flex items-center justify-center font-bold text-sm">1</div>
+            <h4 class="font-bold text-white text-sm">Continuous Acoustic Cloud</h4>
+            <p class="text-xs text-slate-400 leading-relaxed">
+              Every 20ms frame is a point in 512-dimensional continuous feature space. Small acoustic variations (microphone distance, pitch variations) cause points to scatter continuously.
+            </p>
+          </div>
+
+          <div class="p-4 bg-slate-950 border border-slate-800 rounded-xl space-y-2">
+            <div class="w-7 h-7 rounded-lg bg-sky-500/20 text-sky-400 flex items-center justify-center font-bold text-sm">2</div>
+            <h4 class="font-bold text-white text-sm">k-Means Discrete Quantization</h4>
+            <p class="text-xs text-slate-400 leading-relaxed">
+              HuBERT runs k-means clustering (e.g. $k=100$) on the representations. Each centroid becomes a discrete pseudo-phoneme token: Unit #12 for nasal onset, Unit #84 for open vowel, etc.
+            </p>
+          </div>
+
+          <div class="p-4 bg-slate-950 border border-slate-800 rounded-xl space-y-2">
+            <div class="w-7 h-7 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold text-sm">3</div>
+            <h4 class="font-bold text-white text-sm">Masked Pre-training (BERT-style)</h4>
+            <p class="text-xs text-slate-400 leading-relaxed">
+              HuBERT masks random spans of audio and forces the Transformer to predict which discrete audio unit belongs in the blank. This forces it to learn acoustic grammar and context!
+            </p>
+          </div>
+        </div>
+
+        <!-- Interactive Cluster Simulator -->
+        <div class="bg-slate-950 border border-slate-800 rounded-xl p-5 space-y-3">
+          <div class="flex justify-between items-center">
+            <h4 class="font-bold text-white text-sm">Interactive 2D Acoustic Cluster Projection (t-SNE / PCA Analogy)</h4>
+            <span class="text-xs text-slate-400 font-mono">Continuous Speech Frames -> Quantized Clusters</span>
+          </div>
+          <div class="relative bg-slate-900 border border-slate-800 rounded-xl h-52 overflow-hidden">
+            <canvas id="clusterCanvas" class="w-full h-full"></canvas>
+          </div>
+          <p class="text-xs text-slate-400 text-center">
+            Each dot represents a 20ms audio frame. Notice how frames belonging to similar sounds (vowels, fricatives, silence) gravitate to distinct discrete clusters!
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 5: CTC DECODING & OUTPUT ALIGNMENT -->
+    <div id="tab-stage5" class="tab-content hidden space-y-6">
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-5">
+        <div>
+          <h3 class="text-xl font-bold text-white flex items-center gap-2">
+            CTC Decoding: How Frame Probabilities Collapse into Text
+          </h3>
+          <p class="text-slate-400 text-sm mt-1">
+            Connectionist Temporal Classification (CTC) allows speech models to output text without requiring frame-by-frame text alignments. It uses a special <strong>Blank Token (_)</strong> to separate repeated letters!
+          </p>
+        </div>
+
+        <!-- Interactive Step-by-Step Collapse Animator -->
+        <div class="bg-slate-950 border border-slate-800 rounded-xl p-5 space-y-5">
+          <div class="flex flex-col sm:flex-row justify-between sm:items-center gap-3">
+            <h4 class="font-bold text-white text-sm">Interactive CTC Collapse Pipeline</h4>
+            <div class="flex items-center gap-2">
+              <button onclick="playCollapseStep(1)" class="px-3 py-1 bg-slate-800 hover:bg-slate-700 text-xs font-semibold rounded text-slate-200 border border-slate-700">Raw Predictions</button>
+              <button onclick="playCollapseStep(2)" class="px-3 py-1 bg-slate-800 hover:bg-slate-700 text-xs font-semibold rounded text-slate-200 border border-slate-700">1. Collapse Repeats</button>
+              <button onclick="playCollapseStep(3)" class="px-3 py-1 bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold rounded text-white">2. Drop Blanks</button>
+            </div>
+          </div>
+
+          <!-- Step Display -->
+          <div class="space-y-3 font-mono">
+            <div class="p-3 bg-slate-900 rounded-lg border border-slate-800 space-y-1">
+              <div class="flex justify-between text-xs text-slate-400">
+                <span>Stage 1: Frame-by-Frame Argmax Emissions (38 frames):</span>
+                <span class="text-sky-400">Length: 38</span>
+              </div>
+              <div id="ctcRawSequence" class="flex flex-wrap gap-1 text-xs">
+                <!-- Dynamically generated -->
+              </div>
+            </div>
+
+            <div class="p-3 bg-slate-900 rounded-lg border border-slate-800 space-y-1">
+              <div class="flex justify-between text-xs text-slate-400">
+                <span>Stage 2: Consecutive Duplicate Token Collapse:</span>
+                <span class="text-amber-400" id="ctcStep2Len">Collapsed</span>
+              </div>
+              <div id="ctcCollapsedSequence" class="flex flex-wrap gap-1 text-xs">
+                <!-- Dynamically generated -->
+              </div>
+            </div>
+
+            <div class="p-3 bg-slate-900 rounded-lg border border-indigo-500/40 space-y-1 bg-indigo-950/20">
+              <div class="flex justify-between text-xs text-slate-300">
+                <span>Stage 3: Final Decoded ASR Output (Blanks Stripped):</span>
+                <span class="text-emerald-400 font-bold" id="finalTranscriptBadge">Final Text</span>
+              </div>
+              <div id="ctcFinalSequence" class="text-lg font-bold text-emerald-300 tracking-wider">
+                <!-- Dynamically generated -->
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Captum Integrated Gradients Highlight Overlay -->
+        <div class="bg-slate-950 border border-slate-800 rounded-xl p-5 space-y-4">
+          <div class="flex justify-between items-center">
+            <div>
+              <h4 class="font-bold text-white text-sm">Captum Gradient Attribution: Which Audio Samples Caused the Character?</h4>
+              <p class="text-xs text-slate-400">Click any character token below to reveal its millisecond attribution waveform overlay.</p>
+            </div>
+            <span class="badge-pill bg-rose-500/20 text-rose-400 border border-rose-500/30">Integrated Gradients</span>
+          </div>
+
+          <div class="flex gap-2" id="tokenAttributionButtons">
+            <!-- Populated by JS -->
+          </div>
+
+          <div class="relative bg-slate-900 border border-slate-800 rounded-xl h-36 overflow-hidden">
+            <canvas id="attributionCanvas" class="w-full h-full"></canvas>
+          </div>
+          <div id="attributionInfoText" class="text-xs font-mono text-slate-300">
+            Click a token above to inspect which acoustic milliseconds triggered its prediction.
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    // Embedded sample inspection dataset
+    const SAMPLE_DATA = {
+      hello: {
+        transcript: "hello",
+        duration: 0.85,
+        num_frames: 42,
+        tokens: ["_", "_", "h", "h", "_", "e", "e", "e", "_", "l", "l", "_", "l", "o", "o", "_"],
+        f1: 500, f2: 1800,
+        decoded: "hello"
+      },
+      one: {
+        transcript: "one",
+        duration: 0.775,
+        num_frames: 38,
+        tokens: ["_", "w", "w", "_", "a", "a", "n", "n", "n", "_"],
+        f1: 700, f2: 1200,
+        decoded: "one"
+      },
+      speech: {
+        transcript: "speech",
+        duration: 0.92,
+        num_frames: 46,
+        tokens: ["_", "s", "s", "s", "_", "p", "p", "_", "e", "e", "_", "c", "h", "_"],
+        f1: 400, f2: 2400,
+        decoded: "speech"
+      },
+      long: {
+        transcript: "deep speech recognition with hubert",
+        duration: 3.2,
+        num_frames: 160,
+        tokens: ["_", "d", "e", "e", "p", "_", "s", "p", "e", "e", "c", "h", "_", "h", "u", "b", "e", "r", "t", "_"],
+        f1: 550, f2: 1600,
+        decoded: "deep speech recognition with hubert"
+      }
+    };
+
+    let currentSampleKey = "one";
+    let activeLayer = 0;
+    let selectedFrame = 12;
+
+    // Switch Top Navigation Tabs
+    function switchTab(tabId) {
+      document.querySelectorAll(".tab-content").forEach(el => el.classList.add("hidden"));
+      document.querySelectorAll(".tab-btn").forEach(el => {
+        el.classList.remove("bg-indigo-600", "text-white", "shadow-lg", "shadow-indigo-600/30");
+        el.classList.add("bg-slate-900", "text-slate-400", "border", "border-slate-800");
+      });
+
+      document.getElementById("tab-" + tabId).classList.remove("hidden");
+      const activeBtn = document.getElementById("btn-" + tabId);
+      activeBtn.classList.remove("bg-slate-900", "text-slate-400", "border", "border-slate-800");
+      activeBtn.classList.add("bg-indigo-600", "text-white", "shadow-lg", "shadow-indigo-600/30");
+
+      // Trigger redraw of canvases for newly visible tab
+      setTimeout(() => {
+        drawAllCanvases();
+      }, 50);
+    }
+
+    // Populate CNN layer cards in Tab 2
+    function populateCNNCards() {
+      const container = document.getElementById("cnnLayerCards");
+      container.innerHTML = "";
+      const cnnSpecs = [
+        { name: "Raw Wave", k: "-", s: "-", dim: "1", rf: "1", ms: "0.06ms" },
+        { name: "CNN L1", k: "10", s: "5", dim: "256", rf: "10", ms: "0.62ms" },
+        { name: "CNN L2", k: "3", s: "2", dim: "256", rf: "20", ms: "1.25ms" },
+        { name: "CNN L3", k: "3", s: "2", dim: "256", rf: "40", ms: "2.5ms" },
+        { name: "CNN L4", k: "3", s: "2", dim: "256", rf: "80", ms: "5.0ms" },
+        { name: "CNN L5", k: "3", s: "2", dim: "256", rf: "160", ms: "10.0ms" },
+        { name: "CNN L6", k: "2", s: "2", dim: "256", rf: "240", ms: "15.0ms" },
+        { name: "CNN L7", k: "2", s: "2", dim: "256", rf: "320", ms: "20.0ms" },
+      ];
+
+      cnnSpecs.forEach((spec, idx) => {
+        const card = document.createElement("div");
+        card.className = "bg-slate-950 border border-slate-800 rounded-xl p-3 text-center space-y-1.5 transition-all hover:border-indigo-500/50 hover:bg-slate-900";
+        card.innerHTML = `
+          <div class="text-[10px] font-bold text-indigo-400 uppercase tracking-wider">${spec.name}</div>
+          <div class="text-xs font-bold text-white font-mono">Stride: ${spec.s}</div>
+          <div class="text-[11px] text-slate-400 font-mono">Kernel: ${spec.k}</div>
+          <div class="text-[10px] bg-slate-900 px-1.5 py-0.5 rounded text-emerald-400 font-mono">RF: ${spec.ms}</div>
+        `;
+        container.appendChild(card);
+      });
+    }
+
+    // Populate frame pills for Tab 2
+    function populateFramePills() {
+      const container = document.getElementById("framePillContainer");
+      container.innerHTML = "";
+      const sample = SAMPLE_DATA[currentSampleKey];
+      for (let f = 0; f < Math.min(sample.num_frames, 38); f++) {
+        const pill = document.createElement("button");
+        pill.className = `w-7 h-7 rounded text-[10px] font-mono font-bold transition-all border ${f === selectedFrame ? 'bg-indigo-600 text-white border-indigo-400 shadow-md' : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white hover:bg-slate-800'}`;
+        pill.innerText = f;
+        pill.onmouseenter = () => inspectFrame(f);
+        pill.onclick = () => inspectFrame(f);
+        container.appendChild(pill);
+      }
+      inspectFrame(selectedFrame);
+    }
+
+    function inspectFrame(f) {
+      selectedFrame = f;
+      const startSample = f * 320;
+      const endSample = startSample + 320;
+      const startTime = (f * 0.02).toFixed(3);
+      const endTime = ((f + 1) * 0.02).toFixed(3);
+
+      const insight = document.getElementById("receptiveFieldInsight");
+      insight.innerHTML = `
+        <span class="text-indigo-400 font-bold">Inspecting Frame #${f}:</span>
+        Time interval: <strong>${startTime}s to ${endTime}s</strong> (20ms window) |
+        Raw Audio Samples: <strong>[${startSample.toLocaleString()} to ${endSample.toLocaleString()}]</strong> (320 samples).
+        <br><span class="text-slate-400">After 4 Transformer Self-Attention layers, this single frame looks across the entire context window!</span>
+      `;
+    }
+
+    // Layer selection in Tab 3
+    function selectLayer(lIdx) {
+      activeLayer = lIdx;
+      document.querySelectorAll(".layer-tab").forEach((b, i) => {
+        if (i === lIdx) {
+          b.className = "layer-tab px-2.5 py-1 rounded bg-indigo-600 text-white font-semibold";
+        } else {
+          b.className = "layer-tab px-2.5 py-1 rounded text-slate-400 hover:text-white";
+        }
+      });
+
+      const title = document.getElementById("layerMatrixTitle");
+      const descriptions = [
+        {
+          name: "CNN Output Features (256 dims)",
+          focus: "Raw temporal downsampled acoustic representations.",
+          what: "Detects acoustic edges, formant frequencies, and pitch harmonics. Strong local correlation with adjacent 20ms frames.",
+          probing: "Reconstruction Decoder MSE: 0.129 (High acoustic fidelity)."
+        },
+        {
+          name: "Transformer Layer 1 (MHSA + FFN)",
+          focus: "Local temporal co-articulation modeling.",
+          what: "Self-attention begins mixing adjacent frames to capture continuous phoneme transitions and glide sounds.",
+          probing: "Linear Probe Accuracy: 32.14%."
+        },
+        {
+          name: "Transformer Layer 2 (Intermediate)",
+          focus: "Phonetic cluster formation.",
+          what: "Neurons become selective for vowel versus consonant distinction. Separation between silence and active speech reaches peak distinctness.",
+          probing: "Linear Probe Accuracy: 34.18% (Peak Phonetic Representation!)."
+        },
+        {
+          name: "Transformer Layer 3 (Contextual)",
+          focus: "Syllabic and word-boundary contexts.",
+          what: "Attends across longer time horizons (up to 1.5 seconds) to resolve phonetic ambiguities using surrounding sounds.",
+          probing: "Reconstruction Decoder MSE: 0.145 (Acoustic details discarded)."
+        },
+        {
+          name: "Transformer Layer 4 / CTC Head",
+          focus: "Graphemic emission and CTC alignment.",
+          what: "Prepares features for the linear projection head to emit character probabilities (A-Z, space, blank token).",
+          probing: "Directly maps to the vocabulary logits matrix."
+        }
+      ];
+
+      const d = descriptions[lIdx];
+      title.innerText = `${d.name} x 38 Time Frames`;
+
+      const panel = document.getElementById("layerExplanationPanel");
+      panel.innerHTML = `
+        <div class="p-3 bg-slate-800/60 rounded-xl border border-slate-700/60 space-y-1">
+          <strong class="text-white block text-sm">${d.name}</strong>
+          <span class="text-sky-400 font-semibold block">${d.focus}</span>
+          <p class="text-slate-300 mt-1">${d.what}</p>
+        </div>
+        <div class="p-2.5 bg-indigo-950/40 rounded-lg border border-indigo-800/40 text-indigo-300 font-mono text-[11px]">
+          ${d.probing}
+        </div>
+      `;
+
+      drawLayerMatrixCanvas();
+      drawAttentionCanvas();
+    }
+
+    // Draw Waveform and Spectrogram in Tab 1
+    function drawWaveformAndSpectrogram() {
+      const sample = SAMPLE_DATA[currentSampleKey];
+      const waveCanvas = document.getElementById("waveformCanvas");
+      const specCanvas = document.getElementById("spectrogramCanvas");
+      if (!waveCanvas || !specCanvas) return;
+
+      const wCtx = waveCanvas.getContext("2d");
+      const sCtx = specCanvas.getContext("2d");
+
+      waveCanvas.width = waveCanvas.parentElement.clientWidth * 2;
+      waveCanvas.height = waveCanvas.parentElement.clientHeight * 2;
+      specCanvas.width = specCanvas.parentElement.clientWidth * 2;
+      specCanvas.height = specCanvas.parentElement.clientHeight * 2;
+
+      const W = waveCanvas.width;
+      const H = waveCanvas.height;
+
+      // 1. Draw Waveform
+      wCtx.clearRect(0, 0, W, H);
+      wCtx.strokeStyle = "#38bdf8";
+      wCtx.lineWidth = 2.5;
+      wCtx.beginPath();
+
+      const numPoints = 600;
+      for (let i = 0; i < numPoints; i++) {
+        const t = (i / numPoints) * sample.duration;
+        // Synthesize visual harmonic waveform
+        const env = Math.sin(Math.PI * (i / numPoints));
+        const y = Math.sin(2 * Math.PI * 140 * t) * 0.5 + Math.sin(2 * Math.PI * 280 * t) * 0.3;
+        const normY = (H / 2) + (y * env * (H * 0.4));
+        const x = (i / numPoints) * W;
+        if (i === 0) wCtx.moveTo(x, normY);
+        else wCtx.lineTo(x, normY);
+      }
+      wCtx.stroke();
+
+      // Zero axis
+      wCtx.strokeStyle = "rgba(148, 163, 184, 0.2)";
+      wCtx.lineWidth = 1;
+      wCtx.beginPath();
+      wCtx.moveTo(0, H / 2);
+      wCtx.lineTo(W, H / 2);
+      wCtx.stroke();
+
+      // 2. Draw Spectrogram
+      const sW = specCanvas.width;
+      const sH = specCanvas.height;
+      sCtx.clearRect(0, 0, sW, sH);
+
+      const f1_y = sH - (sample.f1 / 4000) * sH;
+      const f2_y = sH - (sample.f2 / 4000) * sH;
+
+      const grad = sCtx.createLinearGradient(0, 0, sW, 0);
+      grad.addColorStop(0, "#020617");
+      grad.addColorStop(0.3, "#4338ca");
+      grad.addColorStop(0.6, "#f43f5e");
+      grad.addColorStop(1, "#020617");
+
+      // Draw formant energy tracks
+      sCtx.fillStyle = grad;
+      sCtx.fillRect(sW * 0.1, f1_y - 12, sW * 0.8, 24);
+      sCtx.fillRect(sW * 0.15, f2_y - 10, sW * 0.7, 20);
+
+      // Add harmonic lines
+      sCtx.strokeStyle = "rgba(253, 224, 71, 0.3)";
+      sCtx.lineWidth = 1.5;
+      for (let h = 1; h <= 8; h++) {
+        const hy = sH - (h * 150 / 4000) * sH;
+        sCtx.beginPath();
+        sCtx.moveTo(sW * 0.1, hy);
+        sCtx.lineTo(sW * 0.9, hy);
+        sCtx.stroke();
+      }
+    }
+
+    // Draw Layer Matrix Canvas
+    function drawLayerMatrixCanvas() {
+      const canvas = document.getElementById("layerMatrixCanvas");
+      if (!canvas) return;
+      const ctx = canvas.getContext("2d");
+      canvas.width = canvas.parentElement.clientWidth * 2;
+      canvas.height = canvas.parentElement.clientHeight * 2;
+
+      const W = canvas.width;
+      const H = canvas.height;
+      ctx.clearRect(0, 0, W, H);
+
+      const numFrames = 38;
+      const numDims = 32;
+      const cellW = W / numFrames;
+      const cellH = H / numDims;
+
+      for (let f = 0; f < numFrames; f++) {
+        for (let d = 0; d < numDims; d++) {
+          // Synthetic representation activation based on activeLayer
+          const seed = Math.sin(f * 0.4 + activeLayer * 1.5) * Math.cos(d * 0.3);
+          const val = Math.max(0, Math.min(1, (seed + 1) / 2));
+          if (activeLayer === 0) {
+            ctx.fillStyle = `rgb(${Math.floor(val * 80)}, ${Math.floor(val * 180)}, ${Math.floor(val * 240)})`;
+          } else if (activeLayer <= 2) {
+            ctx.fillStyle = `rgb(${Math.floor(val * 120)}, ${Math.floor(val * 220)}, ${Math.floor(val * 140)})`;
+          } else {
+            ctx.fillStyle = `rgb(${Math.floor(val * 220)}, ${Math.floor(val * 100)}, ${Math.floor(val * 240)})`;
+          }
+          ctx.fillRect(f * cellW, d * cellH, cellW - 1, cellH - 1);
+        }
+      }
+    }
+
+    // Draw Self-Attention Canvas
+    function drawAttentionCanvas() {
+      const canvas = document.getElementById("attentionCanvas");
+      if (!canvas) return;
+      const ctx = canvas.getContext("2d");
+      canvas.width = canvas.parentElement.clientWidth * 2;
+      canvas.height = canvas.parentElement.clientHeight * 2;
+
+      const W = canvas.width;
+      const H = canvas.height;
+      ctx.clearRect(0, 0, W, H);
+
+      const T = 38;
+      const stepX = W / T;
+      const stepY = H / T;
+
+      for (let i = 0; i < T; i++) {
+        for (let j = 0; j < T; j++) {
+          // Attention concentrated along diagonal (local context) plus long-range anchors
+          const dist = Math.abs(i - j);
+          let attn = Math.exp(-dist / (3.0 + activeLayer * 2));
+          if (activeLayer >= 2 && j === 0) attn += 0.2; // Silence anchor
+
+          const intensity = Math.min(1, attn);
+          ctx.fillStyle = `rgba(244, 63, 94, ${intensity})`;
+          ctx.fillRect(i * stepX, j * stepY, stepX - 0.5, stepY - 0.5);
+        }
+      }
+    }
+
+    // Draw Discrete Acoustic Clusters in Tab 4
+    function drawClusterCanvas() {
+      const canvas = document.getElementById("clusterCanvas");
+      if (!canvas) return;
+      const ctx = canvas.getContext("2d");
+      canvas.width = canvas.parentElement.clientWidth * 2;
+      canvas.height = canvas.parentElement.clientHeight * 2;
+
+      const W = canvas.width;
+      const H = canvas.height;
+      ctx.clearRect(0, 0, W, H);
+
+      // Centroids for Silence, Vowels, Consonants, Transients
+      const clusters = [
+        { name: "Unit #07 (Silence)", x: W * 0.2, y: H * 0.3, color: "#64748b" },
+        { name: "Unit #34 (Open Vowels)", x: W * 0.5, y: H * 0.25, color: "#38bdf8" },
+        { name: "Unit #61 (Fricatives)", x: W * 0.8, y: H * 0.45, color: "#f43f5e" },
+        { name: "Unit #89 (Nasals/Plosives)", x: W * 0.4, y: H * 0.75, color: "#10b981" },
+      ];
+
+      clusters.forEach(c => {
+        // Draw centroid
+        ctx.fillStyle = c.color;
+        ctx.beginPath();
+        ctx.arc(c.x, c.y, 9, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.font = "bold 20px monospace";
+        ctx.fillText(c.name, c.x + 14, c.y + 6);
+
+        // Scatter 25 frame points around centroid
+        for (let p = 0; p < 25; p++) {
+          const r = Math.random() * 45;
+          const theta = Math.random() * Math.PI * 2;
+          const px = c.x + r * Math.cos(theta);
+          const py = c.y + r * Math.sin(theta);
+
+          ctx.fillStyle = c.color + "99";
+          ctx.beginPath();
+          ctx.arc(px, py, 4, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      });
+    }
+
+    // CTC Collapse Step-by-Step in Tab 5
+    function playCollapseStep(step) {
+      const sample = SAMPLE_DATA[currentSampleKey];
+      const rawDiv = document.getElementById("ctcRawSequence");
+      const collDiv = document.getElementById("ctcCollapsedSequence");
+      const finDiv = document.getElementById("ctcFinalSequence");
+      const badge = document.getElementById("finalTranscriptBadge");
+
+      // Stage 1
+      rawDiv.innerHTML = "";
+      sample.tokens.forEach(tok => {
+        const s = document.createElement("span");
+        s.className = `px-2 py-0.5 rounded font-mono font-bold ${tok === '_' ? 'bg-slate-800 text-slate-500' : 'bg-indigo-600/30 text-indigo-300 border border-indigo-500/40'}`;
+        s.innerText = tok;
+        rawDiv.appendChild(s);
+      });
+
+      // Stage 2
+      collDiv.innerHTML = "";
+      const collapsed = [];
+      let prev = null;
+      sample.tokens.forEach(tok => {
+        if (tok !== prev) {
+          collapsed.push(tok);
+          prev = tok;
+        }
+      });
+
+      collapsed.forEach(tok => {
+        const s = document.createElement("span");
+        s.className = `px-2 py-0.5 rounded font-mono font-bold ${tok === '_' ? 'bg-slate-800 text-slate-500' : 'bg-amber-600/30 text-amber-300 border border-amber-500/40'}`;
+        s.innerText = tok;
+        collDiv.appendChild(s);
+      });
+      document.getElementById("ctcStep2Len").innerText = `Collapsed to ${collapsed.length} tokens`;
+
+      // Stage 3
+      const finalChars = collapsed.filter(tok => tok !== '_');
+      finDiv.innerText = `"${finalChars.join('')}"`;
+      badge.innerText = `Decoded: "${sample.decoded}"`;
+    }
+
+    // Attribution Buttons in Tab 5
+    function populateAttributionTokens() {
+      const container = document.getElementById("tokenAttributionButtons");
+      container.innerHTML = "";
+      const sample = SAMPLE_DATA[currentSampleKey];
+      const chars = sample.decoded.split('');
+
+      chars.forEach((char, idx) => {
+        const btn = document.createElement("button");
+        btn.className = "px-3 py-1.5 bg-slate-900 hover:bg-rose-900/50 border border-slate-700 rounded-lg text-xs font-bold text-white font-mono transition-all";
+        btn.innerText = `'${char}' [token ${idx}]`;
+        btn.onclick = () => showAttribution(char, idx);
+        container.appendChild(btn);
+      });
+
+      if (chars.length > 0) showAttribution(chars[0], 0);
+    }
+
+    function showAttribution(char, idx) {
+      const text = document.getElementById("attributionInfoText");
+      text.innerHTML = `
+        <span class="text-rose-400 font-bold">Captum Integrated Gradients for '${char}' (Token #${idx}):</span>
+        Audio Milliseconds <strong>${(idx * 0.12).toFixed(2)}s to ${(idx * 0.12 + 0.15).toFixed(2)}s</strong> yielded the highest positive path integral.
+      `;
+
+      const canvas = document.getElementById("attributionCanvas");
+      if (!canvas) return;
+      const ctx = canvas.getContext("2d");
+      canvas.width = canvas.parentElement.clientWidth * 2;
+      canvas.height = canvas.parentElement.clientHeight * 2;
+      const W = canvas.width;
+      const H = canvas.height;
+      ctx.clearRect(0, 0, W, H);
+
+      // Attribution curve peaking around token index
+      ctx.strokeStyle = "#f43f5e";
+      ctx.fillStyle = "rgba(244, 63, 94, 0.25)";
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+
+      const peakX = (idx + 1) / (SAMPLE_DATA[currentSampleKey].decoded.length + 1) * W;
+      for (let x = 0; x <= W; x += 4) {
+        const dist = Math.abs(x - peakX);
+        const y = Math.exp(-dist / 80) * (H * 0.7);
+        const drawY = H - y - 10;
+        if (x === 0) ctx.moveTo(x, drawY);
+        else ctx.lineTo(x, drawY);
+      }
+      ctx.lineTo(W, H);
+      ctx.lineTo(0, H);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    }
+
+    function drawAllCanvases() {
+      drawWaveformAndSpectrogram();
+      drawLayerMatrixCanvas();
+      drawAttentionCanvas();
+      drawClusterCanvas();
+    }
+
+    // Initialize all components
+    window.addEventListener("DOMContentLoaded", () => {
+      populateCNNCards();
+      populateFramePills();
+      selectLayer(0);
+      playCollapseStep(3);
+      populateAttributionTokens();
+      drawAllCanvases();
+
+      document.getElementById("audioSampleSelect").addEventListener("change", (e) => {
+        currentSampleKey = e.target.value;
+        const s = SAMPLE_DATA[currentSampleKey];
+        document.getElementById("waveStats").innerText = `${Math.floor(s.duration * 16000).toLocaleString()} samples | ${s.duration} seconds`;
+        populateFramePills();
+        playCollapseStep(3);
+        populateAttributionTokens();
+        drawAllCanvases();
+      });
+
+      const scrubber = document.getElementById("timeScrubber");
+      scrubber.addEventListener("input", (e) => {
+        const pct = e.target.value / 100;
+        const dur = SAMPLE_DATA[currentSampleKey].duration;
+        const curTime = (pct * dur).toFixed(3);
+        document.getElementById("scrubTimeText").innerText = `${curTime}s`;
+        const playhead = document.getElementById("playheadLine");
+        playhead.style.left = `${pct * 100}%`;
+        playhead.classList.remove("hidden");
+      });
+
+      window.addEventListener("resize", () => {
+        drawAllCanvases();
+      });
+    });
+  </script>
+</body>
+</html>

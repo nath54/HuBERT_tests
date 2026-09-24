@@ -7,6 +7,7 @@ __pycache__/
 
 # Data & Output artifacts
 data/raw/synthetic/wavs/
+data/raw/librispeech/
 *.wav
 *.flac
 checkpoints/*.pt

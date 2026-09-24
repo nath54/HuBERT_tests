@@ -1,4 +1,4 @@
-"""FastAPI Backend Server for Interactive HuBERT ASR & XAI Visualizations."""
+"""FastAPI Backend Server for Interactive HuBERT ASR, Real Dataset & XAI Studio."""
 
 import io
 import json
@@ -11,9 +11,9 @@ import numpy as np
 import soundfile as sf
 import torch
 import torch.nn.functional as F
-from fastapi import FastAPI, File, Form, UploadFile, BackgroundTasks
+from fastapi import FastAPI, File, Form, UploadFile, BackgroundTasks, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -23,9 +23,14 @@ from src.data.tokenizer import CharacterTokenizer
 from src.data.dataset import AudioASRDataset, AudioCollateFn
 from src.data.augmentations import WaveformAugmenter
 from src.utils.audio import synthesize_spoken_word
+from src.utils.benchmarks import (
+    get_model_parameters_breakdown,
+    benchmark_inference_speed,
+    compute_scaling_analysis,
+)
 from src.xai.captum_gradients import AudioGradientExplainer
 from src.xai.naps import ActivationPatcher
-from data.sample_dataset import load_manifest, generate_synthetic_asr_dataset
+from data.sample_dataset import load_manifest
 
 
 app = FastAPI(title="HuBERT Live ASR & XAI Studio")
@@ -38,7 +43,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Global State Container
+
 class StudioState:
     def __init__(self):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -47,6 +52,11 @@ class StudioState:
         self.model: Optional[HuBERTForCTC] = None
         self.explainer: Optional[AudioGradientExplainer] = None
         self.patcher: Optional[ActivationPatcher] = None
+
+        # Real LibriSpeech samples cache
+        self.librispeech_samples: List[Dict] = []
+        self.librispeech_sample_map: Dict[str, Dict] = {}
+        self.load_dataset_manifests()
 
         # Training state
         self.is_training = False
@@ -70,6 +80,14 @@ class StudioState:
         self.last_sample_rate = 16000
         self.init_model()
 
+    def load_dataset_manifests(self):
+        manifest_path = Path("data/librispeech/librispeech_all.json")
+        if manifest_path.exists():
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                self.librispeech_samples = json.load(f)
+                self.librispeech_sample_map = {s["id"]: s for s in self.librispeech_samples}
+            print(f"[Studio] Loaded {len(self.librispeech_samples):,} real LibriSpeech utterances.")
+
     def init_model(self):
         print(f"[Studio] Initializing model on device: {self.device}")
         if self.checkpoint_path.exists():
@@ -78,7 +96,7 @@ class StudioState:
             self.model = HuBERTForCTC(ckpt["config"]).to(self.device)
             self.model.load_state_dict(ckpt["model_state_dict"])
         else:
-            print("[Studio] No checkpoint found, creating base model.")
+            print("[Studio] Creating base model.")
             config = HuBERTConfig(
                 vocab_size=self.tokenizer.vocab_size,
                 encoder_layers=4,
@@ -96,7 +114,7 @@ class StudioState:
 state = StudioState()
 
 
-# Pydantic Request Models
+# Request Models
 class SynthesizeRequest(BaseModel):
     word: str = "hello"
     duration: float = 0.8
@@ -119,8 +137,14 @@ class AblationRequest(BaseModel):
 
 class TrainStartRequest(BaseModel):
     epochs: int = 5
-    lr: float = 0.0005
-    batch_size: int = 16
+    lr: float = 0.0003
+    batch_size: int = 8
+    dataset_type: str = "librispeech"  # 'librispeech' or 'synthetic'
+
+
+class InferSampleRequest(BaseModel):
+    sample_id: str
+    blank_penalty: float = 0.0
 
 
 @app.get("/api/status")
@@ -134,49 +158,121 @@ def get_status():
         "vocab": state.tokenizer.vocab,
         "encoder_layers": state.model.config.encoder_layers if state.model else 0,
         "embed_dim": state.model.config.encoder_embed_dim if state.model else 0,
+        "real_dataset_samples": len(state.librispeech_samples),
     }
 
 
+# -------------------------------------------------------------
+# BENCHMARKS & SCALING ENDPOINT
+# -------------------------------------------------------------
+@app.get("/api/benchmark")
+def get_benchmarks():
+    """Returns detailed parameter breakdown, latency, RTF, and scaling laws."""
+    params_breakdown = get_model_parameters_breakdown(state.model)
+    speed_results = benchmark_inference_speed(state.model, state.device, durations=[0.5, 1.0, 3.0, 5.0])
+    scaling_analysis = compute_scaling_analysis(state.model.config, durations=[1.0, 5.0, 10.0, 30.0, 60.0])
+
+    return {
+        "parameters": params_breakdown,
+        "speed_benchmarks": speed_results,
+        "scaling_analysis": scaling_analysis,
+        "device_name": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU",
+    }
+
+
+# -------------------------------------------------------------
+# REAL DATASET ENDPOINTS
+# -------------------------------------------------------------
+@app.get("/api/dataset/stats")
+def get_dataset_stats():
+    stats_file = Path("data/librispeech/dataset_stats.json")
+    if stats_file.exists():
+        with open(stats_file, "r") as f:
+            return json.load(f)
+    return {"error": "Stats not yet generated"}
+
+
+@app.get("/api/dataset/samples")
+def get_dataset_samples(page: int = Query(1, ge=1), page_size: int = Query(15, ge=1, le=100), search: str = ""):
+    """Returns paginated real LibriSpeech recordings."""
+    samples = state.librispeech_samples
+    if search:
+        s_lower = search.lower()
+        samples = [s for s in samples if s_lower in s["transcript"] or s_lower in s["id"] or s_lower in s["speaker_id"]]
+
+    total = len(samples)
+    start = (page - 1) * page_size
+    end = start + page_size
+    paged = samples[start:end]
+
+    return {
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": max(1, (total + page_size - 1) // page_size),
+        "samples": paged,
+    }
+
+
+@app.get("/api/dataset/audio/{sample_id}")
+def get_dataset_audio(sample_id: str):
+    """Serve real audio file for browser playback."""
+    sample = state.librispeech_sample_map.get(sample_id)
+    if not sample or not Path(sample["audio_path"]).exists():
+        return JSONResponse(status_code=404, content={"error": "Audio file not found"})
+    return FileResponse(sample["audio_path"], media_type="audio/flac")
+
+
+@app.post("/api/dataset/infer_sample")
+def infer_dataset_sample(req: InferSampleRequest):
+    """Run full HuBERT inference and XAI inspection on a real LibriSpeech sample."""
+    sample = state.librispeech_sample_map.get(req.sample_id)
+    if not sample or not Path(sample["audio_path"]).exists():
+        return JSONResponse(status_code=404, content={"error": "Sample not found"})
+
+    wav_np, sr = sf.read(sample["audio_path"], dtype="float32")
+    audio = torch.from_numpy(wav_np)
+    if audio.ndim > 1:
+        audio = audio.mean(dim=-1)
+
+    return process_audio_tensor(audio, transcript=sample["transcript"], blank_penalty=req.blank_penalty)
+
+
+# -------------------------------------------------------------
+# CORE INFERENCE & XAI PIPELINE
+# -------------------------------------------------------------
 def process_audio_tensor(audio: torch.Tensor, transcript: str = "", blank_penalty: float = 0.0):
-    """Helper to run model and prepare complete layer inspection payload."""
     state.last_audio_tensor = audio.clone()
     audio = audio.to(state.device)
     if audio.dim() == 1:
         audio = audio.unsqueeze(0)
 
-    # 1. Forward pass
     with torch.no_grad():
         outputs = state.model(audio, output_hidden_states=True, output_attentions=True)
 
-    logits = outputs["logits"].clone()  # (1, T_frames, V)
+    logits = outputs["logits"].clone()
     t_frames = logits.shape[1]
 
-    # Apply interactive blank penalty if requested
     penalized_logits = logits.clone()
     if blank_penalty > 0.0:
         penalized_logits[:, :, state.model.config.blank_index] -= blank_penalty
 
-    probs = F.softmax(logits, dim=-1).squeeze(0).cpu().numpy()  # True probabilities (T_frames, V)
+    probs = F.softmax(logits, dim=-1).squeeze(0).cpu().numpy()
     penalized_probs = F.softmax(penalized_logits, dim=-1).squeeze(0).cpu().numpy()
 
-    # Greedy decode with penalty
     out_lengths = outputs["output_lengths"]
     decoded_tokens = state.model.decode_greedy(penalized_logits, lengths=out_lengths)[0]
     decoded_text = state.tokenizer.decode(decoded_tokens)
 
-    # Top non-blank character per frame (ignoring blank token)
-    non_blank_logits = logits.squeeze(0)[:, 1:]  # (T, V-1)
+    non_blank_logits = logits.squeeze(0)[:, 1:]
     top_nb_ids = (non_blank_logits.argmax(dim=-1) + 1).cpu().tolist()
     top_non_blank_text = "".join([state.tokenizer.id_to_char.get(i, "") for i in top_nb_ids])
 
-    # Raw audio downsampled for snappy web transfer
     raw_audio = audio.squeeze().cpu().numpy()
     num_samples = len(raw_audio)
-    target_plot_points = 500
-    step = max(1, num_samples // target_plot_points)
+    step = max(1, num_samples // 500)
     plot_waveform = raw_audio[::step].tolist()
 
-    # Spectrogram approximation
     frame_step = max(1, num_samples // t_frames)
     spec_energy = []
     for f in range(t_frames):
@@ -187,22 +283,19 @@ def process_audio_tensor(audio: torch.Tensor, transcript: str = "", blank_penalt
         else:
             spec_energy.append([0.0] * 16)
 
-    # Frame emissions
     argmax_ids = penalized_logits.squeeze(0).argmax(dim=-1).cpu().tolist()
     frame_emissions = []
-    candidate_tokens = []  # Prominent non-blank tokens to present to user
+    candidate_tokens = []
 
     for t in range(t_frames):
         tok_id = argmax_ids[t]
         char = state.tokenizer.id_to_char.get(tok_id, "")
         is_blank = (tok_id == state.model.config.blank_index)
 
-        # Top non-blank for this frame
         nb_tok_id = top_nb_ids[t]
         nb_char = state.tokenizer.id_to_char.get(nb_tok_id, "")
         nb_prob = float(probs[t, nb_tok_id])
 
-        # Rank all tokens at this frame
         top_indices = np.argsort(probs[t])[-5:][::-1]
         top_list = [
             {
@@ -228,7 +321,6 @@ def process_audio_tensor(audio: torch.Tensor, transcript: str = "", blank_penalt
         }
         frame_emissions.append(frame_data)
 
-        # If this frame has non-blank emission or is a local non-blank peak, record as candidate
         if not is_blank or nb_prob > 0.005:
             candidate_tokens.append({
                 "frame": t,
@@ -238,7 +330,6 @@ def process_audio_tensor(audio: torch.Tensor, transcript: str = "", blank_penalt
                 "time_sec": round(t * 0.02, 3),
             })
 
-    # Layer hidden representations
     layer_representations = []
     for l_idx, h in enumerate(outputs["hidden_states"]):
         h_np = h.squeeze(0).cpu().numpy()
@@ -249,7 +340,6 @@ def process_audio_tensor(audio: torch.Tensor, transcript: str = "", blank_penalt
             "mean_energy": float(np.mean(h_np ** 2)),
         })
 
-    # Attention weights
     attentions = []
     if outputs["attentions"] is not None:
         for l_idx, attn in enumerate(outputs["attentions"]):
@@ -302,7 +392,6 @@ async def upload_audio(file: UploadFile = File(...), blank_penalty: float = Form
 
 @app.post("/api/xai/attribute")
 def run_attribution(req: AttributeRequest):
-    """Run real-time Captum Integrated Gradients or Saliency."""
     if state.last_audio_tensor is None:
         return JSONResponse(status_code=400, content={"error": "No active audio. Run inference first."})
 
@@ -324,7 +413,6 @@ def run_attribution(req: AttributeRequest):
     attr = result["attributions"].cpu().numpy()
     step = max(1, len(attr) // 500)
     plot_attr = attr[::step].tolist()
-
     char_name = state.tokenizer.id_to_char.get(token_idx, f"id_{token_idx}")
 
     return {
@@ -359,39 +447,51 @@ def run_ablation(req: AblationRequest):
     }
 
 
-# Background Training Loop
-def background_train_task(epochs: int, lr: float, batch_size: int):
+# -------------------------------------------------------------
+# TRAINING CONTROLLER & LOGS
+# -------------------------------------------------------------
+@app.get("/api/train/logs")
+def get_training_logs():
+    history_file = Path("logs/training_history.json")
+    saved_history = {}
+    if history_file.exists():
+        with open(history_file, "r") as f:
+            saved_history = json.load(f)
+
+    return {
+        "live_status": state.training_status,
+        "saved_history": saved_history,
+    }
+
+
+def background_train_task(epochs: int, lr: float, batch_size: int, dataset_type: str = "librispeech"):
     state.is_training = True
     state.should_stop_training = False
     state.training_status["is_training"] = True
     state.training_status["total_epochs"] = epochs
     state.training_status["history"] = []
 
-    print(f"[Live Training] Starting background training for {epochs} epochs (lr={lr}, batch={batch_size})...")
+    print(f"[Training] Starting training on '{dataset_type}' for {epochs} epochs...")
 
-    data_dir = Path("data/raw/synthetic")
-    train_manifest = data_dir / "train_manifest.json"
-    val_manifest = data_dir / "val_manifest.json"
+    if dataset_type == "librispeech" and len(state.librispeech_samples) > 0:
+        samples = [s for s in state.librispeech_samples[:300] if s["duration"] <= 6.0]
+        val_samples = [s for s in state.librispeech_samples[300:350] if s["duration"] <= 6.0]
+    else:
+        from data.sample_dataset import generate_synthetic_asr_dataset
+        samples, val_samples = generate_synthetic_asr_dataset("data/raw/synthetic", num_train=100, num_val=20)
 
-    if not train_manifest.exists():
-        generate_synthetic_asr_dataset(str(data_dir), num_train=60, num_val=15)
-
-    train_samples = load_manifest(str(train_manifest))
-    val_samples = load_manifest(str(val_manifest))
-
-    train_dataset = AudioASRDataset(train_samples, state.tokenizer, target_sample_rate=16000, augmenter=WaveformAugmenter())
-    val_dataset = AudioASRDataset(val_samples, state.tokenizer, target_sample_rate=16000)
+    train_ds = AudioASRDataset(samples, state.tokenizer, target_sample_rate=16000, max_duration_s=6.0, augmenter=WaveformAugmenter())
+    val_ds = AudioASRDataset(val_samples, state.tokenizer, target_sample_rate=16000, max_duration_s=6.0)
     collate_fn = AudioCollateFn(pad_token_id=state.tokenizer.pad_id)
 
     from torch.utils.data import DataLoader
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
+    val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
 
     optimizer = torch.optim.AdamW(state.model.parameters(), lr=lr)
 
     for epoch in range(1, epochs + 1):
         if state.should_stop_training:
-            print("[Live Training] User requested stop.")
             break
 
         state.model.train()
@@ -415,11 +515,10 @@ def background_train_task(epochs: int, lr: float, batch_size: int):
 
             epoch_loss += loss.item()
             steps += 1
-
             state.training_status["step"] += 1
             state.training_status["train_loss"] = round(loss.item(), 4)
 
-        # Quick val step
+        # Val step
         state.model.eval()
         val_loss = 0.0
         val_preds, val_refs = [], []
@@ -449,6 +548,7 @@ def background_train_task(epochs: int, lr: float, batch_size: int):
             "train_loss": round(epoch_loss / max(1, steps), 4),
             "val_loss": state.training_status["val_loss"],
             "val_cer": state.training_status["val_cer"],
+            "val_wer": state.training_status["val_wer"],
         })
 
         torch.save({
@@ -459,16 +559,18 @@ def background_train_task(epochs: int, lr: float, batch_size: int):
 
     state.is_training = False
     state.training_status["is_training"] = False
-    print("[Live Training] Background training finished.")
 
 
 @app.post("/api/train/start")
 def start_training(req: TrainStartRequest, background_tasks: BackgroundTasks):
     if state.is_training:
         return {"status": "already_running"}
-    state.training_thread = threading.Thread(target=background_train_task, args=(req.epochs, req.lr, req.batch_size))
+    state.training_thread = threading.Thread(
+        target=background_train_task,
+        args=(req.epochs, req.lr, req.batch_size, req.dataset_type),
+    )
     state.training_thread.start()
-    return {"status": "started", "epochs": req.epochs}
+    return {"status": "started", "epochs": req.epochs, "dataset": req.dataset_type}
 
 
 @app.post("/api/train/stop")

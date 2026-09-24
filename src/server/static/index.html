@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>HuBERT Live Python ASR & XAI Studio</title>
+  <title>HuBERT Live Python ASR, Real Dataset & XAI Studio</title>
   <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
   <style>
     ::-webkit-scrollbar { width: 6px; height: 6px; }
@@ -14,9 +14,9 @@
 </head>
 <body class="bg-slate-950 text-slate-100 antialiased p-4 md:p-6 font-sans">
 
-  <div class="max-w-7xl mx-auto space-y-6">
+  <div class="max-w-7xl mx-auto space-y-5">
 
-    <!-- Header & Connection Status -->
+    <!-- Header & Navigation Bar -->
     <div class="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 border border-slate-800 rounded-2xl p-5 shadow-2xl flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
       <div>
         <div class="flex items-center gap-2 mb-1.5">
@@ -24,231 +24,520 @@
             <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span> Python Backend Connected
           </span>
           <span id="deviceBadge" class="badge-pill bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">PyTorch GPU</span>
-          <span id="modelInfoBadge" class="badge-pill bg-sky-500/20 text-sky-400 border border-sky-500/30">HuBERT 4-Layer</span>
+          <span id="modelInfoBadge" class="badge-pill bg-sky-500/20 text-sky-400 border border-sky-500/30">8.03M Parameters</span>
+          <span class="badge-pill bg-amber-500/20 text-amber-400 border border-amber-500/30">LibriSpeech: 2,703 Utterances</span>
         </div>
         <h1 class="text-2xl md:text-3xl font-extrabold text-white">
-          HuBERT <span class="text-indigo-400">Live ASR & XAI Studio</span>
+          HuBERT <span class="text-indigo-400">Live ASR, Real Dataset & XAI Studio</span>
         </h1>
         <p class="text-slate-400 text-xs md:text-sm mt-0.5">
-          Fully connected to real PyTorch inference, live layer activations, Captum Integrated Gradients, and live training loop.
+          Real human speech dataset (LibriSpeech), live PyTorch inference, training curves, Captum Integrated Gradients, and computational scaling laws.
         </p>
       </div>
 
-      <!-- Quick Action Buttons -->
+      <!-- Main Navigation Tabs -->
       <div class="flex flex-wrap gap-2">
-        <button onclick="toggleTrainingModal()" class="px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl text-xs font-bold shadow-lg flex items-center gap-2 transition-all">
-          <span class="w-2 h-2 rounded-full bg-white"></span> Live Training Console
+        <button onclick="switchMainTab('studio')" id="tabBtn-studio" class="main-tab-btn px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold shadow-lg transition-all flex items-center gap-1.5">
+          <span>🎙️</span> Live Studio & XAI
+        </button>
+        <button onclick="switchMainTab('dataset')" id="tabBtn-dataset" class="main-tab-btn px-4 py-2 bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5">
+          <span>📂</span> Real Dataset (LibriSpeech)
+        </button>
+        <button onclick="switchMainTab('training')" id="tabBtn-training" class="main-tab-btn px-4 py-2 bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5">
+          <span>📈</span> Training Logs & Curves
+        </button>
+        <button onclick="switchMainTab('benchmarks')" id="tabBtn-benchmarks" class="main-tab-btn px-4 py-2 bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5">
+          <span>⚡</span> Weights & Scaling Laws
         </button>
       </div>
     </div>
 
-    <!-- Control Bar: Input Generation & Audio Upload -->
-    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl grid grid-cols-1 lg:grid-cols-12 gap-4 items-center">
-      <!-- Synthesize spoken word -->
-      <div class="lg:col-span-5 space-y-1">
-        <label class="text-xs font-semibold text-slate-300">1. Synthesize Spoken Word to Python:</label>
-        <div class="flex gap-2">
-          <input type="text" id="synthWordInput" value="hello" placeholder="Type a word..." class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white w-full focus:outline-none focus:ring-2 focus:ring-indigo-500">
-          <button onclick="triggerSynthesis()" id="btnSynth" class="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold transition-all whitespace-nowrap">
-            Synthesize & Infer
-          </button>
-        </div>
-      </div>
+    <!-- ============================================================= -->
+    <!-- TAB 1: LIVE STUDIO & XAI (INFERENCE & LAYER INSPECTION)       -->
+    <!-- ============================================================= -->
+    <div id="tab-studio" class="main-tab-content space-y-6">
 
-      <!-- Quick Word Presets -->
-      <div class="lg:col-span-4 space-y-1">
-        <label class="text-xs font-semibold text-slate-300">Quick Word Presets:</label>
-        <div class="flex flex-wrap gap-1.5">
-          <button onclick="quickSynth('hello')" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded text-xs font-mono">hello</button>
-          <button onclick="quickSynth('speech')" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded text-xs font-mono">speech</button>
-          <button onclick="quickSynth('one')" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded text-xs font-mono">one</button>
-          <button onclick="quickSynth('bad')" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded text-xs font-mono">bad</button>
-          <button onclick="quickSynth('deep')" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded text-xs font-mono">deep</button>
-        </div>
-      </div>
-
-      <!-- Audio Upload -->
-      <div class="lg:col-span-3 space-y-1">
-        <label class="text-xs font-semibold text-slate-300">2. Or Upload Audio File:</label>
-        <input type="file" id="audioFileInput" accept=".wav,.flac,.ogg" class="text-xs text-slate-400 file:mr-2 file:py-1 file:px-3 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-slate-800 file:text-indigo-400 hover:file:bg-slate-700 cursor-pointer">
-      </div>
-    </div>
-
-    <!-- Interactive CTC Sensitivity / Blank Penalty Slider Bar -->
-    <div class="bg-gradient-to-r from-slate-900 via-indigo-950/40 to-slate-900 border border-slate-800 rounded-xl p-3.5 shadow flex flex-col md:flex-row justify-between items-center gap-4">
-      <div class="flex items-center gap-2">
-        <span class="text-xs font-bold text-sky-400 uppercase tracking-wider">CTC Blank Penalty (Sensitivity):</span>
-        <span class="text-xs text-slate-400 hidden sm:inline">Adjusts blank token threshold to reveal underlying character spikes</span>
-      </div>
-      <div class="flex items-center gap-3 w-full md:w-auto">
-        <span class="text-[11px] text-slate-500 font-mono">0.0 (Strict)</span>
-        <input type="range" id="blankPenaltySlider" min="0" max="4.0" step="0.2" value="1.0" class="w-48 h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-500" oninput="updateBlankPenaltyDisplay(this.value)">
-        <span class="text-[11px] text-slate-500 font-mono">4.0 (High)</span>
-        <span id="blankPenaltyValueText" class="text-xs font-mono font-bold text-indigo-400 w-12 text-right">1.0</span>
-        <button onclick="triggerSynthesis()" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-[11px] text-slate-200 rounded font-semibold">Apply</button>
-      </div>
-    </div>
-
-    <!-- MAIN TWO-COLUMN DASHBOARD -->
-    <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
-
-      <!-- LEFT COLUMN: Live Signals & CTC Decoding (7 cols) -->
-      <div class="lg:col-span-7 space-y-6">
-
-        <!-- Waveform & Real Spectrogram -->
-        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
-          <div class="flex justify-between items-center">
-            <div>
-              <h3 class="text-md font-bold text-white flex items-center gap-2">
-                <span class="w-2 h-2 rounded-full bg-sky-400"></span> Live Input Signal & Waveform
-              </h3>
-              <p class="text-xs text-slate-400" id="audioMetaText">Duration: 0.8s | 16,000 Hz</p>
-            </div>
-            <div id="inferSpinner" class="hidden text-xs text-indigo-400 flex items-center gap-1 font-mono">
-              <span class="animate-spin">🌀</span> Running PyTorch GPU Forward...
-            </div>
-          </div>
-
-          <!-- Waveform Canvas with Captum Attribution Overlay -->
-          <div class="space-y-1">
-            <div class="flex justify-between text-[11px] text-slate-400 font-mono">
-              <span>Waveform (Blue) & Captum Integrated Gradients (Crimson)</span>
-              <span id="attributionLegendText" class="text-rose-400">Click any token below to highlight attribution</span>
-            </div>
-            <div class="relative bg-slate-950 border border-slate-800 rounded-xl overflow-hidden h-36">
-              <canvas id="liveWaveformCanvas" class="w-full h-full"></canvas>
-            </div>
-          </div>
-
-          <!-- Spectrogram Matrix -->
-          <div class="space-y-1">
-            <div class="flex justify-between text-[11px] text-slate-400 font-mono">
-              <span>Live Acoustic Spectrogram (FFT Frequency Energy across Time Frames)</span>
-              <span>16 Spectral Bins</span>
-            </div>
-            <div class="relative bg-slate-950 border border-slate-800 rounded-xl overflow-hidden h-28">
-              <canvas id="liveSpectrogramCanvas" class="w-full h-full"></canvas>
-            </div>
+      <!-- Control Bar: Input Generation & Audio Upload -->
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl grid grid-cols-1 lg:grid-cols-12 gap-4 items-center">
+        <!-- Synthesize spoken word -->
+        <div class="lg:col-span-5 space-y-1">
+          <label class="text-xs font-semibold text-slate-300">1. Synthesize Spoken Word to Python:</label>
+          <div class="flex gap-2">
+            <input type="text" id="synthWordInput" value="speech" placeholder="Type a word..." class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white w-full focus:outline-none focus:ring-2 focus:ring-indigo-500">
+            <button onclick="triggerSynthesis()" id="btnSynth" class="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold transition-all whitespace-nowrap">
+              Synthesize & Infer
+            </button>
           </div>
         </div>
 
-        <!-- Live CTC Decoding & Alignment -->
-        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
-          <div class="flex flex-col sm:flex-row justify-between sm:items-center gap-2">
-            <div>
-              <h3 class="text-md font-bold text-white flex items-center gap-2">
-                <span class="w-2 h-2 rounded-full bg-emerald-400"></span> Live CTC Output & Phonetic Tokens
-              </h3>
-              <div class="text-xs font-mono text-emerald-400 mt-0.5">
-                CTC Decoded Transcript: <strong id="decodedTranscriptDisplay" class="text-white bg-slate-950 px-2 py-0.5 rounded border border-emerald-500/40">"..."</strong>
+        <!-- Quick Word Presets -->
+        <div class="lg:col-span-4 space-y-1">
+          <label class="text-xs font-semibold text-slate-300">Quick Word Presets:</label>
+          <div class="flex flex-wrap gap-1.5">
+            <button onclick="quickSynth('speech')" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded text-xs font-mono">speech</button>
+            <button onclick="quickSynth('bad')" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded text-xs font-mono">bad</button>
+            <button onclick="quickSynth('hello')" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded text-xs font-mono">hello</button>
+            <button onclick="quickSynth('one')" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded text-xs font-mono">one</button>
+            <button onclick="quickSynth('I am very bald')" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded text-xs font-mono">i am very bald</button>
+          </div>
+        </div>
+
+        <!-- Audio Upload -->
+        <div class="lg:col-span-3 space-y-1">
+          <label class="text-xs font-semibold text-slate-300">2. Or Upload Audio File (.wav/.flac):</label>
+          <input type="file" id="audioFileInput" accept=".wav,.flac,.ogg" class="text-xs text-slate-400 file:mr-2 file:py-1 file:px-3 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-slate-800 file:text-indigo-400 hover:file:bg-slate-700 cursor-pointer">
+        </div>
+      </div>
+
+      <!-- Sensitivity / Blank Penalty Slider Bar -->
+      <div class="bg-gradient-to-r from-slate-900 via-indigo-950/40 to-slate-900 border border-slate-800 rounded-xl p-3.5 shadow flex flex-col md:flex-row justify-between items-center gap-4">
+        <div class="flex items-center gap-2">
+          <span class="text-xs font-bold text-sky-400 uppercase tracking-wider">CTC Blank Penalty (Sensitivity):</span>
+          <span class="text-xs text-slate-400 hidden sm:inline">Adjusts blank token threshold to reveal underlying character spikes</span>
+        </div>
+        <div class="flex items-center gap-3 w-full md:w-auto">
+          <span class="text-[11px] text-slate-500 font-mono">0.0 (Strict)</span>
+          <input type="range" id="blankPenaltySlider" min="0" max="4.0" step="0.2" value="0.0" class="w-48 h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-500" oninput="updateBlankPenaltyDisplay(this.value)">
+          <span class="text-[11px] text-slate-500 font-mono">4.0 (High)</span>
+          <span id="blankPenaltyValueText" class="text-xs font-mono font-bold text-indigo-400 w-12 text-right">0.0</span>
+          <button onclick="triggerSynthesis()" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-[11px] text-slate-200 rounded font-semibold">Apply</button>
+        </div>
+      </div>
+
+      <!-- Live Signals & Layer Panels -->
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+        <!-- LEFT: Signals & CTC Decoding (7 cols) -->
+        <div class="lg:col-span-7 space-y-6">
+
+          <!-- Waveform & Real Spectrogram -->
+          <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+            <div class="flex justify-between items-center">
+              <div>
+                <h3 class="text-md font-bold text-white flex items-center gap-2">
+                  <span class="w-2 h-2 rounded-full bg-sky-400"></span> Live Input Signal & Waveform
+                </h3>
+                <p class="text-xs text-slate-400" id="audioMetaText">Duration: 0.8s | 16,000 Hz</p>
+              </div>
+              <div id="inferSpinner" class="hidden text-xs text-indigo-400 flex items-center gap-1 font-mono">
+                <span class="animate-spin">🌀</span> Running PyTorch Forward...
               </div>
             </div>
-            <div class="text-right">
-              <span class="text-[11px] text-slate-400 font-mono block">Top Phonetic Sequence:</span>
-              <span id="topNonBlankDisplay" class="text-xs font-mono font-bold text-sky-400">...</span>
+
+            <!-- Waveform Canvas with Captum Attribution Overlay -->
+            <div class="space-y-1">
+              <div class="flex justify-between text-[11px] text-slate-400 font-mono">
+                <span>Waveform (Blue) & Captum Integrated Gradients (Crimson)</span>
+                <span id="attributionLegendText" class="text-rose-400">Click any token below to highlight attribution</span>
+              </div>
+              <div class="relative bg-slate-950 border border-slate-800 rounded-xl overflow-hidden h-36">
+                <canvas id="liveWaveformCanvas" class="w-full h-full"></canvas>
+              </div>
+            </div>
+
+            <!-- Spectrogram Matrix -->
+            <div class="space-y-1">
+              <div class="flex justify-between text-[11px] text-slate-400 font-mono">
+                <span>Live Acoustic Spectrogram (FFT Frequency Energy across Time Frames)</span>
+                <span>16 Spectral Bins</span>
+              </div>
+              <div class="relative bg-slate-950 border border-slate-800 rounded-xl overflow-hidden h-28">
+                <canvas id="liveSpectrogramCanvas" class="w-full h-full"></canvas>
+              </div>
             </div>
           </div>
 
-          <!-- Interactive Token Attribution Bar -->
-          <div class="space-y-2">
-            <div class="flex justify-between text-xs text-slate-400">
-              <span class="font-semibold text-slate-300">1. Click Any Emitted Character to Run Captum Attribution:</span>
-              <span class="text-[10px] text-slate-500 font-mono">POST /api/xai/attribute</span>
+          <!-- Live CTC Decoding & Alignment -->
+          <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+            <div class="flex flex-col sm:flex-row justify-between sm:items-center gap-2">
+              <div>
+                <h3 class="text-md font-bold text-white flex items-center gap-2">
+                  <span class="w-2 h-2 rounded-full bg-emerald-400"></span> Live CTC Output & Phonetic Tokens
+                </h3>
+                <div class="text-xs font-mono text-emerald-400 mt-0.5">
+                  CTC Decoded Transcript: <strong id="decodedTranscriptDisplay" class="text-white bg-slate-950 px-2 py-0.5 rounded border border-emerald-500/40">"..."</strong>
+                </div>
+              </div>
+              <div class="text-right">
+                <span class="text-[11px] text-slate-400 font-mono block">Top Phonetic Sequence:</span>
+                <span id="topNonBlankDisplay" class="text-xs font-mono font-bold text-sky-400">...</span>
+              </div>
             </div>
-            <div id="tokenButtonGroup" class="flex flex-wrap gap-1.5 p-2.5 bg-slate-950 rounded-xl border border-slate-800 min-h-[46px] items-center">
-              <!-- Clickable tokens generated dynamically -->
+
+            <!-- Interactive Token Attribution Bar -->
+            <div class="space-y-2">
+              <div class="flex justify-between text-xs text-slate-400">
+                <span class="font-semibold text-slate-300">1. Click Any Emitted Character to Run Captum Attribution:</span>
+                <span class="text-[10px] text-slate-500 font-mono">POST /api/xai/attribute</span>
+              </div>
+              <div id="tokenButtonGroup" class="flex flex-wrap gap-1.5 p-2.5 bg-slate-950 rounded-xl border border-slate-800 min-h-[46px] items-center">
+                <!-- Clickable tokens generated dynamically -->
+              </div>
+            </div>
+
+            <!-- Direct Character Quick Attribute Selector -->
+            <div class="space-y-1.5 p-3 bg-slate-950/60 rounded-xl border border-slate-800">
+              <div class="flex justify-between items-center text-xs">
+                <span class="text-slate-300 font-semibold">2. Or Attribute ANY Character at Current Scrubber Frame:</span>
+                <span id="selectedFramePrompt" class="text-indigo-400 font-mono text-[11px]">Frame #15</span>
+              </div>
+              <div class="flex flex-wrap gap-1" id="quickCharButtons">
+                <!-- Quick alphabet characters -->
+              </div>
+            </div>
+
+            <!-- Frame Emissions Breakdown -->
+            <div class="space-y-1 font-mono">
+              <div class="flex justify-between text-[11px] text-slate-400">
+                <span>Time Frame Sequence (Click any frame pill to inspect & attribute):</span>
+                <span id="totalFramesCount" class="text-sky-400">Frames: 0</span>
+              </div>
+              <div id="framePillList" class="flex flex-wrap gap-1 max-h-36 overflow-y-auto p-2.5 bg-slate-950 rounded-xl border border-slate-800 text-[11px]">
+                <!-- Frame pills populated dynamically -->
+              </div>
+            </div>
+
+            <div id="frameDetailBox" class="p-3 bg-slate-950/90 rounded-lg border border-slate-800 text-xs font-mono text-slate-300 flex justify-between items-center">
+              <span>Hover or click any frame above to inspect its real softmax distribution.</span>
             </div>
           </div>
 
-          <!-- Direct Character Quick Attribute Selector -->
-          <div class="space-y-1.5 p-3 bg-slate-950/60 rounded-xl border border-slate-800">
-            <div class="flex justify-between items-center text-xs">
-              <span class="text-slate-300 font-semibold">2. Or Attribute ANY Character at Current Scrubber Frame:</span>
-              <span id="selectedFramePrompt" class="text-indigo-400 font-mono text-[11px]">Frame #15</span>
+        </div>
+
+        <!-- RIGHT: Live Layer Representations & Causal Interventions (5 cols) -->
+        <div class="lg:col-span-5 space-y-6">
+
+          <!-- Live Layer Activations & Multi-Head Attention -->
+          <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+            <div class="flex justify-between items-center">
+              <h3 class="text-md font-bold text-white">Live PyTorch Hidden States</h3>
+              <!-- Layer Selector Buttons -->
+              <div class="flex gap-1 bg-slate-950 p-1 rounded-lg border border-slate-800 text-xs" id="layerNavButtons">
+                <button onclick="selectStudioLayer(0)" id="studioLayer0" class="px-2 py-0.5 rounded bg-indigo-600 text-white font-semibold">CNN</button>
+                <button onclick="selectStudioLayer(1)" id="studioLayer1" class="px-2 py-0.5 rounded text-slate-400 hover:text-white">L1</button>
+                <button onclick="selectStudioLayer(2)" id="studioLayer2" class="px-2 py-0.5 rounded text-slate-400 hover:text-white">L2</button>
+                <button onclick="selectStudioLayer(3)" id="studioLayer3" class="px-2 py-0.5 rounded text-slate-400 hover:text-white">L3</button>
+                <button onclick="selectStudioLayer(4)" id="studioLayer4" class="px-2 py-0.5 rounded text-slate-400 hover:text-white">L4</button>
+              </div>
             </div>
-            <div class="flex flex-wrap gap-1" id="quickCharButtons">
-              <!-- Quick alphabet characters -->
+
+            <!-- Feature Matrix Canvas -->
+            <div class="space-y-1">
+              <div class="flex justify-between text-[11px] text-slate-400 font-mono">
+                <span id="layerNameText">Layer Representations (32 channels x T frames)</span>
+                <span id="layerEnergyText">Norm: -</span>
+              </div>
+              <div class="relative bg-slate-950 border border-slate-800 rounded-xl overflow-hidden h-36">
+                <canvas id="liveLayerMatrixCanvas" class="w-full h-full"></canvas>
+              </div>
+            </div>
+
+            <!-- Multi-Head Attention Canvas -->
+            <div class="space-y-1">
+              <div class="flex justify-between text-[11px] text-slate-400 font-mono">
+                <span>PyTorch Attention Weights (T x T Frames)</span>
+                <span>Head Average</span>
+              </div>
+              <div class="relative bg-slate-950 border border-slate-800 rounded-xl overflow-hidden h-36">
+                <canvas id="liveAttentionCanvas" class="w-full h-full"></canvas>
+              </div>
             </div>
           </div>
 
-          <!-- Frame Emissions Breakdown -->
-          <div class="space-y-1 font-mono">
-            <div class="flex justify-between text-[11px] text-slate-400">
-              <span>Time Frame Sequence (Click any frame pill to inspect & attribute):</span>
-              <span id="totalFramesCount" class="text-sky-400">Frames: 0</span>
+          <!-- Live Causal Ablation Interventions (NAPS) -->
+          <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+            <div>
+              <h3 class="text-md font-bold text-white flex items-center gap-2">
+                <span class="w-2 h-2 rounded-full bg-rose-400"></span> Live Causal Layer Intervention (NAPS)
+              </h3>
+              <p class="text-xs text-slate-400">
+                Zero out or bypass a Transformer layer in the active PyTorch model and measure real-time logit shift!
+              </p>
             </div>
-            <div id="framePillList" class="flex flex-wrap gap-1 max-h-36 overflow-y-auto p-2.5 bg-slate-950 rounded-xl border border-slate-800 text-[11px]">
-              <!-- Frame pills populated dynamically -->
+
+            <div class="grid grid-cols-4 gap-2">
+              <button onclick="triggerAblation(0)" class="px-2 py-2 bg-slate-950 hover:bg-rose-950/60 border border-slate-800 rounded-lg text-xs font-mono text-slate-200">Ablate L1</button>
+              <button onclick="triggerAblation(1)" class="px-2 py-2 bg-slate-950 hover:bg-rose-950/60 border border-slate-800 rounded-lg text-xs font-mono text-slate-200">Ablate L2</button>
+              <button onclick="triggerAblation(2)" class="px-2 py-2 bg-slate-950 hover:bg-rose-950/60 border border-slate-800 rounded-lg text-xs font-mono text-slate-200">Ablate L3</button>
+              <button onclick="triggerAblation(3)" class="px-2 py-2 bg-slate-950 hover:bg-rose-950/60 border border-slate-800 rounded-lg text-xs font-mono text-slate-200">Ablate L4</button>
+            </div>
+
+            <div id="ablationResultBox" class="p-3 bg-slate-950 rounded-xl border border-slate-800 text-xs font-mono space-y-1 text-slate-300">
+              Click an ablation button above to observe causal damage to the model's output in real time.
             </div>
           </div>
 
-          <div id="frameDetailBox" class="p-3 bg-slate-950/90 rounded-lg border border-slate-800 text-xs font-mono text-slate-300 flex justify-between items-center">
-            <span>Hover or click any frame above to inspect its real softmax distribution.</span>
-          </div>
         </div>
 
       </div>
 
-      <!-- RIGHT COLUMN: Real Layer Representations & Causal Interventions (5 cols) -->
-      <div class="lg:col-span-5 space-y-6">
+    </div>
 
-        <!-- Live Layer Activations & Multi-Head Attention -->
-        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
-          <div class="flex justify-between items-center">
-            <h3 class="text-md font-bold text-white">Live PyTorch Hidden States</h3>
-            <!-- Layer Selector Buttons -->
-            <div class="flex gap-1 bg-slate-950 p-1 rounded-lg border border-slate-800 text-xs" id="layerNavButtons">
-              <button onclick="selectStudioLayer(0)" id="studioLayer0" class="px-2 py-0.5 rounded bg-indigo-600 text-white font-semibold">CNN</button>
-              <button onclick="selectStudioLayer(1)" id="studioLayer1" class="px-2 py-0.5 rounded text-slate-400 hover:text-white">L1</button>
-              <button onclick="selectStudioLayer(2)" id="studioLayer2" class="px-2 py-0.5 rounded text-slate-400 hover:text-white">L2</button>
-              <button onclick="selectStudioLayer(3)" id="studioLayer3" class="px-2 py-0.5 rounded text-slate-400 hover:text-white">L3</button>
-              <button onclick="selectStudioLayer(4)" id="studioLayer4" class="px-2 py-0.5 rounded text-slate-400 hover:text-white">L4</button>
-            </div>
+    <!-- ============================================================= -->
+    <!-- TAB 2: REAL DATASET BROWSER (LIBRISPEECH)                    -->
+    <!-- ============================================================= -->
+    <div id="tab-dataset" class="main-tab-content hidden space-y-6">
+
+      <!-- Real Dataset Header Stats -->
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 text-center">
+          <div class="text-[10px] text-slate-400 uppercase tracking-wider font-semibold">Total Utterances</div>
+          <div id="dsTotalUtterances" class="text-2xl font-bold text-white font-mono mt-1">2,703</div>
+          <div class="text-[10px] text-emerald-400 mt-0.5">Real Human Speech</div>
+        </div>
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 text-center">
+          <div class="text-[10px] text-slate-400 uppercase tracking-wider font-semibold">Total Audio Hours</div>
+          <div id="dsTotalHours" class="text-2xl font-bold text-indigo-400 font-mono mt-1">5.39 hrs</div>
+          <div class="text-[10px] text-slate-400 mt-0.5">19,404 seconds</div>
+        </div>
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 text-center">
+          <div class="text-[10px] text-slate-400 uppercase tracking-wider font-semibold">Sampling Rate</div>
+          <div class="text-2xl font-bold text-sky-400 font-mono mt-1">16,000 Hz</div>
+          <div class="text-[10px] text-slate-400 mt-0.5">Lossless FLAC format</div>
+        </div>
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 text-center">
+          <div class="text-[10px] text-slate-400 uppercase tracking-wider font-semibold">Dataset Split</div>
+          <div class="text-2xl font-bold text-emerald-400 font-mono mt-1">2,298 / 405</div>
+          <div class="text-[10px] text-slate-400 mt-0.5">Train / Validation</div>
+        </div>
+      </div>
+
+      <!-- Dataset Filter & Table -->
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+        <div class="flex flex-col sm:flex-row justify-between sm:items-center gap-3">
+          <div>
+            <h3 class="text-lg font-bold text-white flex items-center gap-2">
+              <span class="w-2.5 h-2.5 rounded-full bg-emerald-400"></span> Real LibriSpeech Recordings Browser
+            </h3>
+            <p class="text-xs text-slate-400">Listen to real speakers and load any utterance directly into HuBERT for live inference & XAI.</p>
           </div>
-
-          <!-- Feature Matrix Canvas -->
-          <div class="space-y-1">
-            <div class="flex justify-between text-[11px] text-slate-400 font-mono">
-              <span id="layerNameText">Layer Representations (32 channels x T frames)</span>
-              <span id="layerEnergyText">Norm: -</span>
-            </div>
-            <div class="relative bg-slate-950 border border-slate-800 rounded-xl overflow-hidden h-36">
-              <canvas id="liveLayerMatrixCanvas" class="w-full h-full"></canvas>
-            </div>
-          </div>
-
-          <!-- Multi-Head Attention Canvas -->
-          <div class="space-y-1">
-            <div class="flex justify-between text-[11px] text-slate-400 font-mono">
-              <span>PyTorch Attention Weights (T x T Frames)</span>
-              <span>Head Average</span>
-            </div>
-            <div class="relative bg-slate-950 border border-slate-800 rounded-xl overflow-hidden h-36">
-              <canvas id="liveAttentionCanvas" class="w-full h-full"></canvas>
-            </div>
+          <div class="flex items-center gap-2">
+            <input type="text" id="datasetSearchInput" placeholder="Search transcript or ID..." class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 w-64" oninput="debounceDatasetSearch()">
           </div>
         </div>
 
-        <!-- Live Causal Ablation Interventions (NAPS) -->
+        <!-- Sample Table -->
+        <div class="overflow-x-auto rounded-xl border border-slate-800">
+          <table class="w-full text-left text-xs text-slate-300">
+            <thead class="bg-slate-950 text-slate-400 font-mono uppercase text-[10px] border-b border-slate-800">
+              <tr>
+                <th class="p-3">Utterance ID</th>
+                <th class="p-3">Speaker</th>
+                <th class="p-3">Duration</th>
+                <th class="p-3">Ground Truth Transcript</th>
+                <th class="p-3">Audio Playback</th>
+                <th class="p-3 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="datasetTableBody" class="divide-y divide-slate-800/60 font-mono">
+              <!-- Populated by JS -->
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Pagination Bar -->
+        <div class="flex justify-between items-center text-xs text-slate-400 font-mono pt-2">
+          <span id="paginationInfo">Showing samples 1 - 15 of 2,703</span>
+          <div class="flex gap-2">
+            <button onclick="prevDatasetPage()" id="btnPrevPage" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded text-slate-200 border border-slate-700">Previous</button>
+            <button onclick="nextDatasetPage()" id="btnNextPage" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded text-slate-200 border border-slate-700">Next</button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ============================================================= -->
+    <!-- TAB 3: TRAINING LOGS & INTERACTIVE LOSS CURVES                -->
+    <!-- ============================================================= -->
+    <div id="tab-training" class="main-tab-content hidden space-y-6">
+
+      <!-- Live Training Controls -->
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+        <div class="flex flex-col sm:flex-row justify-between sm:items-center gap-3">
+          <div>
+            <h3 class="text-lg font-bold text-white flex items-center gap-2">
+              <span class="w-2.5 h-2.5 rounded-full bg-indigo-400 animate-pulse"></span> PyTorch Live Training Controller
+            </h3>
+            <p class="text-xs text-slate-400">Launch background PyTorch training on either real LibriSpeech recordings or synthetic speech.</p>
+          </div>
+          <div class="flex items-center gap-2">
+            <button onclick="startTrainingFromTab('librispeech')" id="btnTabTrainLibri" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold shadow-lg transition-all">
+              Train on LibriSpeech (Real Speech)
+            </button>
+            <button onclick="startTrainingFromTab('synthetic')" class="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-bold border border-slate-700">
+              Train on Synthetic
+            </button>
+            <button onclick="stopLiveTraining()" id="btnTabStopTrain" class="px-3 py-2 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold hidden">
+              Stop
+            </button>
+          </div>
+        </div>
+
+        <!-- Training Stat Cards -->
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 text-center">
+          <div class="p-3 bg-slate-950 rounded-xl border border-slate-800">
+            <div class="text-[10px] text-slate-400 uppercase font-mono">Current Epoch</div>
+            <div id="tabMetricEpoch" class="text-xl font-bold text-white font-mono mt-0.5">-</div>
+          </div>
+          <div class="p-3 bg-slate-950 rounded-xl border border-slate-800">
+            <div class="text-[10px] text-slate-400 uppercase font-mono">Latest Training Loss</div>
+            <div id="tabMetricLoss" class="text-xl font-bold text-indigo-400 font-mono mt-0.5">-</div>
+          </div>
+          <div class="p-3 bg-slate-950 rounded-xl border border-slate-800">
+            <div class="text-[10px] text-slate-400 uppercase font-mono">Validation CER</div>
+            <div id="tabMetricCER" class="text-xl font-bold text-emerald-400 font-mono mt-0.5">-</div>
+          </div>
+          <div class="p-3 bg-slate-950 rounded-xl border border-slate-800">
+            <div class="text-[10px] text-slate-400 uppercase font-mono">Validation WER</div>
+            <div id="tabMetricWER" class="text-xl font-bold text-sky-400 font-mono mt-0.5">-</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Training Loss & Error Rate Curves (Canvas Charts) -->
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <!-- Loss Curve -->
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-3">
+          <div class="flex justify-between items-center">
+            <h4 class="text-sm font-bold text-white">CTC Loss Progression (Training vs. Validation)</h4>
+            <span class="text-xs text-indigo-400 font-mono">Convergence Curve</span>
+          </div>
+          <div class="relative bg-slate-950 border border-slate-800 rounded-xl h-48 overflow-hidden p-2">
+            <canvas id="lossCurveCanvas" class="w-full h-full"></canvas>
+          </div>
+        </div>
+
+        <!-- Error Rate Curve (CER & WER) -->
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-3">
+          <div class="flex justify-between items-center">
+            <h4 class="text-sm font-bold text-white">Error Rate Progression (CER & WER)</h4>
+            <span class="text-xs text-emerald-400 font-mono">Target: 0.0</span>
+          </div>
+          <div class="relative bg-slate-950 border border-slate-800 rounded-xl h-48 overflow-hidden p-2">
+            <canvas id="errorRateCurveCanvas" class="w-full h-full"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <!-- Live Scrolling Training Log Output -->
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-3">
+        <h4 class="text-sm font-bold text-white">Live Training Console Logs & Sample Predictions</h4>
+        <div id="trainingConsoleOutput" class="h-44 overflow-y-auto bg-slate-950 rounded-xl p-3 font-mono text-xs text-slate-300 space-y-1 border border-slate-800">
+          <div class="text-slate-500">No active training task. Launch training above to stream live epoch metrics.</div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ============================================================= -->
+    <!-- TAB 4: WEIGHTS, BENCHMARKS & SCALING LAWS                     -->
+    <!-- ============================================================= -->
+    <div id="tab-benchmarks" class="main-tab-content hidden space-y-6">
+
+      <!-- Summary Cards -->
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 text-center">
+          <div class="text-[10px] text-slate-400 uppercase tracking-wider font-semibold">Total Parameters</div>
+          <div id="benchTotalParams" class="text-2xl font-bold text-white font-mono mt-1">8,031,392</div>
+          <div class="text-[10px] text-indigo-400 mt-0.5">8.03M Weights</div>
+        </div>
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 text-center">
+          <div class="text-[10px] text-slate-400 uppercase tracking-wider font-semibold">Memory (FP32 / FP16)</div>
+          <div id="benchMemory" class="text-2xl font-bold text-sky-400 font-mono mt-1">30.6 / 15.3 MB</div>
+          <div class="text-[10px] text-slate-400 mt-0.5">Model Footprint</div>
+        </div>
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 text-center">
+          <div class="text-[10px] text-slate-400 uppercase tracking-wider font-semibold">1s Audio Latency (GPU)</div>
+          <div id="bench1sLatency" class="text-2xl font-bold text-emerald-400 font-mono mt-1">5.76 ms</div>
+          <div class="text-[10px] text-emerald-400 mt-0.5">173.5x Faster than Realtime!</div>
+        </div>
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 text-center">
+          <div class="text-[10px] text-slate-400 uppercase tracking-wider font-semibold">Real-Time Factor (RTF)</div>
+          <div id="benchRTF" class="text-2xl font-bold text-amber-400 font-mono mt-1">0.0058</div>
+          <div class="text-[10px] text-slate-400 mt-0.5">Ultra-low latency</div>
+        </div>
+      </div>
+
+      <!-- Parameter Breakdown Table -->
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+        <h3 class="text-lg font-bold text-white">Layer-by-Layer Parameter & Weight Breakdown</h3>
+        <div class="overflow-x-auto rounded-xl border border-slate-800">
+          <table class="w-full text-left text-xs text-slate-300">
+            <thead class="bg-slate-950 text-slate-400 font-mono uppercase text-[10px] border-b border-slate-800">
+              <tr>
+                <th class="p-3">Architecture Component</th>
+                <th class="p-3">Weight Count</th>
+                <th class="p-3">% of Total Model</th>
+                <th class="p-3">Technical Role</th>
+              </tr>
+            </thead>
+            <tbody id="paramsTableBody" class="divide-y divide-slate-800 font-mono">
+              <!-- Populated by JS -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Live Speed Benchmarks & Scaling Laws -->
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+        <!-- Speed Benchmarking -->
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+          <div class="flex justify-between items-center">
+            <h3 class="text-md font-bold text-white">Measured GPU Inference Speed (Titan X)</h3>
+            <span class="text-xs text-emerald-400 font-mono">Real-Time Factor (RTF)</span>
+          </div>
+          <div class="overflow-x-auto rounded-xl border border-slate-800">
+            <table class="w-full text-left text-xs text-slate-300">
+              <thead class="bg-slate-950 text-slate-400 font-mono uppercase text-[10px] border-b border-slate-800">
+                <tr>
+                  <th class="p-2.5">Audio Duration</th>
+                  <th class="p-2.5">Latency (ms)</th>
+                  <th class="p-2.5">RTF</th>
+                  <th class="p-2.5">Speedup Factor</th>
+                </tr>
+              </thead>
+              <tbody id="speedTableBody" class="divide-y divide-slate-800 font-mono">
+                <!-- Populated by JS -->
+              </tbody>
+            </table>
+          </div>
+          <p class="text-[11px] text-slate-400 leading-relaxed">
+            <strong>RTF (Real-Time Factor)</strong> measures the ratio of processing time to audio duration. An RTF of <strong>0.0058</strong> means 1 second of speech is processed in just 5.76 milliseconds!
+          </p>
+        </div>
+
+        <!-- Computational Scaling Laws: Linear CNN vs Quadratic Attention -->
         <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
           <div>
-            <h3 class="text-md font-bold text-white flex items-center gap-2">
-              <span class="w-2 h-2 rounded-full bg-rose-400"></span> Live Causal Layer Intervention (NAPS)
-            </h3>
+            <h3 class="text-md font-bold text-white">Computational Scaling Laws: CNN vs. Transformer</h3>
             <p class="text-xs text-slate-400">
-              Zero out or bypass a Transformer layer in the active PyTorch model and measure real-time logit shift!
+              How computational complexity shifts as audio duration grows from 1 second to 60 seconds:
             </p>
           </div>
 
-          <div class="grid grid-cols-4 gap-2">
-            <button onclick="triggerAblation(0)" class="px-2 py-2 bg-slate-950 hover:bg-rose-950/60 border border-slate-800 rounded-lg text-xs font-mono text-slate-200">Ablate L1</button>
-            <button onclick="triggerAblation(1)" class="px-2 py-2 bg-slate-950 hover:bg-rose-950/60 border border-slate-800 rounded-lg text-xs font-mono text-slate-200">Ablate L2</button>
-            <button onclick="triggerAblation(2)" class="px-2 py-2 bg-slate-950 hover:bg-rose-950/60 border border-slate-800 rounded-lg text-xs font-mono text-slate-200">Ablate L3</button>
-            <button onclick="triggerAblation(3)" class="px-2 py-2 bg-slate-950 hover:bg-rose-950/60 border border-slate-800 rounded-lg text-xs font-mono text-slate-200">Ablate L4</button>
+          <div class="overflow-x-auto rounded-xl border border-slate-800">
+            <table class="w-full text-left text-xs text-slate-300">
+              <thead class="bg-slate-950 text-slate-400 font-mono uppercase text-[10px] border-b border-slate-800">
+                <tr>
+                  <th class="p-2.5">Audio Length</th>
+                  <th class="p-2.5">Frames</th>
+                  <th class="p-2.5">GFLOPs</th>
+                  <th class="p-2.5">CNN Share O(T)</th>
+                  <th class="p-2.5">Attn Share O(T²)</th>
+                </tr>
+              </thead>
+              <tbody id="scalingTableBody" class="divide-y divide-slate-800 font-mono">
+                <!-- Populated by JS -->
+              </tbody>
+            </table>
           </div>
 
-          <div id="ablationResultBox" class="p-3 bg-slate-950 rounded-xl border border-slate-800 text-xs font-mono space-y-1 text-slate-300">
-            Click an ablation button above to observe causal damage to the model's output in real time.
+          <div class="p-3 bg-slate-950 rounded-xl border border-slate-800 text-[11px] text-slate-300 space-y-1">
+            <strong class="text-amber-400 block">The Scaling Takeaway:</strong>
+            • <strong>For short audio (< 10s):</strong> The 7-layer 1D CNN accounts for <strong>>92%</strong> of compute (convolutional filterbanks).<br>
+            • <strong>For long audio (1–10 minutes):</strong> The 320x downsampling keeps attention manageable, but the $O(T^2)$ self-attention stage expands rapidly, increasing its share from 6% to over 16%!
           </div>
         </div>
 
@@ -256,87 +545,47 @@
 
     </div>
 
-  </div>
-
-  <!-- LIVE TRAINING MODAL -->
-  <div id="trainingModal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
-    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl max-w-2xl w-full space-y-5">
-      <div class="flex justify-between items-center border-b border-slate-800 pb-3">
-        <h3 class="text-lg font-bold text-white flex items-center gap-2">
-          <span class="w-3 h-3 rounded-full bg-emerald-400 animate-pulse"></span> Live PyTorch Training Console
-        </h3>
-        <button onclick="toggleTrainingModal()" class="text-slate-400 hover:text-white font-bold">&times;</button>
-      </div>
-
-      <div class="grid grid-cols-3 gap-3">
-        <div>
-          <label class="text-xs text-slate-400 block mb-1">Epochs:</label>
-          <input type="number" id="trainEpochs" value="5" min="1" max="20" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white">
-        </div>
-        <div>
-          <label class="text-xs text-slate-400 block mb-1">Learning Rate:</label>
-          <input type="text" id="trainLr" value="0.0005" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white">
-        </div>
-        <div>
-          <label class="text-xs text-slate-400 block mb-1">Batch Size:</label>
-          <input type="number" id="trainBatchSize" value="16" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white">
-        </div>
-      </div>
-
-      <div class="flex gap-2">
-        <button onclick="startLiveTraining()" id="btnStartTrain" class="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl shadow transition-all">
-          Start Live Training
-        </button>
-        <button onclick="stopLiveTraining()" id="btnStopTrain" class="px-5 py-2 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-xl shadow transition-all hidden">
-          Stop Training
-        </button>
-      </div>
-
-      <!-- Training Status Cards -->
-      <div class="grid grid-cols-4 gap-3 text-center">
-        <div class="p-3 bg-slate-950 rounded-xl border border-slate-800">
-          <div class="text-[10px] text-slate-400 uppercase">Epoch</div>
-          <div id="metricEpoch" class="text-lg font-bold text-white font-mono">-</div>
-        </div>
-        <div class="p-3 bg-slate-950 rounded-xl border border-slate-800">
-          <div class="text-[10px] text-slate-400 uppercase">Train Loss</div>
-          <div id="metricTrainLoss" class="text-lg font-bold text-indigo-400 font-mono">-</div>
-        </div>
-        <div class="p-3 bg-slate-950 rounded-xl border border-slate-800">
-          <div class="text-[10px] text-slate-400 uppercase">Val CER</div>
-          <div id="metricValCER" class="text-lg font-bold text-emerald-400 font-mono">-</div>
-        </div>
-        <div class="p-3 bg-slate-950 rounded-xl border border-slate-800">
-          <div class="text-[10px] text-slate-400 uppercase">Val WER</div>
-          <div id="metricValWER" class="text-lg font-bold text-sky-400 font-mono">-</div>
-        </div>
-      </div>
-
-      <!-- Live Transcripts -->
-      <div class="p-3 bg-slate-950 rounded-xl border border-slate-800 space-y-1 text-xs font-mono">
-        <div class="text-slate-400">Sample Reference: <span id="metricRef" class="text-slate-200">-</span></div>
-        <div class="text-slate-400">Live Prediction:  <span id="metricPred" class="text-emerald-400 font-bold">-</span></div>
-      </div>
-    </div>
   </div>
 
   <script>
-    // App State
+    // Global Studio State
     let currentInferenceData = null;
     let selectedStudioLayer = 0;
     let currentAttributionCurve = null;
-    let trainingPollInterval = null;
     let currentActiveFrame = 15;
 
+    // Dataset Browser State
+    let currentDatasetPage = 1;
+    let currentDatasetSearch = "";
+    let searchDebounceTimeout = null;
+
+    // Tab Switching
+    function switchMainTab(tabKey) {
+      document.querySelectorAll(".main-tab-content").forEach(el => el.classList.add("hidden"));
+      document.querySelectorAll(".main-tab-btn").forEach(b => {
+        b.className = "main-tab-btn px-4 py-2 bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5";
+      });
+
+      document.getElementById("tab-" + tabKey).classList.remove("hidden");
+      const activeBtn = document.getElementById("tabBtn-" + tabKey);
+      activeBtn.className = "main-tab-btn px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold shadow-lg transition-all flex items-center gap-1.5";
+
+      if (tabKey === "dataset") loadDatasetSamples();
+      if (tabKey === "training") loadTrainingLogs();
+      if (tabKey === "benchmarks") loadBenchmarks();
+    }
+
+    // -------------------------------------------------------------
+    // STUDIO INFERENCE & VISUALIZATION
+    // -------------------------------------------------------------
     function updateBlankPenaltyDisplay(val) {
       document.getElementById("blankPenaltyValueText").innerText = parseFloat(val).toFixed(1);
     }
 
-    // Initialize Alphabet Quick Buttons
     function initQuickCharButtons() {
       const group = document.getElementById("quickCharButtons");
       group.innerHTML = "";
-      const commonChars = ["h", "e", "l", "o", "s", "p", "a", "t", "r", "d", "n", "m", "_"];
+      const commonChars = ["s", "p", "e", "c", "h", "b", "a", "d", "l", "o", "t", "r", "m", "n", "_"];
       commonChars.forEach(c => {
         const btn = document.createElement("button");
         btn.className = "px-2 py-0.5 bg-slate-900 hover:bg-rose-900/60 border border-slate-700 text-xs font-mono font-bold text-slate-200 rounded transition-all";
@@ -346,35 +595,15 @@
       });
     }
 
-    // Fetch initial backend status
-    async function initStudio() {
-      initQuickCharButtons();
-      try {
-        const res = await fetch("/api/status");
-        const status = await res.json();
-        document.getElementById("deviceBadge").innerText = `PyTorch: ${status.device.toUpperCase()}`;
-        document.getElementById("modelInfoBadge").innerText = `HuBERT (${status.encoder_layers} Layers, ${status.embed_dim}d)`;
-      } catch (e) {
-        console.error("Backend loading...", e);
-      }
-      triggerSynthesis();
-    }
-
-    // Trigger Synthesis & Inference with Blank Penalty
     async function triggerSynthesis() {
-      const word = document.getElementById("synthWordInput").value || "hello";
+      const word = document.getElementById("synthWordInput").value || "speech";
       const penalty = parseFloat(document.getElementById("blankPenaltySlider").value) || 0.0;
       showSpinner(true);
       try {
         const res = await fetch("/api/synthesize_and_infer", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            word: word,
-            duration: 0.8,
-            f0: 140.0,
-            blank_penalty: penalty
-          })
+          body: JSON.stringify({ word: word, duration: 0.8, f0: 140.0, blank_penalty: penalty })
         });
         const data = await res.json();
         renderInferenceData(data);
@@ -390,7 +619,6 @@
       triggerSynthesis();
     }
 
-    // File Upload Handler
     document.getElementById("audioFileInput").addEventListener("change", async (e) => {
       const file = e.target.files[0];
       if (!file) return;
@@ -402,10 +630,7 @@
 
       showSpinner(true);
       try {
-        const res = await fetch("/api/upload_audio", {
-          method: "POST",
-          body: formData
-        });
+        const res = await fetch("/api/upload_audio", { method: "POST", body: formData });
         const data = await res.json();
         renderInferenceData(data);
       } catch (err) {
@@ -421,25 +646,23 @@
       else sp.classList.add("hidden");
     }
 
-    // Render Inference Data across Canvases & Controls
     function renderInferenceData(data) {
       currentInferenceData = data;
       currentAttributionCurve = null;
 
       document.getElementById("audioMetaText").innerText = `Duration: ${data.duration_sec}s (${data.num_audio_samples.toLocaleString()} samples) | Input Text: '${data.transcript}'`;
       document.getElementById("decodedTranscriptDisplay").innerText = `"${data.decoded_text || '(silence)'}"`;
-      document.getElementById("topNonBlankDisplay").innerText = data.top_non_blank_text ? `"${data.top_non_blank_text.slice(0, 20)}..."` : "-";
+      document.getElementById("topNonBlankDisplay").innerText = data.top_non_blank_text ? `"${data.top_non_blank_text.slice(0, 22)}..."` : "-";
       document.getElementById("totalFramesCount").innerText = `Frames: ${data.num_frames}`;
 
-      // Populate Token Attribution Buttons: Candidates & High Confidence
+      // Populate Candidate Tokens
       const btnGroup = document.getElementById("tokenButtonGroup");
       btnGroup.innerHTML = "";
-
       const candidates = data.candidate_tokens || [];
       const seenChars = new Set();
 
       candidates.forEach((cand) => {
-        const key = `${cand.char}_${Math.floor(cand.frame / 5)}`;
+        const key = `${cand.char}_${Math.floor(cand.frame / 4)}`;
         if (!seenChars.has(key)) {
           seenChars.add(key);
           const btn = document.createElement("button");
@@ -449,18 +672,6 @@
           btnGroup.appendChild(btn);
         }
       });
-
-      if (btnGroup.children.length === 0) {
-        // Fallback: populate with top 3 most prominent frames
-        for (let f = 5; f < data.num_frames - 5; f += 8) {
-          const em = data.frame_emissions[f];
-          const btn = document.createElement("button");
-          btn.className = "px-3 py-1 bg-slate-900 hover:bg-rose-900/60 border border-slate-700 text-xs font-mono rounded-lg text-slate-200";
-          btn.innerHTML = `'${em.top_non_blank_char}' <span class="text-[10px] text-slate-400">@ ${em.time_sec}s</span>`;
-          btn.onclick = () => runCaptumAttribution(f, em.top_non_blank_id, em.top_non_blank_char);
-          btnGroup.appendChild(btn);
-        }
-      }
 
       // Populate Frame Pill List
       const pillList = document.getElementById("framePillList");
@@ -506,20 +717,13 @@
       `;
     }
 
-    // Run Real Captum Attribution via Backend
     async function runCaptumAttribution(frameIdx, tokenIdx, char) {
       document.getElementById("attributionLegendText").innerText = `Calculating Captum Integrated Gradients for '${char}'...`;
       try {
         const res = await fetch("/api/xai/attribute", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            frame_idx: frameIdx,
-            token_idx: tokenIdx,
-            char: char,
-            method: "integrated_gradients",
-            steps: 20
-          })
+          body: JSON.stringify({ frame_idx: frameIdx, token_idx: tokenIdx, char: char, method: "integrated_gradients", steps: 20 })
         });
         const attrData = await res.json();
         currentAttributionCurve = attrData.attribution_curve;
@@ -530,7 +734,6 @@
       }
     }
 
-    // Live Causal Ablation
     async function triggerAblation(layerIdx) {
       const box = document.getElementById("ablationResultBox");
       box.innerHTML = `<span class="text-rose-400 font-bold">Intervening on Layer ${layerIdx+1}...</span>`;
@@ -552,17 +755,13 @@
       }
     }
 
-    // Layer Switcher in Studio
     function selectStudioLayer(lIdx) {
       selectedStudioLayer = lIdx;
       for (let i = 0; i <= 4; i++) {
         const b = document.getElementById(`studioLayer${i}`);
         if (!b) continue;
-        if (i === lIdx) {
-          b.className = "px-2 py-0.5 rounded bg-indigo-600 text-white font-semibold";
-        } else {
-          b.className = "px-2 py-0.5 rounded text-slate-400 hover:text-white";
-        }
+        if (i === lIdx) b.className = "px-2 py-0.5 rounded bg-indigo-600 text-white font-semibold";
+        else b.className = "px-2 py-0.5 rounded text-slate-400 hover:text-white";
       }
 
       if (!currentInferenceData) return;
@@ -576,7 +775,6 @@
       drawAttentionMap();
     }
 
-    // Canvas Drawing: Waveform + Attribution Overlay
     function drawWaveform() {
       const canvas = document.getElementById("liveWaveformCanvas");
       if (!canvas || !currentInferenceData) return;
@@ -587,12 +785,10 @@
       const H = canvas.height;
 
       ctx.clearRect(0, 0, W, H);
-
       const wave = currentInferenceData.waveform;
       const numPoints = wave.length;
       const stepX = W / numPoints;
 
-      // Draw Waveform
       ctx.strokeStyle = "#38bdf8";
       ctx.lineWidth = 2;
       ctx.beginPath();
@@ -605,14 +801,6 @@
       }
       ctx.stroke();
 
-      // Zero line
-      ctx.strokeStyle = "rgba(148, 163, 184, 0.2)";
-      ctx.beginPath();
-      ctx.moveTo(0, H / 2);
-      ctx.lineTo(W, H / 2);
-      ctx.stroke();
-
-      // Draw Captum Attribution Overlay if available
       if (currentAttributionCurve) {
         const attr = currentAttributionCurve;
         const attrStep = W / attr.length;
@@ -623,7 +811,6 @@
         ctx.lineWidth = 2.5;
         ctx.beginPath();
         ctx.moveTo(0, H);
-
         for (let i = 0; i < attr.length; i++) {
           const normA = Math.abs(attr[i]) / maxAttr;
           const y = H - (normA * (H * 0.75));
@@ -637,7 +824,6 @@
       }
     }
 
-    // Canvas Drawing: Real Spectrogram Matrix
     function drawSpectrogram() {
       const canvas = document.getElementById("liveSpectrogramCanvas");
       if (!canvas || !currentInferenceData) return;
@@ -651,23 +837,18 @@
       const spec = currentInferenceData.spectrogram;
       const numFrames = spec.length;
       const numBins = spec[0]?.length || 16;
-
       const cellW = W / numFrames;
       const cellH = H / numBins;
 
       for (let t = 0; t < numFrames; t++) {
         for (let b = 0; b < numBins; b++) {
           const val = Math.min(1, spec[t][b] / 2.0);
-          const r = Math.floor(val * 240);
-          const g = Math.floor(val * 140);
-          const blue = Math.floor(val * 255);
-          ctx.fillStyle = `rgb(${r}, ${g}, ${blue})`;
+          ctx.fillStyle = `rgb(${Math.floor(val * 240)}, ${Math.floor(val * 140)}, 255)`;
           ctx.fillRect(t * cellW, H - (b + 1) * cellH, cellW - 0.5, cellH - 0.5);
         }
       }
     }
 
-    // Canvas Drawing: True Layer Hidden States
     function drawLayerMatrix() {
       const canvas = document.getElementById("liveLayerMatrixCanvas");
       if (!canvas || !currentInferenceData) return;
@@ -682,26 +863,18 @@
       if (!layer) return;
 
       const matrix = layer.features_2d;
-      const numDims = matrix.length;
-      const numFrames = matrix[0].length;
+      const cellW = W / matrix[0].length;
+      const cellH = H / matrix.length;
 
-      const cellW = W / numFrames;
-      const cellH = H / numDims;
-
-      for (let d = 0; d < numDims; d++) {
-        for (let t = 0; t < numFrames; t++) {
-          const rawVal = matrix[d][t];
-          const val = Math.max(0, Math.min(1, (rawVal + 2) / 4));
-          const r = Math.floor(val * 99);
-          const g = Math.floor(val * 102);
-          const b = Math.floor(val * 241);
-          ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+      for (let d = 0; d < matrix.length; d++) {
+        for (let t = 0; t < matrix[0].length; t++) {
+          const val = Math.max(0, Math.min(1, (matrix[d][t] + 2) / 4));
+          ctx.fillStyle = `rgb(${Math.floor(val * 99)}, ${Math.floor(val * 102)}, 241)`;
           ctx.fillRect(t * cellW, d * cellH, cellW - 0.5, cellH - 0.5);
         }
       }
     }
 
-    // Canvas Drawing: True Multi-Head Attention Map
     function drawAttentionMap() {
       const canvas = document.getElementById("liveAttentionCanvas");
       if (!canvas || !currentInferenceData) return;
@@ -722,72 +895,293 @@
 
       for (let i = 0; i < T; i++) {
         for (let j = 0; j < T; j++) {
-          const val = Math.min(1, attn[i][j] * 4);
-          ctx.fillStyle = `rgba(244, 63, 94, ${val})`;
+          ctx.fillStyle = `rgba(244, 63, 94, ${Math.min(1, attn[i][j] * 4)})`;
           ctx.fillRect(i * stepX, j * stepY, stepX - 0.5, stepY - 0.5);
         }
       }
     }
 
-    // Live Training Controls
-    function toggleTrainingModal() {
-      const m = document.getElementById("trainingModal");
-      m.classList.toggle("hidden");
+    // -------------------------------------------------------------
+    // TAB 2: REAL DATASET BROWSER (LIBRISPEECH)
+    // -------------------------------------------------------------
+    function debounceDatasetSearch() {
+      clearTimeout(searchDebounceTimeout);
+      searchDebounceTimeout = setTimeout(() => {
+        currentDatasetSearch = document.getElementById("datasetSearchInput").value;
+        currentDatasetPage = 1;
+        loadDatasetSamples();
+      }, 300);
     }
 
-    async function startLiveTraining() {
-      const epochs = parseInt(document.getElementById("trainEpochs").value) || 5;
-      const lr = parseFloat(document.getElementById("trainLr").value) || 0.0005;
-      const batchSize = parseInt(document.getElementById("trainBatchSize").value) || 16;
+    async function loadDatasetSamples() {
+      try {
+        const url = `/api/dataset/samples?page=${currentDatasetPage}&page_size=15&search=${encodeURIComponent(currentDatasetSearch)}`;
+        const res = await fetch(url);
+        const data = await res.json();
 
-      document.getElementById("btnStartTrain").classList.add("hidden");
-      document.getElementById("btnStopTrain").classList.remove("hidden");
+        document.getElementById("paginationInfo").innerText = `Showing page ${data.page} of ${data.total_pages} (${data.total.toLocaleString()} total utterances)`;
+        const tbody = document.getElementById("datasetTableBody");
+        tbody.innerHTML = "";
+
+        data.samples.forEach(s => {
+          const tr = document.createElement("tr");
+          tr.className = "hover:bg-slate-800/40 transition-all";
+          tr.innerHTML = `
+            <td class="p-3 text-sky-400 font-bold">${s.id}</td>
+            <td class="p-3 text-slate-400">Speaker ${s.speaker_id}</td>
+            <td class="p-3 text-emerald-400 font-mono">${s.duration}s</td>
+            <td class="p-3 text-slate-200 font-sans font-medium max-w-xs truncate" title="${s.transcript}">"${s.transcript}"</td>
+            <td class="p-3">
+              <audio controls class="h-8 w-44 rounded-lg" preload="none" src="/api/dataset/audio/${s.id}"></audio>
+            </td>
+            <td class="p-3 text-right">
+              <button onclick="inferDatasetUtterance('${s.id}')" class="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded font-sans font-bold text-xs shadow">
+                Run HuBERT & XAI
+              </button>
+            </td>
+          `;
+          tbody.appendChild(tr);
+        });
+      } catch (e) {
+        console.error("Load dataset error:", e);
+      }
+    }
+
+    function prevDatasetPage() {
+      if (currentDatasetPage > 1) {
+        currentDatasetPage--;
+        loadDatasetSamples();
+      }
+    }
+
+    function nextDatasetPage() {
+      currentDatasetPage++;
+      loadDatasetSamples();
+    }
+
+    async function inferDatasetUtterance(sampleId) {
+      switchMainTab("studio");
+      showSpinner(true);
+      try {
+        const res = await fetch("/api/dataset/infer_sample", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sample_id: sampleId, blank_penalty: 0.0 })
+        });
+        const data = await res.json();
+        renderInferenceData(data);
+      } catch (e) {
+        console.error("Infer dataset sample failed:", e);
+      } finally {
+        showSpinner(false);
+      }
+    }
+
+    // -------------------------------------------------------------
+    // TAB 3: TRAINING LOGS & CURVES
+    // -------------------------------------------------------------
+    let trainingPollInterval = null;
+
+    async function loadTrainingLogs() {
+      try {
+        const res = await fetch("/api/train/logs");
+        const data = await res.json();
+        renderTrainingCurves(data);
+      } catch (e) {
+        console.error("Load training logs error:", e);
+      }
+    }
+
+    function renderTrainingCurves(data) {
+      const hist = data.saved_history || {};
+      const trainLosses = hist.train_loss || [];
+      const valLosses = hist.val_loss || [];
+      const valCERs = hist.val_cer || [];
+      const valWERs = hist.val_wer || [];
+
+      if (trainLosses.length > 0) {
+        document.getElementById("tabMetricEpoch").innerText = `${trainLosses.length} Epochs`;
+        document.getElementById("tabMetricLoss").innerText = trainLosses[trainLosses.length - 1].toFixed(3);
+      }
+      if (valCERs.length > 0) {
+        document.getElementById("tabMetricCER").innerText = `${(valCERs[valCERs.length - 1] * 100).toFixed(1)}%`;
+      }
+      if (valWERs.length > 0) {
+        document.getElementById("tabMetricWER").innerText = `${(valWERs[valWERs.length - 1] * 100).toFixed(1)}%`;
+      }
+
+      drawCurve("lossCurveCanvas", [
+        { label: "Train Loss", color: "#6366f1", values: trainLosses },
+        { label: "Val Loss", color: "#f43f5e", values: valLosses },
+      ]);
+
+      drawCurve("errorRateCurveCanvas", [
+        { label: "Val CER", color: "#10b981", values: valCERs.map(v => Math.min(1.5, v)) },
+        { label: "Val WER", color: "#38bdf8", values: valWERs.map(v => Math.min(1.5, v)) },
+      ]);
+    }
+
+    function drawCurve(canvasId, seriesList) {
+      const canvas = document.getElementById(canvasId);
+      if (!canvas) return;
+      const ctx = canvas.getContext("2d");
+      canvas.width = canvas.parentElement.clientWidth * 2;
+      canvas.height = canvas.parentElement.clientHeight * 2;
+      const W = canvas.width;
+      const H = canvas.height;
+
+      ctx.clearRect(0, 0, W, H);
+
+      let maxVal = 0.1;
+      seriesList.forEach(s => {
+        if (s.values.length > 0) maxVal = Math.max(maxVal, ...s.values);
+      });
+
+      seriesList.forEach(s => {
+        if (s.values.length === 0) return;
+        const pts = s.values;
+        const stepX = W / Math.max(pts.length - 1, 1);
+
+        ctx.strokeStyle = s.color;
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        for (let i = 0; i < pts.length; i++) {
+          const y = H - (pts[i] / maxVal) * (H * 0.8) - 20;
+          const x = i * stepX;
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+
+        pts.forEach((v, i) => {
+          const y = H - (v / maxVal) * (H * 0.8) - 20;
+          const x = i * stepX;
+          ctx.fillStyle = s.color;
+          ctx.beginPath();
+          ctx.arc(x, y, 6, 0, Math.PI * 2);
+          ctx.fill();
+        });
+      });
+    }
+
+    async function startTrainingFromTab(datasetType) {
+      document.getElementById("btnTabTrainLibri").classList.add("hidden");
+      document.getElementById("btnTabStopTrain").classList.remove("hidden");
 
       await fetch("/api/train/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ epochs, lr, batch_size: batchSize })
+        body: JSON.stringify({ epochs: 5, lr: 0.0003, batch_size: 8, dataset_type: datasetType })
       });
 
       if (trainingPollInterval) clearInterval(trainingPollInterval);
-      trainingPollInterval = setInterval(pollTrainingStatus, 800);
+      trainingPollInterval = setInterval(pollTabTraining, 1000);
     }
 
     async function stopLiveTraining() {
       await fetch("/api/train/stop", { method: "POST" });
-      document.getElementById("btnStartTrain").classList.remove("hidden");
-      document.getElementById("btnStopTrain").classList.add("hidden");
+      document.getElementById("btnTabTrainLibri").classList.remove("hidden");
+      document.getElementById("btnTabStopTrain").classList.add("hidden");
     }
 
-    async function pollTrainingStatus() {
+    async function pollTabTraining() {
       try {
         const res = await fetch("/api/train/status");
         const st = await res.json();
 
-        document.getElementById("metricEpoch").innerText = `${st.epoch}/${st.total_epochs}`;
-        document.getElementById("metricTrainLoss").innerText = st.train_loss.toFixed(3);
-        document.getElementById("metricValCER").innerText = `${st.val_cer.toFixed(1)}%`;
-        document.getElementById("metricValWER").innerText = `${st.val_wer.toFixed(1)}%`;
+        document.getElementById("tabMetricEpoch").innerText = `Epoch ${st.epoch}/${st.total_epochs}`;
+        document.getElementById("tabMetricLoss").innerText = st.train_loss.toFixed(3);
+        document.getElementById("tabMetricCER").innerText = `${st.val_cer.toFixed(1)}%`;
+        document.getElementById("tabMetricWER").innerText = `${st.val_wer.toFixed(1)}%`;
 
-        document.getElementById("metricRef").innerText = st.sample_reference || "-";
-        document.getElementById("metricPred").innerText = st.sample_prediction || "-";
+        const consoleBox = document.getElementById("trainingConsoleOutput");
+        consoleBox.innerHTML += `
+          <div>[Epoch ${st.epoch}] Step ${st.step} | Loss: ${st.train_loss} | Pred: "${st.sample_prediction}" (Ref: "${st.sample_reference}")</div>
+        `;
+        consoleBox.scrollTop = consoleBox.scrollHeight;
 
         if (!st.is_training) {
           clearInterval(trainingPollInterval);
-          document.getElementById("btnStartTrain").classList.remove("hidden");
-          document.getElementById("btnStopTrain").classList.add("hidden");
+          document.getElementById("btnTabTrainLibri").classList.remove("hidden");
+          document.getElementById("btnTabStopTrain").classList.add("hidden");
+          loadTrainingLogs();
         }
       } catch (e) {
         console.error("Poll training failed", e);
       }
     }
 
-    window.addEventListener("DOMContentLoaded", initStudio);
-    window.addEventListener("resize", () => {
-      drawWaveform();
-      drawSpectrogram();
-      drawLayerMatrix();
-      drawAttentionMap();
+    // -------------------------------------------------------------
+    // TAB 4: WEIGHTS, BENCHMARKS & SCALING LAWS
+    // -------------------------------------------------------------
+    async function loadBenchmarks() {
+      try {
+        const res = await fetch("/api/benchmark");
+        const b = await res.json();
+
+        document.getElementById("benchTotalParams").innerText = b.parameters.total_parameters.toLocaleString();
+        document.getElementById("benchMemory").innerText = `${b.parameters.fp32_memory_mb} / ${b.parameters.fp16_memory_mb} MB`;
+
+        // 1s latency
+        const b1s = b.speed_benchmarks.find(x => x.audio_duration_sec === 1.0);
+        if (b1s) {
+          document.getElementById("bench1sLatency").innerText = `${b1s.latency_ms} ms`;
+          document.getElementById("benchRTF").innerText = b1s.rtf;
+        }
+
+        // Parameters table
+        const pTable = document.getElementById("paramsTableBody");
+        pTable.innerHTML = "";
+        const total = b.parameters.total_parameters;
+        b.parameters.components.forEach(c => {
+          const pct = ((c.params / total) * 100).toFixed(1);
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td class="p-3 text-white font-bold">${c.component}</td>
+            <td class="p-3 text-indigo-400 font-bold">${c.params.toLocaleString()}</td>
+            <td class="p-3 text-sky-400">${pct}%</td>
+            <td class="p-3 text-slate-400 font-sans text-xs">${c.description}</td>
+          `;
+          pTable.appendChild(tr);
+        });
+
+        // Speed table
+        const sTable = document.getElementById("speedTableBody");
+        sTable.innerHTML = "";
+        b.speed_benchmarks.forEach(s => {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td class="p-2.5 text-white font-bold">${s.audio_duration_sec}s (${s.num_samples.toLocaleString()} smp)</td>
+            <td class="p-2.5 text-emerald-400 font-bold">${s.latency_ms} ms</td>
+            <td class="p-2.5 text-amber-400">${s.rtf}</td>
+            <td class="p-2.5 text-sky-400 font-bold">${s.speedup_factor}x Realtime</td>
+          `;
+          sTable.appendChild(tr);
+        });
+
+        // Scaling table
+        const scTable = document.getElementById("scalingTableBody");
+        scTable.innerHTML = "";
+        b.scaling_analysis.forEach(sc => {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td class="p-2.5 text-white font-bold">${sc.duration_sec}s</td>
+            <td class="p-2.5 text-slate-300">${sc.downsampled_frames} frames</td>
+            <td class="p-2.5 text-indigo-400 font-bold">${sc.gflops} GFLOPs</td>
+            <td class="p-2.5 text-sky-400">${sc.pct_cnn_linear}%</td>
+            <td class="p-2.5 ${sc.pct_transformer_quadratic > 10 ? 'text-rose-400 font-bold' : 'text-slate-400'}">${sc.pct_transformer_quadratic}%</td>
+          `;
+          scTable.appendChild(tr);
+        });
+      } catch (e) {
+        console.error("Load benchmarks failed:", e);
+      }
+    }
+
+    // Initialize
+    window.addEventListener("DOMContentLoaded", () => {
+      initQuickCharButtons();
+      triggerSynthesis();
     });
   </script>
 </body>
