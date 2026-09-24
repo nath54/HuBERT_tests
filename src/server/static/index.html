@@ -443,16 +443,26 @@
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
           <!-- Pre-train Loss & Acc Chart -->
           <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-3">
-            <div class="flex justify-between items-center">
+            <div class="flex flex-col sm:flex-row justify-between sm:items-center gap-2">
               <div>
                 <h4 class="text-sm font-bold text-white flex items-center gap-2">
                   <span>📈</span> SSL Loss & Masked Accuracy Trajectory
                 </h4>
                 <p class="text-[11px] text-slate-400">Loss vs. Top-1 Masked Prediction Accuracy across steps.</p>
               </div>
-              <div class="flex items-center gap-3 text-xs font-mono">
-                <span class="text-amber-400 flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-amber-400"></span> Loss</span>
-                <span class="text-sky-400 flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-sky-400"></span> Acc (%)</span>
+              <div class="flex flex-wrap items-center gap-3">
+                <!-- Smoothing Slider -->
+                <div class="flex items-center gap-2 bg-slate-950 px-2.5 py-1 rounded-xl border border-slate-800" title="Exponential Moving Average (EMA) smoothing factor">
+                  <span class="text-[11px] font-mono text-slate-400">Smoothing:</span>
+                  <input type="range" id="ptSmoothingSlider" min="0" max="0.95" step="0.05" value="0.6"
+                         oninput="onCurveSmoothingChange(parseFloat(this.value))"
+                         class="w-20 sm:w-28 accent-indigo-500 cursor-pointer h-1.5 bg-slate-800 rounded-lg">
+                  <span id="ptSmoothingVal" class="text-xs font-mono font-bold text-indigo-400 w-7">0.60</span>
+                </div>
+                <div class="flex items-center gap-2.5 text-xs font-mono">
+                  <span class="text-amber-400 flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-amber-400"></span> Loss</span>
+                  <span class="text-sky-400 flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-sky-400"></span> Acc (%)</span>
+                </div>
               </div>
             </div>
             <div class="relative bg-slate-950 border border-slate-800 rounded-xl h-56 overflow-hidden p-2">
@@ -579,9 +589,15 @@
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
           <!-- Loss Curve -->
           <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-3">
-            <div class="flex justify-between items-center">
+            <div class="flex flex-col sm:flex-row justify-between sm:items-center gap-2">
               <h4 class="text-sm font-bold text-white">CTC Loss Progression (Training vs. Validation)</h4>
-              <span class="text-xs text-indigo-400 font-mono">Convergence Curve</span>
+              <div class="flex items-center gap-2 bg-slate-950 px-2.5 py-1 rounded-xl border border-slate-800" title="Exponential Moving Average (EMA) smoothing factor">
+                <span class="text-[11px] font-mono text-slate-400">Smoothing:</span>
+                <input type="range" id="ctcSmoothingSlider" min="0" max="0.95" step="0.05" value="0.6"
+                       oninput="onCurveSmoothingChange(parseFloat(this.value))"
+                       class="w-20 accent-indigo-500 cursor-pointer h-1.5 bg-slate-800 rounded-lg">
+                <span id="ctcSmoothingVal" class="text-xs font-mono font-bold text-indigo-400 w-7">0.60</span>
+              </div>
             </div>
             <div class="relative bg-slate-950 border border-slate-800 rounded-xl h-48 overflow-hidden p-2">
               <canvas id="lossCurveCanvas" class="w-full h-full"></canvas>
@@ -1055,7 +1071,7 @@
         <!-- Left Column: Pre-training Loss & Accuracy Canvas Chart (8 cols) -->
         <div class="lg:col-span-8 space-y-6">
           <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
-            <div class="flex justify-between items-center">
+            <div class="flex flex-col sm:flex-row justify-between sm:items-center gap-2">
               <div>
                 <h3 class="text-md font-bold text-white flex items-center gap-2">
                   <span>📈</span> Pre-training Loss & Masked Cluster Accuracy
@@ -1064,13 +1080,23 @@
                   Cross-Entropy loss and top-1 cluster accuracy over masked 200ms frame spans.
                 </p>
               </div>
-              <div class="flex items-center gap-3 text-xs font-mono">
-                <span class="flex items-center gap-1.5 text-amber-400">
-                  <span class="w-2.5 h-2.5 rounded-full bg-amber-400"></span> Pre-train Loss
-                </span>
-                <span class="flex items-center gap-1.5 text-sky-400">
-                  <span class="w-2.5 h-2.5 rounded-full bg-sky-400"></span> Masked Acc (%)
-                </span>
+              <div class="flex flex-wrap items-center gap-3">
+                <!-- Smoothing Slider -->
+                <div class="flex items-center gap-2 bg-slate-950 px-2.5 py-1 rounded-xl border border-slate-800" title="Exponential Moving Average (EMA) smoothing factor">
+                  <span class="text-[11px] font-mono text-slate-400">Smoothing:</span>
+                  <input type="range" id="tab6SmoothingSlider" min="0" max="0.95" step="0.05" value="0.6"
+                         oninput="onCurveSmoothingChange(parseFloat(this.value))"
+                         class="w-20 sm:w-28 accent-indigo-500 cursor-pointer h-1.5 bg-slate-800 rounded-lg">
+                  <span id="tab6SmoothingVal" class="text-xs font-mono font-bold text-indigo-400 w-7">0.60</span>
+                </div>
+                <div class="flex items-center gap-3 text-xs font-mono">
+                  <span class="flex items-center gap-1.5 text-amber-400">
+                    <span class="w-2.5 h-2.5 rounded-full bg-amber-400"></span> Pre-train Loss
+                  </span>
+                  <span class="flex items-center gap-1.5 text-sky-400">
+                    <span class="w-2.5 h-2.5 rounded-full bg-sky-400"></span> Masked Acc (%)
+                  </span>
+                </div>
               </div>
             </div>
 
@@ -1637,6 +1663,48 @@
     // TAB 3: TRAINING LOGS & CURVES
     // -------------------------------------------------------------
     let trainingPollInterval = null;
+    let currentCurveSmoothing = 0.6;
+    let lastPretrainHistory = null;
+    let lastTrainingData = null;
+
+    function onCurveSmoothingChange(val) {
+      currentCurveSmoothing = parseFloat(val);
+      const strVal = currentCurveSmoothing.toFixed(2);
+
+      const elPt = document.getElementById("ptSmoothingVal");
+      if (elPt) elPt.innerText = strVal;
+      const elTab6 = document.getElementById("tab6SmoothingVal");
+      if (elTab6) elTab6.innerText = strVal;
+      const elCtc = document.getElementById("ctcSmoothingVal");
+      if (elCtc) elCtc.innerText = strVal;
+
+      const slPt = document.getElementById("ptSmoothingSlider");
+      if (slPt && parseFloat(slPt.value) !== currentCurveSmoothing) slPt.value = val;
+      const slTab6 = document.getElementById("tab6SmoothingSlider");
+      if (slTab6 && parseFloat(slTab6.value) !== currentCurveSmoothing) slTab6.value = val;
+      const slCtc = document.getElementById("ctcSmoothingSlider");
+      if (slCtc && parseFloat(slCtc.value) !== currentCurveSmoothing) slCtc.value = val;
+
+      if (lastPretrainHistory) {
+        drawPretrainLossAccChart("ptLossAccCanvas", lastPretrainHistory);
+        const tab6Canvas = document.getElementById("pretrainChartCanvas");
+        if (tab6Canvas) drawPretrainLossAccChart("pretrainChartCanvas", lastPretrainHistory);
+      }
+      if (lastTrainingData) {
+        renderTrainingCurves(lastTrainingData);
+      }
+    }
+
+    function smoothSeries(values, weight) {
+      if (!values || values.length === 0 || weight <= 0) return values.slice();
+      const smoothed = [];
+      let last = values[0];
+      for (let i = 0; i < values.length; i++) {
+        last = last * weight + (1.0 - weight) * values[i];
+        smoothed.push(last);
+      }
+      return smoothed;
+    }
 
     function switchTrainingSubView(mode) {
       const vPretrain = document.getElementById("trainingSubView-pretrain");
@@ -1661,6 +1729,7 @@
       try {
         const res = await fetch("/api/train/logs");
         const data = await res.json();
+        lastTrainingData = data;
         if (data.active_pretrain) {
           renderPretrainTrainingView(data.active_pretrain);
         }
@@ -1672,6 +1741,7 @@
 
     function renderPretrainTrainingView(data) {
       if (!data) return;
+      lastPretrainHistory = data.history;
 
       const step = data.step || 0;
       const totalSteps = data.total_steps || 625;
@@ -1777,6 +1847,7 @@
     function drawPretrainLossAccChart(canvasId, history) {
       const canvas = document.getElementById(canvasId);
       if (!canvas) return;
+      lastPretrainHistory = history;
       const ctx = canvas.getContext("2d");
       canvas.width = canvas.parentElement.clientWidth * 2;
       canvas.height = canvas.parentElement.clientHeight * 2;
@@ -1794,13 +1865,19 @@
       const plotH = H - paddingTop - paddingBottom;
 
       const steps = history.map(h => h.step);
-      const losses = history.map(h => h.loss);
-      const accs = history.map(h => h.accuracy !== undefined ? h.accuracy : (h.masked_accuracy_pct !== undefined ? h.masked_accuracy_pct : 1.0));
+      const rawLosses = history.map(h => h.loss);
+      const rawAccs = history.map(h => h.accuracy !== undefined ? h.accuracy : (h.masked_accuracy_pct !== undefined ? h.masked_accuracy_pct : 1.0));
 
-      const minLoss = Math.min(...losses) * 0.98;
-      const maxLoss = Math.max(...losses) * 1.02 || 5.0;
+      const losses = smoothSeries(rawLosses, currentCurveSmoothing);
+      const accs = smoothSeries(rawAccs, currentCurveSmoothing);
+
+      const allLosses = currentCurveSmoothing > 0 ? [...rawLosses, ...losses] : losses;
+      const allAccs = currentCurveSmoothing > 0 ? [...rawAccs, ...accs] : accs;
+
+      const minLoss = Math.min(...allLosses) * 0.98;
+      const maxLoss = Math.max(...allLosses) * 1.02 || 5.0;
       const minAcc = 0.0;
-      const maxAcc = Math.max(6.0, Math.max(...accs) * 1.3);
+      const maxAcc = Math.max(6.0, Math.max(...allAccs) * 1.3);
 
       // Grid lines
       ctx.strokeStyle = "#1e293b";
@@ -1830,7 +1907,34 @@
       const N = history.length;
       const getX = (i) => paddingLeft + (i / Math.max(1, N - 1)) * plotW;
 
-      // Draw Loss line (amber)
+      // If smoothing > 0, draw faint raw curves first
+      if (currentCurveSmoothing > 0) {
+        // Raw Loss (faint amber)
+        ctx.strokeStyle = "rgba(251, 191, 36, 0.22)";
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        for (let i = 0; i < N; i++) {
+          const x = getX(i);
+          const y = paddingTop + (1.0 - (rawLosses[i] - minLoss) / Math.max(0.001, maxLoss - minLoss)) * plotH;
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+
+        // Raw Acc (faint sky)
+        ctx.strokeStyle = "rgba(56, 189, 248, 0.22)";
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        for (let i = 0; i < N; i++) {
+          const x = getX(i);
+          const y = paddingTop + (1.0 - (rawAccs[i] - minAcc) / Math.max(0.001, maxAcc - minAcc)) * plotH;
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+      }
+
+      // Draw Main (Smoothed) Loss line (bold amber)
       ctx.strokeStyle = "#fbbf24";
       ctx.lineWidth = 4;
       ctx.beginPath();
@@ -1842,7 +1946,7 @@
       }
       ctx.stroke();
 
-      // Draw Acc line (sky)
+      // Draw Main (Smoothed) Acc line (bold sky)
       ctx.strokeStyle = "#38bdf8";
       ctx.lineWidth = 4;
       ctx.beginPath();
@@ -1854,7 +1958,7 @@
       }
       ctx.stroke();
 
-      // Dots
+      // Dots on points
       for (let i = 0; i < N; i++) {
         const x = getX(i);
         const yLoss = paddingTop + (1.0 - (losses[i] - minLoss) / Math.max(0.001, maxLoss - minLoss)) * plotH;
@@ -1862,12 +1966,12 @@
 
         ctx.fillStyle = "#fbbf24";
         ctx.beginPath();
-        ctx.arc(x, yLoss, 5, 0, Math.PI * 2);
+        ctx.arc(x, yLoss, 4.5, 0, Math.PI * 2);
         ctx.fill();
 
         ctx.fillStyle = "#38bdf8";
         ctx.beginPath();
-        ctx.arc(x, yAcc, 5, 0, Math.PI * 2);
+        ctx.arc(x, yAcc, 4.5, 0, Math.PI * 2);
         ctx.fill();
       }
 
@@ -2017,11 +2121,27 @@
 
       seriesList.forEach(s => {
         if (s.values.length === 0) return;
-        const pts = s.values;
+        const rawPts = s.values;
+        const pts = smoothSeries(rawPts, currentCurveSmoothing);
         const stepX = W / Math.max(pts.length - 1, 1);
 
+        // Faint raw line if smoothing active
+        if (currentCurveSmoothing > 0 && rawPts.length > 1) {
+          ctx.strokeStyle = s.color + "44";
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          for (let i = 0; i < rawPts.length; i++) {
+            const y = H - (rawPts[i] / maxVal) * (H * 0.8) - 20;
+            const x = i * stepX;
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+          }
+          ctx.stroke();
+        }
+
+        // Bold smoothed line
         ctx.strokeStyle = s.color;
-        ctx.lineWidth = 3;
+        ctx.lineWidth = 3.5;
         ctx.beginPath();
         for (let i = 0; i < pts.length; i++) {
           const y = H - (pts[i] / maxVal) * (H * 0.8) - 20;
@@ -2036,7 +2156,7 @@
           const x = i * stepX;
           ctx.fillStyle = s.color;
           ctx.beginPath();
-          ctx.arc(x, y, 6, 0, Math.PI * 2);
+          ctx.arc(x, y, 5, 0, Math.PI * 2);
           ctx.fill();
         });
       });
@@ -2422,114 +2542,7 @@
     }
 
     function renderPretrainChart(history) {
-      const canvas = document.getElementById("pretrainChartCanvas");
-      if (!canvas) return;
-      const ctx = canvas.getContext("2d");
-      canvas.width = canvas.parentElement.clientWidth * 2;
-      canvas.height = canvas.parentElement.clientHeight * 2;
-      const W = canvas.width;
-      const H = canvas.height;
-      ctx.clearRect(0, 0, W, H);
-
-      if (!history || history.length === 0) return;
-
-      const paddingLeft = 60;
-      const paddingRight = 60;
-      const paddingTop = 30;
-      const paddingBottom = 40;
-      const plotW = W - paddingLeft - paddingRight;
-      const plotH = H - paddingTop - paddingBottom;
-
-      // Extract series
-      const steps = history.map(h => h.step);
-      const losses = history.map(h => h.loss);
-      const accs = history.map(h => h.masked_accuracy_pct !== undefined ? h.masked_accuracy_pct : (h.accuracy !== undefined ? h.accuracy : 1.0));
-
-      const minLoss = Math.min(...losses) * 0.95;
-      const maxLoss = Math.max(...losses) * 1.05 || 5.0;
-
-      const minAcc = 0;
-      const maxAcc = Math.max(10.0, Math.max(...accs) * 1.2);
-
-      // Grid lines
-      ctx.strokeStyle = "#334155";
-      ctx.lineWidth = 1;
-      ctx.setLineDash([4, 4]);
-
-      for (let i = 0; i <= 4; i++) {
-        const y = paddingTop + (plotH / 4) * i;
-        ctx.beginPath();
-        ctx.moveTo(paddingLeft, y);
-        ctx.lineTo(W - paddingRight, y);
-        ctx.stroke();
-
-        // Loss Y label (Left)
-        const lossVal = maxLoss - (i / 4) * (maxLoss - minLoss);
-        ctx.fillStyle = "#fbbf24";
-        ctx.font = "20px monospace";
-        ctx.textAlign = "right";
-        ctx.fillText(lossVal.toFixed(2), paddingLeft - 10, y + 6);
-
-        // Acc Y label (Right)
-        const accVal = maxAcc - (i / 4) * (maxAcc - minAcc);
-        ctx.fillStyle = "#38bdf8";
-        ctx.textAlign = "left";
-        ctx.fillText(`${accVal.toFixed(1)}%`, W - paddingRight + 10, y + 6);
-      }
-      ctx.setLineDash([]);
-
-      const N = history.length;
-      const getX = (i) => paddingLeft + (i / Math.max(1, N - 1)) * plotW;
-
-      // Draw Loss line (amber)
-      ctx.strokeStyle = "#fbbf24";
-      ctx.lineWidth = 4;
-      ctx.beginPath();
-      for (let i = 0; i < N; i++) {
-        const x = getX(i);
-        const y = paddingTop + (1.0 - (losses[i] - minLoss) / Math.max(0.001, maxLoss - minLoss)) * plotH;
-        if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      }
-      ctx.stroke();
-
-      // Draw Accuracy line (sky)
-      ctx.strokeStyle = "#38bdf8";
-      ctx.lineWidth = 4;
-      ctx.beginPath();
-      for (let i = 0; i < N; i++) {
-        const x = getX(i);
-        const y = paddingTop + (1.0 - (accs[i] - minAcc) / Math.max(0.001, maxAcc - minAcc)) * plotH;
-        if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      }
-      ctx.stroke();
-
-      // Dots on points
-      for (let i = 0; i < N; i++) {
-        const x = getX(i);
-        const yLoss = paddingTop + (1.0 - (losses[i] - minLoss) / Math.max(0.001, maxLoss - minLoss)) * plotH;
-        const yAcc = paddingTop + (1.0 - (accs[i] - minAcc) / Math.max(0.001, maxAcc - minAcc)) * plotH;
-
-        ctx.fillStyle = "#fbbf24";
-        ctx.beginPath();
-        ctx.arc(x, yLoss, 6, 0, Math.PI * 2);
-        ctx.fill();
-
-        ctx.fillStyle = "#38bdf8";
-        ctx.beginPath();
-        ctx.arc(x, yAcc, 6, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      // X-axis step labels
-      ctx.fillStyle = "#94a3b8";
-      ctx.font = "18px monospace";
-      ctx.textAlign = "center";
-      const stepInterval = Math.max(1, Math.floor(N / 5));
-      for (let i = 0; i < N; i += stepInterval) {
-        ctx.fillText(`Step ${steps[i]}`, getX(i), H - 10);
-      }
+      drawPretrainLossAccChart("pretrainChartCanvas", history);
     }
 
     async function triggerPretrainStart() {
