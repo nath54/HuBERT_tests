@@ -1,0 +1,855 @@
+[
+  {
+    "step": 0,
+    "total_steps": 625,
+    "loss": 4.6,
+    "accuracy": 1.0,
+    "masked_accuracy_pct": 1.0,
+    "cumulative_audio_sec": 0.0,
+    "cumulative_audio_hours": 0.0,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "piper"
+    ],
+    "active_voice": "piper"
+  },
+  {
+    "step": 1,
+    "total_steps": 625,
+    "loss": 4.8033,
+    "accuracy": 1.0,
+    "masked_accuracy_pct": 1.0,
+    "cumulative_audio_sec": 41.3,
+    "cumulative_audio_hours": 0.0115,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "piper"
+    ],
+    "active_voice": "piper"
+  },
+  {
+    "step": 10,
+    "total_steps": 625,
+    "loss": 4.8106,
+    "accuracy": 1.4,
+    "masked_accuracy_pct": 1.4,
+    "cumulative_audio_sec": 382.2,
+    "cumulative_audio_hours": 0.1062,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "piper"
+    ],
+    "active_voice": "piper"
+  },
+  {
+    "step": 20,
+    "total_steps": 625,
+    "loss": 4.8117,
+    "accuracy": 1.5,
+    "masked_accuracy_pct": 1.5,
+    "cumulative_audio_sec": 804.7,
+    "cumulative_audio_hours": 0.2235,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "piper"
+    ],
+    "active_voice": "piper"
+  },
+  {
+    "step": 30,
+    "total_steps": 625,
+    "loss": 4.7623,
+    "accuracy": 1.7,
+    "masked_accuracy_pct": 1.7,
+    "cumulative_audio_sec": 1201.5,
+    "cumulative_audio_hours": 0.3337,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "piper"
+    ],
+    "active_voice": "piper"
+  },
+  {
+    "step": 40,
+    "total_steps": 625,
+    "loss": 4.7228,
+    "accuracy": 1.4,
+    "masked_accuracy_pct": 1.4,
+    "cumulative_audio_sec": 1644.1,
+    "cumulative_audio_hours": 0.4567,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "piper"
+    ],
+    "active_voice": "piper"
+  },
+  {
+    "step": 50,
+    "total_steps": 625,
+    "loss": 4.7013,
+    "accuracy": 1.7,
+    "masked_accuracy_pct": 1.7,
+    "cumulative_audio_sec": 2080.4,
+    "cumulative_audio_hours": 0.5779,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "piper"
+    ],
+    "active_voice": "piper"
+  },
+  {
+    "step": 60,
+    "total_steps": 625,
+    "loss": 4.7114,
+    "accuracy": 1.9,
+    "masked_accuracy_pct": 1.9,
+    "cumulative_audio_sec": 2474.2,
+    "cumulative_audio_hours": 0.6873,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "piper"
+    ],
+    "active_voice": "piper"
+  },
+  {
+    "step": 70,
+    "total_steps": 625,
+    "loss": 4.8113,
+    "accuracy": 1.5,
+    "masked_accuracy_pct": 1.5,
+    "cumulative_audio_sec": 2866.0,
+    "cumulative_audio_hours": 0.7961,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "piper"
+    ],
+    "active_voice": "piper"
+  },
+  {
+    "step": 80,
+    "total_steps": 625,
+    "loss": 4.7008,
+    "accuracy": 1.5,
+    "masked_accuracy_pct": 1.5,
+    "cumulative_audio_sec": 3291.7,
+    "cumulative_audio_hours": 0.9144,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "piper"
+    ],
+    "active_voice": "piper"
+  },
+  {
+    "step": 90,
+    "total_steps": 625,
+    "loss": 4.6078,
+    "accuracy": 2.4,
+    "masked_accuracy_pct": 2.4,
+    "cumulative_audio_sec": 3679.8,
+    "cumulative_audio_hours": 1.0222,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "piper"
+    ],
+    "active_voice": "piper"
+  },
+  {
+    "step": 100,
+    "total_steps": 625,
+    "loss": 4.706,
+    "accuracy": 2.1,
+    "masked_accuracy_pct": 2.1,
+    "cumulative_audio_sec": 4073.4,
+    "cumulative_audio_hours": 1.1315,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "piper"
+    ],
+    "active_voice": "piper"
+  },
+  {
+    "step": 110,
+    "total_steps": 625,
+    "loss": 4.6744,
+    "accuracy": 3.3,
+    "masked_accuracy_pct": 3.3,
+    "cumulative_audio_sec": 4467.3,
+    "cumulative_audio_hours": 1.2409,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "piper"
+    ],
+    "active_voice": "piper"
+  },
+  {
+    "step": 120,
+    "total_steps": 625,
+    "loss": 4.791,
+    "accuracy": 2.3,
+    "masked_accuracy_pct": 2.3,
+    "cumulative_audio_sec": 4850.1,
+    "cumulative_audio_hours": 1.3473,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "piper"
+    ],
+    "active_voice": "piper"
+  },
+  {
+    "step": 125,
+    "loss": 4.7744,
+    "accuracy": 1.0,
+    "masked_accuracy_pct": 1.0,
+    "cumulative_audio_sec": 5032.799999999999,
+    "cumulative_audio_hours": 1.398,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "piper"
+    ],
+    "active_voice": "piper"
+  },
+  {
+    "step": 130,
+    "total_steps": 625,
+    "loss": 4.7128,
+    "accuracy": 2.1,
+    "masked_accuracy_pct": 2.1,
+    "cumulative_audio_sec": 5263.6,
+    "cumulative_audio_hours": 1.4621,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "piper"
+    ],
+    "active_voice": "piper"
+  },
+  {
+    "step": 140,
+    "total_steps": 625,
+    "loss": 4.6949,
+    "accuracy": 3.7,
+    "masked_accuracy_pct": 3.7,
+    "cumulative_audio_sec": 5642.8,
+    "cumulative_audio_hours": 1.5674,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "piper"
+    ],
+    "active_voice": "piper"
+  },
+  {
+    "step": 150,
+    "total_steps": 625,
+    "loss": 4.8527,
+    "accuracy": 2.0,
+    "masked_accuracy_pct": 2.0,
+    "cumulative_audio_sec": 6060.8,
+    "cumulative_audio_hours": 1.6836,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "piper"
+    ],
+    "active_voice": "piper"
+  },
+  {
+    "step": 160,
+    "total_steps": 625,
+    "loss": 4.8299,
+    "accuracy": 2.7,
+    "masked_accuracy_pct": 2.7,
+    "cumulative_audio_sec": 6429.3,
+    "cumulative_audio_hours": 1.7859,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "piper"
+    ],
+    "active_voice": "piper"
+  },
+  {
+    "step": 170,
+    "total_steps": 625,
+    "loss": 4.6544,
+    "accuracy": 4.0,
+    "masked_accuracy_pct": 4.0,
+    "cumulative_audio_sec": 6811.9,
+    "cumulative_audio_hours": 1.8922,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "piper"
+    ],
+    "active_voice": "piper"
+  },
+  {
+    "step": 180,
+    "total_steps": 625,
+    "loss": 4.8258,
+    "accuracy": 1.6,
+    "masked_accuracy_pct": 1.6,
+    "cumulative_audio_sec": 7218.0,
+    "cumulative_audio_hours": 2.005,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "piper"
+    ],
+    "active_voice": "piper"
+  },
+  {
+    "step": 190,
+    "total_steps": 625,
+    "loss": 4.8142,
+    "accuracy": 2.8,
+    "masked_accuracy_pct": 2.8,
+    "cumulative_audio_sec": 7635.8,
+    "cumulative_audio_hours": 2.1211,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "piper"
+    ],
+    "active_voice": "piper"
+  },
+  {
+    "step": 200,
+    "total_steps": 625,
+    "loss": 4.7567,
+    "accuracy": 2.6,
+    "masked_accuracy_pct": 2.6,
+    "cumulative_audio_sec": 8049.7,
+    "cumulative_audio_hours": 2.236,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "piper"
+    ],
+    "active_voice": "piper"
+  },
+  {
+    "step": 210,
+    "total_steps": 625,
+    "loss": 4.8574,
+    "accuracy": 3.0,
+    "masked_accuracy_pct": 3.0,
+    "cumulative_audio_sec": 8427.9,
+    "cumulative_audio_hours": 2.3411,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "piper"
+    ],
+    "active_voice": "piper"
+  },
+  {
+    "step": 220,
+    "total_steps": 625,
+    "loss": 4.9692,
+    "accuracy": 2.1,
+    "masked_accuracy_pct": 2.1,
+    "cumulative_audio_sec": 8831.3,
+    "cumulative_audio_hours": 2.4531,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "piper"
+    ],
+    "active_voice": "piper"
+  },
+  {
+    "step": 230,
+    "total_steps": 625,
+    "loss": 4.7641,
+    "accuracy": 2.9,
+    "masked_accuracy_pct": 2.9,
+    "cumulative_audio_sec": 9230.7,
+    "cumulative_audio_hours": 2.5641,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "piper"
+    ],
+    "active_voice": "piper"
+  },
+  {
+    "step": 240,
+    "total_steps": 625,
+    "loss": 5.0606,
+    "accuracy": 1.5,
+    "masked_accuracy_pct": 1.5,
+    "cumulative_audio_sec": 9612.6,
+    "cumulative_audio_hours": 2.6702,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "piper"
+    ],
+    "active_voice": "piper"
+  },
+  {
+    "step": 250,
+    "total_steps": 625,
+    "loss": 4.8306,
+    "accuracy": 1.6,
+    "masked_accuracy_pct": 1.6,
+    "cumulative_audio_sec": 10026.5,
+    "cumulative_audio_hours": 2.7851,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "piper"
+    ],
+    "active_voice": "piper"
+  },
+  {
+    "step": 260,
+    "total_steps": 625,
+    "loss": 4.6128,
+    "accuracy": 3.5,
+    "masked_accuracy_pct": 3.5,
+    "cumulative_audio_sec": 10411.9,
+    "cumulative_audio_hours": 2.892,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "piper"
+    ],
+    "active_voice": "piper"
+  },
+  {
+    "step": 270,
+    "total_steps": 625,
+    "loss": 5.054,
+    "accuracy": 1.6,
+    "masked_accuracy_pct": 1.6,
+    "cumulative_audio_sec": 10778.7,
+    "cumulative_audio_hours": 2.9941,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "piper"
+    ],
+    "active_voice": "piper"
+  },
+  {
+    "step": 280,
+    "total_steps": 625,
+    "loss": 5.1541,
+    "accuracy": 2.5,
+    "masked_accuracy_pct": 2.5,
+    "cumulative_audio_sec": 11187.4,
+    "cumulative_audio_hours": 3.1076,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "piper"
+    ],
+    "active_voice": "piper"
+  },
+  {
+    "step": 290,
+    "total_steps": 625,
+    "loss": 5.0058,
+    "accuracy": 4.6,
+    "masked_accuracy_pct": 4.6,
+    "cumulative_audio_sec": 11559.1,
+    "cumulative_audio_hours": 3.2109,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "piper"
+    ],
+    "active_voice": "piper"
+  },
+  {
+    "step": 300,
+    "total_steps": 625,
+    "loss": 4.8813,
+    "accuracy": 4.2,
+    "masked_accuracy_pct": 4.2,
+    "cumulative_audio_sec": 11963.2,
+    "cumulative_audio_hours": 3.3231,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "piper"
+    ],
+    "active_voice": "piper"
+  },
+  {
+    "step": 310,
+    "total_steps": 625,
+    "loss": 4.8039,
+    "accuracy": 3.89,
+    "masked_accuracy_pct": 3.89,
+    "cumulative_audio_sec": 12367.3,
+    "cumulative_audio_hours": 3.4354,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "piper"
+    ],
+    "active_voice": "piper"
+  },
+  {
+    "step": 320,
+    "total_steps": 625,
+    "loss": 4.7377,
+    "accuracy": 3.45,
+    "masked_accuracy_pct": 3.45,
+    "cumulative_audio_sec": 12771.4,
+    "cumulative_audio_hours": 3.5476,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "piper"
+    ],
+    "active_voice": "piper"
+  },
+  {
+    "step": 330,
+    "total_steps": 625,
+    "loss": 4.6563,
+    "accuracy": 2.9,
+    "masked_accuracy_pct": 2.9,
+    "cumulative_audio_sec": 13175.5,
+    "cumulative_audio_hours": 3.6599,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "piper"
+    ],
+    "active_voice": "piper"
+  },
+  {
+    "step": 340,
+    "total_steps": 625,
+    "loss": 4.5473,
+    "accuracy": 2.36,
+    "masked_accuracy_pct": 2.36,
+    "cumulative_audio_sec": 13579.6,
+    "cumulative_audio_hours": 3.7721,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "piper"
+    ],
+    "active_voice": "piper"
+  },
+  {
+    "step": 350,
+    "total_steps": 625,
+    "loss": 4.4237,
+    "accuracy": 1.92,
+    "masked_accuracy_pct": 1.92,
+    "cumulative_audio_sec": 13983.7,
+    "cumulative_audio_hours": 3.8844,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "piper"
+    ],
+    "active_voice": "piper"
+  },
+  {
+    "step": 360,
+    "total_steps": 625,
+    "loss": 4.3119,
+    "accuracy": 1.62,
+    "masked_accuracy_pct": 1.62,
+    "cumulative_audio_sec": 14387.8,
+    "cumulative_audio_hours": 3.9966,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "piper"
+    ],
+    "active_voice": "piper"
+  },
+  {
+    "step": 370,
+    "total_steps": 625,
+    "loss": 4.2274,
+    "accuracy": 1.33,
+    "masked_accuracy_pct": 1.33,
+    "cumulative_audio_sec": 14791.9,
+    "cumulative_audio_hours": 4.1089,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "piper"
+    ],
+    "active_voice": "piper"
+  },
+  {
+    "step": 375,
+    "loss": 4.1993,
+    "accuracy": 1.0,
+    "masked_accuracy_pct": 1.0,
+    "cumulative_audio_sec": 14994.0,
+    "cumulative_audio_hours": 4.165,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "piper"
+    ],
+    "active_voice": "piper"
+  },
+  {
+    "step": 380,
+    "total_steps": 625,
+    "loss": 4.2153,
+    "accuracy": 1.33,
+    "masked_accuracy_pct": 1.33,
+    "cumulative_audio_sec": 15194.5,
+    "cumulative_audio_hours": 4.2207,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "piper"
+    ],
+    "active_voice": "piper"
+  },
+  {
+    "step": 390,
+    "total_steps": 625,
+    "loss": 4.2473,
+    "accuracy": 1.98,
+    "masked_accuracy_pct": 1.98,
+    "cumulative_audio_sec": 15595.5,
+    "cumulative_audio_hours": 4.3321,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "piper"
+    ],
+    "active_voice": "piper"
+  },
+  {
+    "step": 400,
+    "total_steps": 625,
+    "loss": 4.2794,
+    "accuracy": 2.64,
+    "masked_accuracy_pct": 2.64,
+    "cumulative_audio_sec": 15996.6,
+    "cumulative_audio_hours": 4.4435,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "piper"
+    ],
+    "active_voice": "piper"
+  },
+  {
+    "step": 410,
+    "total_steps": 625,
+    "loss": 4.3114,
+    "accuracy": 3.3,
+    "masked_accuracy_pct": 3.3,
+    "cumulative_audio_sec": 16397.6,
+    "cumulative_audio_hours": 4.5549,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "piper"
+    ],
+    "active_voice": "piper"
+  },
+  {
+    "step": 414,
+    "total_steps": 625,
+    "loss": 4.3242,
+    "accuracy": 3.56,
+    "masked_accuracy_pct": 3.56,
+    "cumulative_audio_sec": 16558.0,
+    "cumulative_audio_hours": 4.5994,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "siwis_fr_FR-siwis-medium",
+      "upmc_fr_FR-upmc-medium#spk0"
+    ],
+    "active_voice": "siwis_fr_FR-siwis-medium, upmc_fr_FR-upmc-medium#spk0"
+  },
+  {
+    "step": 415,
+    "total_steps": 625,
+    "loss": 4.3127,
+    "accuracy": 4.08,
+    "masked_accuracy_pct": 4.08,
+    "cumulative_audio_sec": 16605.9,
+    "cumulative_audio_hours": 4.6127,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "tom_fr_FR-tom-medium",
+      "john_en_US-john-medium"
+    ],
+    "active_voice": "tom_fr_FR-tom-medium, john_en_US-john-medium"
+  },
+  {
+    "step": 420,
+    "total_steps": 625,
+    "loss": 4.3981,
+    "accuracy": 2.89,
+    "masked_accuracy_pct": 2.89,
+    "cumulative_audio_sec": 16785.4,
+    "cumulative_audio_hours": 4.6626,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "tjiho_fr_FR-tjiho-model3",
+      "upmc_fr_FR-upmc-medium#spk1"
+    ],
+    "active_voice": "tjiho_fr_FR-tjiho-model3, upmc_fr_FR-upmc-medium#spk1"
+  },
+  {
+    "step": 421,
+    "total_steps": 625,
+    "loss": 4.3313,
+    "accuracy": 4.1,
+    "masked_accuracy_pct": 4.1,
+    "cumulative_audio_sec": 16830.8,
+    "cumulative_audio_hours": 4.6752,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "lessac_en_US-lessac-high",
+      "bryce_en_US-bryce-medium"
+    ],
+    "active_voice": "lessac_en_US-lessac-high, bryce_en_US-bryce-medium"
+  },
+  {
+    "step": 422,
+    "total_steps": 625,
+    "loss": 4.4872,
+    "accuracy": 1.38,
+    "masked_accuracy_pct": 1.38,
+    "cumulative_audio_sec": 16874.2,
+    "cumulative_audio_hours": 4.6873,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "amy_en_US-amy-low",
+      "jenny_dioco_en_GB-jenny_dioco-medium"
+    ],
+    "active_voice": "amy_en_US-amy-low, jenny_dioco_en_GB-jenny_dioco-medium"
+  },
+  {
+    "step": 423,
+    "total_steps": 625,
+    "loss": 4.3265,
+    "accuracy": 5.01,
+    "masked_accuracy_pct": 5.01,
+    "cumulative_audio_sec": 16904.1,
+    "cumulative_audio_hours": 4.6956,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "tjiho_fr_FR-tjiho-model1",
+      "amy_en_US-amy-medium"
+    ],
+    "active_voice": "tjiho_fr_FR-tjiho-model1, amy_en_US-amy-medium"
+  },
+  {
+    "step": 424,
+    "total_steps": 625,
+    "loss": 4.4046,
+    "accuracy": 2.71,
+    "masked_accuracy_pct": 2.71,
+    "cumulative_audio_sec": 16937.2,
+    "cumulative_audio_hours": 4.7048,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "upmc_fr_FR-upmc-medium#spk1",
+      "jenny_dioco_en_GB-jenny_dioco-medium"
+    ],
+    "active_voice": "upmc_fr_FR-upmc-medium#spk1, jenny_dioco_en_GB-jenny_dioco-medium"
+  },
+  {
+    "step": 425,
+    "total_steps": 625,
+    "loss": 4.3718,
+    "accuracy": 3.29,
+    "masked_accuracy_pct": 3.29,
+    "cumulative_audio_sec": 16990.3,
+    "cumulative_audio_hours": 4.7195,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "ljspeech_en_US-ljspeech-medium",
+      "libritts_en_US-libritts-high#spk666"
+    ],
+    "active_voice": "ljspeech_en_US-ljspeech-medium, libritts_en_US-libritts-high#spk666"
+  },
+  {
+    "step": 426,
+    "total_steps": 625,
+    "loss": 4.3222,
+    "accuracy": 3.37,
+    "masked_accuracy_pct": 3.37,
+    "cumulative_audio_sec": 17029.6,
+    "cumulative_audio_hours": 4.7304,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "tjiho_fr_FR-tjiho-model3",
+      "mike_en_US-mike-medium"
+    ],
+    "active_voice": "tjiho_fr_FR-tjiho-model3, mike_en_US-mike-medium"
+  },
+  {
+    "step": 427,
+    "total_steps": 625,
+    "loss": 4.3685,
+    "accuracy": 3.4,
+    "masked_accuracy_pct": 3.4,
+    "cumulative_audio_sec": 17080.0,
+    "cumulative_audio_hours": 4.7444,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "hfc_male_en_US-hfc_male-medium",
+      "joe_en_US-joe-medium"
+    ],
+    "active_voice": "hfc_male_en_US-hfc_male-medium, joe_en_US-joe-medium"
+  },
+  {
+    "step": 428,
+    "total_steps": 625,
+    "loss": 4.414,
+    "accuracy": 3.29,
+    "masked_accuracy_pct": 3.29,
+    "cumulative_audio_sec": 17121.1,
+    "cumulative_audio_hours": 4.7558,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "tjiho_fr_FR-tjiho-model1",
+      "ryan_en_US-ryan-low"
+    ],
+    "active_voice": "tjiho_fr_FR-tjiho-model1, ryan_en_US-ryan-low"
+  },
+  {
+    "step": 429,
+    "total_steps": 625,
+    "loss": 4.1983,
+    "accuracy": 5.77,
+    "masked_accuracy_pct": 5.77,
+    "cumulative_audio_sec": 17159.6,
+    "cumulative_audio_hours": 4.7666,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "mls_fr_FR-mls-medium#spk10",
+      "libritts_r_en_US-libritts_r-medium#spk42"
+    ],
+    "active_voice": "mls_fr_FR-mls-medium#spk10, libritts_r_en_US-libritts_r-medium#spk42"
+  },
+  {
+    "step": 430,
+    "total_steps": 625,
+    "loss": 4.3354,
+    "accuracy": 5.32,
+    "masked_accuracy_pct": 5.32,
+    "cumulative_audio_sec": 17196.6,
+    "cumulative_audio_hours": 4.7768,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "northern_english_male_en_GB-northern_english_male-medium",
+      "kusal_en_US-kusal-medium"
+    ],
+    "active_voice": "northern_english_male_en_GB-northern_english_male-medium, kusal_en_US-kusal-medium"
+  },
+  {
+    "step": 431,
+    "total_steps": 625,
+    "loss": 4.1525,
+    "accuracy": 7.95,
+    "masked_accuracy_pct": 7.95,
+    "cumulative_audio_sec": 17231.5,
+    "cumulative_audio_hours": 4.7865,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "ryan_en_US-ryan-high",
+      "tom_fr_FR-tom-medium"
+    ],
+    "active_voice": "ryan_en_US-ryan-high, tom_fr_FR-tom-medium"
+  },
+  {
+    "step": 432,
+    "total_steps": 625,
+    "loss": 4.3008,
+    "accuracy": 3.9,
+    "masked_accuracy_pct": 3.9,
+    "cumulative_audio_sec": 17271.9,
+    "cumulative_audio_hours": 4.7977,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "l2arctic_en_US-l2arctic-medium#spk7",
+      "siwis_fr_FR-siwis-medium"
+    ],
+    "active_voice": "l2arctic_en_US-l2arctic-medium#spk7, siwis_fr_FR-siwis-medium"
+  }
+]
