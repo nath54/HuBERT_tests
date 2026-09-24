@@ -38,6 +38,7 @@ from src.data.target_extractors import BaseTargetExtractor
 from data.sample_dataset import load_manifest
 from src.data.dataset import AudioASRDataset, AudioCollateFn
 from src.benchmark.sota_evaluator import SOTABenchmarkRunner
+from src.data.threaded_dataset import StepProfiler, BufferedSpeechBatchGenerator
 
 
 class ModularStreamingDataset(torch.utils.data.IterableDataset):
@@ -271,6 +272,12 @@ def main():
     parser.add_argument("--override", type=str, default="", help="Custom parameter overrides (e.g. 'mask_prob=0.7,encoder_layers=6')")
     parser.add_argument("--steps", type=int, default=625, help="Total training steps")
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size (utterances per step)")
+    parser.add_argument("--num_workers", type=int, default=4, help="Parallel speech synthesis worker threads")
+    parser.add_argument("--buffer_size", type=int, default=20, help="Max batch buffer queue size")
+    parser.add_argument("--watermark", type=int, default=10, help="Low watermark batch threshold to resume synthesis")
+    parser.add_argument("--use_rolling_pool", action="store_true", default=True, help="Enable dynamic in-RAM utterance pool")
+    parser.add_argument("--no_rolling_pool", dest="use_rolling_pool", action="store_false", help="Disable rolling pool (direct queue mode)")
+    parser.add_argument("--pool_size", type=int, default=250, help="In-RAM utterance pool capacity")
     parser.add_argument("--eval_interval", type=int, default=125, help="Benchmark evaluation interval")
     parser.add_argument("--probe_steps", type=int, default=25, help="Downstream CTC probe steps")
     parser.add_argument("--lr", type=float, default=0.0003, help="Learning rate")
@@ -294,6 +301,7 @@ def main():
     print("=" * 75)
     print(f"Architecture: {args.arch} | Tier: {args.tier} | Parameters: {num_params:,} ({num_params/1e6:.2f}M)")
     print(f"Device: {device} | Total Steps: {args.steps} | Batch Size: {args.batch_size}")
+    print(f"Workers: {args.num_workers} | Buffer Capacity: {args.buffer_size} (Watermark: {args.watermark})")
     print(f"Target Type: {target_extractor.target_type} | Vocab Size: {target_extractor.vocab_size}")
     if overrides:
         print(f"Variable Parameter Overrides: {overrides}")
@@ -304,143 +312,257 @@ def main():
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     latest_ckpt_file = ckpt_dir / "latest_checkpoint.pt"
     status_file = Path("logs") / f"{args.arch}_status_live.json"
+    tier_status_file = Path("logs") / f"{args.arch}_{args.tier}_status_live.json"
     history_file = Path("logs") / f"{args.arch}_{args.tier}_history.json"
+    step_history_file = Path("logs") / f"{args.arch}_{args.tier}_step_history.json"
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-2)
     scaler = torch.amp.GradScaler(enabled=(device.type == "cuda"))
 
-    # 2. Setup Data Pipeline
+    # 2. Setup Threaded Data Pipeline & Microsecond Profiler
+    profiler = StepProfiler(window_size=20)
     voice_manager = PiperVoiceManager()
     text_sampler = ProceduralTextSampler()
-    dataset = ModularStreamingDataset(
+
+    batch_generator = BufferedSpeechBatchGenerator(
         voice_manager=voice_manager,
         text_sampler=text_sampler,
         target_extractor=target_extractor,
+        batch_size=args.batch_size,
+        max_buffer_size=args.buffer_size,
+        low_watermark=args.watermark,
+        num_workers=args.num_workers,
+        use_rolling_pool=args.use_rolling_pool,
+        pool_capacity=args.pool_size,
+        profiler=profiler,
     )
-    dataloader = DataLoader(dataset, batch_size=args.batch_size, collate_fn=collate_modular_batch)
-    data_iter = iter(dataloader)
 
     tokenizer = CharacterTokenizer()
     history = []
     start_step = 1
     total_audio_sec = 0.0
 
-    recent_step_durations = collections.deque(maxlen=20)
-    print(f"\n[Ready] Starting streaming pre-training loop (Step {start_step} -> {args.steps})...\n")
+    # 3. Checkpoint Resumption (Auto-detect or Fresh Start)
+    if args.resume is not None:
+        ckpt_to_load = None
+        if args.resume in ("auto", "latest", "", True):
+            candidates = [
+                ckpt_dir / "checkpoint_latest.pt",
+                ckpt_dir / "latest_checkpoint.pt",
+            ]
+            for cand in candidates:
+                if cand.exists():
+                    ckpt_to_load = cand
+                    break
+            if not ckpt_to_load:
+                step_ckpts = sorted(list(ckpt_dir.glob("checkpoint_step_*.pt")), key=os.path.getmtime)
+                if step_ckpts:
+                    ckpt_to_load = step_ckpts[-1]
+        else:
+            custom_path = Path(args.resume)
+            if custom_path.exists():
+                ckpt_to_load = custom_path
 
-    for step in range(start_step, args.steps + 1):
-        t0 = time.time()
-        batch = next(data_iter)
-        audio = batch["audio"].to(device)
-        targets = batch["targets"].to(device)
-        target_lengths = batch["target_lengths"].to(device)
-        audio_lengths = batch["audio_lengths"].to(device)
+        if ckpt_to_load and ckpt_to_load.exists():
+            print(f"🔄 [Resume] Loading existing checkpoint from: {ckpt_to_load}")
+            payload = torch.load(ckpt_to_load, map_location=device, weights_only=False)
+            model.load_state_dict(payload["model_state_dict"])
+            if "optimizer_state_dict" in payload:
+                try:
+                    optimizer.load_state_dict(payload["optimizer_state_dict"])
+                except Exception as e:
+                    print(f"⚠️ [Resume] Optimizer state could not be restored: {e}")
+            if "scaler_state_dict" in payload and scaler.is_enabled():
+                try:
+                    scaler.load_state_dict(payload["scaler_state_dict"])
+                except Exception as e:
+                    print(f"⚠️ [Resume] Scaler state could not be restored: {e}")
+            start_step = payload.get("step", 0) + 1
+            total_audio_sec = payload.get("total_audio_sec", 0.0)
+            history = payload.get("history", [])
+            print(f"✅ [Resume] Resumed successfully! Starting at Step {start_step} (Cumulative Audio: {total_audio_sec/3600.0:.3f}h)")
+        else:
+            print(f"ℹ️ [Resume] No previous checkpoint found in '{ckpt_dir}'. Starting fresh from Step 1.")
 
-        batch_dur = sum(batch["durations"])
-        total_audio_sec += batch_dur
-
-        optimizer.zero_grad()
-        with torch.amp.autocast(device_type="cuda" if device.type == "cuda" else "cpu", enabled=(device.type == "cuda")):
-            if args.arch == "phono_hubert":
-                out = model(audio=audio, targets=targets, target_lengths=target_lengths, audio_lengths=audio_lengths)
-            else:
-                out = model(audio=audio, target_clusters=targets)
-
-            loss = out["loss"]
-            acc = out["accuracy"]
-
-        scaler.scale(loss).backward()
-        scaler.unscale_(optimizer)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        scaler.step(optimizer)
-        scaler.update()
-
-        step_elapsed = time.time() - t0
-        recent_step_durations.append(step_elapsed)
-
-        loss_val = round(float(loss.item()), 4)
-        acc_val = round(float(acc.item()), 2) if acc is not None else 0.0
-
-        avg_step_sec = sum(recent_step_durations) / len(recent_step_durations)
-        rem_steps = max(0, args.steps - step)
-        rem_evals = max(0, rem_steps // args.eval_interval)
-        eta_seconds = (rem_steps * avg_step_sec) + (rem_evals * 35.0)
-        hours = total_audio_sec / 3600.0
-
-        # Export Live Status for Website & UI
-        live_status = {
-            "is_running": True,
-            "arch": args.arch,
-            "tier": args.tier,
-            "step": step,
-            "total_steps": args.steps,
-            "progress_pct": round((step / args.steps) * 100.0, 1),
-            "loss": loss_val,
-            "masked_accuracy_pct": acc_val,
-            "cumulative_audio_sec": round(total_audio_sec, 1),
-            "cumulative_audio_hours": round(hours, 4),
-            "avg_step_sec": round(avg_step_sec, 2),
-            "eta_seconds": int(eta_seconds),
-            "eta_formatted": f"{int(eta_seconds//60)}m {int(eta_seconds%60):02d}s",
-            "active_voices": batch["voices"][:2],
-            "active_voice": ", ".join(batch["voices"][:2]),
-            "disk_bytes_used": 0,
-            "last_heartbeat": time.time(),
-        }
+    if not history and history_file.exists():
         try:
-            with open(status_file, "w", encoding="utf-8") as f:
-                json.dump(live_status, f, indent=2)
+            with open(history_file, "r", encoding="utf-8") as f:
+                history = json.load(f).get("history", [])
         except Exception:
             pass
 
-        if step % 10 == 0 or step == start_step:
-            print(f"[{args.arch.upper()}] Step {step:4d}/{args.steps} | Loss: {loss_val:.4f} | Acc: {acc_val:5.1f}% | Audio: {total_audio_sec:6.1f}s ({hours:.3f}h) | ETA: {live_status['eta_formatted']}")
+    step_history = []
+    if step_history_file.exists():
+        try:
+            with open(step_history_file, "r", encoding="utf-8") as f:
+                step_history = json.load(f)
+        except Exception:
+            pass
 
-        # Milestone Benchmark Evaluation
-        if step % args.eval_interval == 0 or step == args.steps:
-            print(f"\n--- [Milestone Step {step}] Downstream LibriSpeech Evaluation ---")
-            calibrated_ctc = run_quick_ctc_calibration(model, config, tokenizer, device, probe_steps=args.probe_steps)
-            bench_res = evaluate_on_benchmark(calibrated_ctc, tokenizer, device, num_samples=20)
-            print(f"🏆 Milestone Step {step} -> WER: {bench_res['wer']}% | CER: {bench_res['cer']}% | PER: {bench_res['per']}%")
+    recent_step_durations = collections.deque(maxlen=20)
+    print(f"\n[Ready] Starting decoupled threaded streaming loop (Step {start_step} -> {args.steps})...\n")
 
-            entry = {
+    try:
+        for step in range(start_step, args.steps + 1):
+            t_step_start = time.perf_counter()
+            batch = batch_generator.get_batch(timeout=60.0)
+
+            t_train_start = time.perf_counter()
+
+            with profiler.time_block("time_device_transfer"):
+                audio = batch["audio"].to(device)
+                targets = batch["targets"].to(device)
+                target_lengths = batch["target_lengths"].to(device)
+                audio_lengths = batch["audio_lengths"].to(device)
+
+            batch_dur = sum(batch["durations"])
+            total_audio_sec += batch_dur
+
+            optimizer.zero_grad()
+            with profiler.time_block("time_forward"):
+                with torch.amp.autocast(device_type="cuda" if device.type == "cuda" else "cpu", enabled=(device.type == "cuda")):
+                    if args.arch == "phono_hubert":
+                        out = model(audio=audio, targets=targets, target_lengths=target_lengths, audio_lengths=audio_lengths)
+                    else:
+                        out = model(audio=audio, target_clusters=targets)
+
+            with profiler.time_block("time_loss"):
+                loss = out["loss"]
+                acc = out["accuracy"]
+
+            with profiler.time_block("time_backward"):
+                scaler.scale(loss).backward()
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
+            with profiler.time_block("time_optimizer_step"):
+                scaler.step(optimizer)
+                scaler.update()
+
+            t_train_total = time.perf_counter() - t_train_start
+            profiler.record("total_train_step_sec", t_train_total)
+
+            step_elapsed = time.perf_counter() - t_step_start
+            profiler.record("total_step_sec", step_elapsed)
+            recent_step_durations.append(step_elapsed)
+
+            loss_val = round(float(loss.item()), 4)
+            acc_val = round(float(acc.item()), 2) if acc is not None else 0.0
+
+            avg_step_sec = sum(recent_step_durations) / len(recent_step_durations)
+            rem_steps = max(0, args.steps - step)
+            rem_evals = max(0, rem_steps // args.eval_interval)
+            eta_seconds = (rem_steps * avg_step_sec) + (rem_evals * 35.0)
+            hours = total_audio_sec / 3600.0
+
+            # Export Live Status for Website & UI
+            live_status = {
+                "is_running": True,
+                "arch": args.arch,
+                "tier": args.tier,
                 "step": step,
+                "total_steps": args.steps,
+                "progress_pct": round((step / args.steps) * 100.0, 1),
+                "loss": loss_val,
+                "masked_accuracy_pct": acc_val,
+                "cumulative_audio_sec": round(total_audio_sec, 1),
                 "cumulative_audio_hours": round(hours, 4),
-                "pretrain_loss": loss_val,
-                "masked_acc_pct": acc_val,
-                "librispeech_wer": bench_res["wer"],
-                "librispeech_cer": bench_res["cer"],
-                "librispeech_per": bench_res["per"],
-                "sample_prediction": bench_res["sample_pred"],
+                "avg_step_sec": round(avg_step_sec, 3),
+                "eta_seconds": int(eta_seconds),
+                "eta_formatted": f"{int(eta_seconds//60)}m {int(eta_seconds%60):02d}s",
+                "active_voices": batch["voices"][:2],
+                "active_voice": ", ".join(batch["voices"][:2]),
+                "buffer_occupancy": batch_generator.buffer_occupancy,
+                "buffer_capacity": args.buffer_size,
+                "buffer_watermark": args.watermark,
+                "pool_size": batch_generator.pool_size,
+                "profiler": profiler.get_summary(),
+                "disk_bytes_used": 0,
+                "last_heartbeat": time.time(),
             }
-            history.append(entry)
             try:
-                with open(history_file, "w", encoding="utf-8") as f:
-                    json.dump({"arch": args.arch, "tier": args.tier, "history": history}, f, indent=2)
+                with open(status_file, "w", encoding="utf-8") as f:
+                    json.dump(live_status, f, indent=2)
+                with open(tier_status_file, "w", encoding="utf-8") as f:
+                    json.dump(live_status, f, indent=2)
             except Exception:
                 pass
 
-        # Save model checkpoint
-        if step % args.save_interval == 0 or step == args.steps:
-            ckpt_path = ckpt_dir / f"checkpoint_step_{step}.pt"
-            latest_path = ckpt_dir / "checkpoint_latest.pt"
-            save_payload = {
+            step_record = {
                 "step": step,
-                "arch": args.arch,
-                "tier": args.tier,
-                "config": config,
-                "model_state_dict": model.state_dict(),
-                "optimizer_state_dict": optimizer.state_dict(),
-                "scaler_state_dict": scaler.state_dict(),
-                "total_audio_sec": total_audio_sec,
-                "history": history,
-                "saved_at": time.time(),
+                "loss": loss_val,
+                "accuracy": acc_val,
+                "masked_accuracy_pct": acc_val,
+                "cumulative_audio_sec": round(total_audio_sec, 1),
+                "cumulative_audio_hours": round(hours, 4),
+                "disk_bytes_used": 0,
+                "active_voices": batch["voices"],
+                "active_voice": ", ".join(batch["voices"][:2]),
             }
-            try:
-                torch.save(save_payload, ckpt_path)
-                torch.save(save_payload, latest_path)
-            except Exception as e:
-                print(f"[Warning] Failed to save pretrain checkpoint: {e}")
+            step_history.append(step_record)
+            if step % 5 == 0 or step == args.steps:
+                try:
+                    with open(step_history_file, "w", encoding="utf-8") as f:
+                        json.dump(step_history, f)
+                except Exception:
+                    pass
+
+            if step % 5 == 0 or step == start_step:
+                print(f"[{args.arch.upper()}] Step {step:4d}/{args.steps} | Loss: {loss_val:.4f} | Acc: {acc_val:5.1f}% | "
+                      f"Step: {step_elapsed:.3f}s (GPU: {t_train_total:.3f}s) | Buffer: {batch_generator.buffer_occupancy}/{args.buffer_size} | "
+                      f"Audio: {total_audio_sec:6.1f}s ({hours:.3f}h) | ETA: {live_status['eta_formatted']}")
+
+            if step % 25 == 0 or step == 5:
+                print("\n" + profiler.format_console_breakdown(batch_generator.buffer_occupancy, args.buffer_size) + "\n")
+
+            # Milestone Benchmark Evaluation (Inside Loop)
+            if step % args.eval_interval == 0 or step == args.steps:
+                print(f"\n--- [Milestone Step {step}] Downstream LibriSpeech Evaluation ---")
+                calibrated_ctc = run_quick_ctc_calibration(model, config, tokenizer, device, probe_steps=args.probe_steps)
+                bench_res = evaluate_on_benchmark(calibrated_ctc, tokenizer, device, num_samples=20)
+                print(f"🏆 Milestone Step {step} -> WER: {bench_res['wer']}% | CER: {bench_res['cer']}% | PER: {bench_res['per']}%")
+
+                entry = {
+                    "step": step,
+                    "cumulative_audio_hours": round(hours, 4),
+                    "pretrain_loss": loss_val,
+                    "masked_acc_pct": acc_val,
+                    "librispeech_wer": bench_res["wer"],
+                    "librispeech_cer": bench_res["cer"],
+                    "librispeech_per": bench_res["per"],
+                    "sample_prediction": bench_res["sample_pred"],
+                }
+                history.append(entry)
+                try:
+                    with open(history_file, "w", encoding="utf-8") as f:
+                        json.dump({"arch": args.arch, "tier": args.tier, "history": history}, f, indent=2)
+                except Exception:
+                    pass
+
+            # Save model checkpoint (Inside Loop)
+            if step % args.save_interval == 0 or step == args.steps:
+                ckpt_path = ckpt_dir / f"checkpoint_step_{step}.pt"
+                latest_path = ckpt_dir / "checkpoint_latest.pt"
+                save_payload = {
+                    "step": step,
+                    "arch": args.arch,
+                    "tier": args.tier,
+                    "config": config,
+                    "model_state_dict": model.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "scaler_state_dict": scaler.state_dict(),
+                    "total_audio_sec": total_audio_sec,
+                    "history": history,
+                    "saved_at": time.time(),
+                }
+                try:
+                    torch.save(save_payload, ckpt_path)
+                    torch.save(save_payload, latest_path)
+                except Exception as e:
+                    print(f"[Warning] Failed to save pretrain checkpoint: {e}")
+
+    finally:
+        batch_generator.stop()
 
     # Mark run as finished
     live_status["is_running"] = False

@@ -305,6 +305,8 @@ class PiperVoiceManager:
         for attempt in range(max_retries):
             try:
                 voice, voice_name = self.get_random_voice(lang=lang)
+            except VoiceDepletionError:
+                raise
             except Exception:
                 break
 

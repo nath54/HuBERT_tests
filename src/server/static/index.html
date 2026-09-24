@@ -1130,6 +1130,126 @@
         </div>
       </div>
 
+      <!-- Real-Time Threaded Buffer & Latency Profiler Card -->
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+        <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
+          <div>
+            <div class="flex items-center gap-2 mb-1">
+              <span class="badge-pill bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">Asynchronous Buffer</span>
+              <span id="bufferStatusBadge" class="badge-pill bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">Buffer: 0 / 20 Batches</span>
+              <span id="poolStatusBadge" class="badge-pill bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">In-RAM Pool: 0 items</span>
+            </div>
+            <h3 class="text-md font-bold text-white flex items-center gap-2">
+              <span>⚡</span> Dual-Thread Latency Breakdown & Queue Bottleneck Inspector
+            </h3>
+            <p class="text-xs text-slate-400">
+              Decoupled parallel CPU synthesis workers feeding a bounded in-RAM batch buffer (<span class="text-cyan-400 font-mono">max 20, watermark 10</span>) so the TITAN X GPU runs without starvation.
+            </p>
+          </div>
+          <!-- Real-Time Speedup Badge -->
+          <div class="flex items-center gap-3 bg-slate-950 px-4 py-2 rounded-xl border border-slate-800">
+            <div>
+              <span class="text-[9px] uppercase font-mono tracking-wider text-slate-400 block">GPU Step Latency</span>
+              <span id="statProfGpuStep" class="text-lg font-black text-emerald-400 font-mono">0.0 ms</span>
+            </div>
+            <div class="border-l border-slate-800 pl-3">
+              <span class="text-[9px] uppercase font-mono tracking-wider text-slate-400 block">Queue Starvation</span>
+              <span id="statProfStarve" class="text-lg font-black text-cyan-400 font-mono">0.0 ms</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Buffer Occupancy Bar -->
+        <div class="space-y-1.5">
+          <div class="flex justify-between items-center text-xs font-mono">
+            <span class="text-slate-400 flex items-center gap-1.5">
+              <span>📦 Bounded Buffer Occupancy:</span>
+              <strong id="barBufferText" class="text-white">0 / 20 Batches (0%)</strong>
+            </span>
+            <span class="text-slate-500 text-[11px]">Low Watermark: 10 batches | Max: 20 batches</span>
+          </div>
+          <div class="w-full bg-slate-950 h-3 rounded-full overflow-hidden border border-slate-800 relative">
+            <div class="absolute top-0 bottom-0 left-1/2 w-0.5 bg-amber-500/70 z-10" title="Low Watermark (10 batches)"></div>
+            <div id="barBufferFill" class="bg-gradient-to-r from-indigo-500 via-cyan-500 to-emerald-500 h-full w-0 transition-all duration-300"></div>
+          </div>
+        </div>
+
+        <!-- Dual Pipeline Microsecond Profiler Breakdown -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
+          <!-- Producer Pipeline (CPU Parallel Workers) -->
+          <div class="bg-slate-950/80 border border-slate-800/80 rounded-xl p-3.5 space-y-2.5">
+            <div class="flex justify-between items-center border-b border-slate-800 pb-2">
+              <span class="text-xs font-bold text-slate-200 flex items-center gap-1.5">
+                <span>⚙️</span> Producer Pipeline (Parallel CPU)
+              </span>
+              <span id="statProducerTotal" class="text-xs font-mono font-bold text-indigo-400">Total: --</span>
+            </div>
+            <div class="grid grid-cols-2 gap-2 text-xs font-mono">
+              <div class="flex justify-between p-1.5 bg-slate-900/60 rounded border border-slate-800/50">
+                <span class="text-slate-400">Sample Text:</span>
+                <span id="profSampleText" class="text-slate-200 font-bold">--</span>
+              </div>
+              <div class="flex justify-between p-1.5 bg-slate-900/60 rounded border border-slate-800/50">
+                <span class="text-slate-400">Piper Synth:</span>
+                <span id="profPiperSynth" class="text-indigo-300 font-bold">--</span>
+              </div>
+              <div class="flex justify-between p-1.5 bg-slate-900/60 rounded border border-slate-800/50">
+                <span class="text-slate-400">Voice Retries:</span>
+                <span id="profVoiceRetry" class="text-amber-300 font-bold">--</span>
+              </div>
+              <div class="flex justify-between p-1.5 bg-slate-900/60 rounded border border-slate-800/50">
+                <span class="text-slate-400">Target Extract:</span>
+                <span id="profTargetExtract" class="text-purple-300 font-bold">--</span>
+              </div>
+              <div class="flex justify-between p-1.5 bg-slate-900/60 rounded border border-slate-800/50">
+                <span class="text-slate-400">Batch Collate:</span>
+                <span id="profBatchCollate" class="text-cyan-300 font-bold">--</span>
+              </div>
+              <div class="flex justify-between p-1.5 bg-slate-900/60 rounded border border-slate-800/50">
+                <span class="text-slate-400">Queue Put Wait:</span>
+                <span id="profQueuePut" class="text-slate-300 font-bold">--</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Consumer Pipeline (GPU TITAN X) -->
+          <div class="bg-slate-950/80 border border-slate-800/80 rounded-xl p-3.5 space-y-2.5">
+            <div class="flex justify-between items-center border-b border-slate-800 pb-2">
+              <span class="text-xs font-bold text-slate-200 flex items-center gap-1.5">
+                <span>🚀</span> Consumer Pipeline (TITAN X GPU)
+              </span>
+              <span id="statConsumerTotal" class="text-xs font-mono font-bold text-emerald-400">Total: --</span>
+            </div>
+            <div class="grid grid-cols-2 gap-2 text-xs font-mono">
+              <div class="flex justify-between p-1.5 bg-slate-900/60 rounded border border-slate-800/50">
+                <span class="text-slate-400">Starvation Wait:</span>
+                <span id="profQueueGet" class="text-cyan-400 font-bold">--</span>
+              </div>
+              <div class="flex justify-between p-1.5 bg-slate-900/60 rounded border border-slate-800/50">
+                <span class="text-slate-400">CUDA Transfer:</span>
+                <span id="profCudaTransfer" class="text-slate-200 font-bold">--</span>
+              </div>
+              <div class="flex justify-between p-1.5 bg-slate-900/60 rounded border border-slate-800/50">
+                <span class="text-slate-400">Model Forward:</span>
+                <span id="profModelForward" class="text-emerald-300 font-bold">--</span>
+              </div>
+              <div class="flex justify-between p-1.5 bg-slate-900/60 rounded border border-slate-800/50">
+                <span class="text-slate-400">Loss Calc:</span>
+                <span id="profLossCalc" class="text-emerald-300 font-bold">--</span>
+              </div>
+              <div class="flex justify-between p-1.5 bg-slate-900/60 rounded border border-slate-800/50">
+                <span class="text-slate-400">Backward Pass:</span>
+                <span id="profBackward" class="text-emerald-300 font-bold">--</span>
+              </div>
+              <div class="flex justify-between p-1.5 bg-slate-900/60 rounded border border-slate-800/50">
+                <span class="text-slate-400">Optimizer Step:</span>
+                <span id="profOptimizer" class="text-emerald-300 font-bold">--</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- Main Layout: Charts & Controls -->
       <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
 
@@ -2557,10 +2677,68 @@
           document.getElementById("pretrainActiveVoiceBadge").innerText = `Voice: ${data.active_voice}`;
         }
 
+        // --- Threaded Buffer & Bottleneck Profiler UI Updates ---
+        const occ = data.buffer_occupancy || 0;
+        const cap = data.buffer_capacity || 20;
+        const pct = Math.min(100, Math.round((occ / Math.max(1, cap)) * 100));
+
+        const barText = document.getElementById("barBufferText");
+        if (barText) barText.innerText = `${occ} / ${cap} Batches (${pct}%)`;
+
+        const barFill = document.getElementById("barBufferFill");
+        if (barFill) barFill.style.width = `${pct}%`;
+
+        const bufBadge = document.getElementById("bufferStatusBadge");
+        if (bufBadge) bufBadge.innerText = `Buffer: ${occ} / ${cap} Batches`;
+
+        const poolBadge = document.getElementById("poolStatusBadge");
+        if (poolBadge) poolBadge.innerText = `In-RAM Pool: ${data.pool_size || 0} items`;
+
+        const prof = data.profiler || {};
+        const _getFmt = (k, fallback = "--") => (prof[k] && prof[k].formatted) ? prof[k].formatted : fallback;
+
+        const elGpuStep = document.getElementById("statProfGpuStep");
+        if (elGpuStep) elGpuStep.innerText = _getFmt("total_train_step_sec", data.avg_step_sec ? `${(data.avg_step_sec * 1000).toFixed(0)} ms` : "--");
+
+        const elStarve = document.getElementById("statProfStarve");
+        if (elStarve) elStarve.innerText = _getFmt("time_queue_get_wait", "< 1 ms");
+
+        const elProdTotal = document.getElementById("statProducerTotal");
+        if (elProdTotal) elProdTotal.innerText = `Batch: ${_getFmt("total_batch_gen_sec")}`;
+
+        const elConsTotal = document.getElementById("statConsumerTotal");
+        if (elConsTotal) elConsTotal.innerText = `Step: ${_getFmt("total_step_sec")}`;
+
+        const updateElem = (id, val) => { const el = document.getElementById(id); if (el) el.innerText = val; };
+        updateElem("profSampleText", _getFmt("time_sample_text"));
+        updateElem("profPiperSynth", _getFmt("time_piper_synth"));
+        updateElem("profVoiceRetry", _getFmt("time_retry_error"));
+        updateElem("profTargetExtract", _getFmt("time_target_extract"));
+        updateElem("profBatchCollate", _getFmt("time_batch_collate"));
+        updateElem("profQueuePut", _getFmt("time_queue_put_wait"));
+
+        updateElem("profQueueGet", _getFmt("time_queue_get_wait"));
+        updateElem("profCudaTransfer", _getFmt("time_device_transfer"));
+        updateElem("profModelForward", _getFmt("time_forward"));
+        updateElem("profLossCalc", _getFmt("time_loss"));
+        updateElem("profBackward", _getFmt("time_backward"));
+        updateElem("profOptimizer", _getFmt("time_optimizer_step"));
+
         // Status badge
         const badge = document.getElementById("pretrainStatusBadge");
         const btnStart = document.getElementById("btnStartPretrain");
         const btnStop = document.getElementById("btnStopPretrain");
+
+        // Auto-sync dropdowns if pre-training is live
+        if (data.is_running) {
+          if (tierSelect && data.tier && tierSelect.value !== data.tier) tierSelect.value = data.tier;
+          if (archSelect && data.arch && archSelect.value !== data.arch) archSelect.value = data.arch;
+        }
+
+        if (data.parameters_m) {
+          const modelBadge = document.getElementById("modelInfoBadge");
+          if (modelBadge) modelBadge.innerText = `${data.parameters_m}M Parameters (${data.arch || arch})`;
+        }
 
         if (data.is_running) {
           badge.className = "badge-pill bg-purple-500/20 text-purple-300 border border-purple-500/40 animate-pulse";
@@ -2587,20 +2765,24 @@
             const row = document.createElement("div");
             row.className = "flex items-center justify-between py-1 border-b border-slate-800/60 last:border-0";
             const voices = entry.active_voices ? entry.active_voices.slice(0, 2).join(", ") : (entry.active_voice || "piper");
+            const accVal = entry.masked_accuracy_pct !== undefined ? entry.masked_accuracy_pct : (entry.accuracy !== undefined ? entry.accuracy : 1.0);
             row.innerHTML = `
               <span class="text-indigo-400 font-bold">Step ${entry.step}</span>
               <span class="text-amber-400">Loss: ${entry.loss.toFixed(4)}</span>
-              <span class="text-sky-400">Acc: ${entry.masked_accuracy_pct !== undefined ? entry.masked_accuracy_pct.toFixed(1) : "1.0"}%</span>
+              <span class="text-sky-400">Acc: ${accVal.toFixed(1)}%</span>
               <span class="text-emerald-400 font-mono">${(entry.cumulative_audio_sec || 0).toFixed(1)}s RAM</span>
               <span class="text-slate-400 truncate max-w-[120px] text-[10px]">${voices}</span>
             `;
             logFeed.appendChild(row);
           });
-        }
-
-        // Render chart
-        if (data.history && data.history.length > 0) {
           renderPretrainChart(data.history);
+        } else {
+          logFeed.innerHTML = `<div class="text-xs text-slate-500 py-6 text-center">No step history recorded for <b>${data.arch || arch}</b> [<b>${data.tier || tier}</b>] yet.</div>`;
+          const cv = document.getElementById("pretrainChartCanvas");
+          if (cv) {
+            const ctx = cv.getContext("2d");
+            ctx.clearRect(0, 0, cv.width, cv.height);
+          }
         }
 
         // Auto polling

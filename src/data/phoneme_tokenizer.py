@@ -25,6 +25,7 @@ class PhonemeTokenizer:
         "<noise>",
         "<same_phoneme_than_last_one>",
         "<eos>",
+        "<unk>",
     ]
 
     # Standard English and French IPA phoneme alphabet
@@ -58,11 +59,12 @@ class PhonemeTokenizer:
         self.noise_token = "<noise>"
         self.same_as_last_token = "<same_phoneme_than_last_one>"
         self.eos_token = "<eos>"
+        self.unk_token = "<unk>"
 
         self.token_to_id: Dict[str, int] = {}
         self.id_to_token: Dict[int, str] = {}
 
-        # 1. Register Special Tokens (Fixed IDs 0..6)
+        # 1. Register Special Tokens (Fixed IDs 0..7)
         for idx, tok in enumerate(self.special_tokens):
             self.token_to_id[tok] = idx
             self.id_to_token[idx] = tok
@@ -88,6 +90,7 @@ class PhonemeTokenizer:
         self.noise_id = self.token_to_id[self.noise_token]
         self.same_as_last_id = self.token_to_id[self.same_as_last_token]
         self.eos_id = self.token_to_id[self.eos_token]
+        self.unk_id = self.token_to_id[self.unk_token]
 
         # Standard attribute aliases
         self.pad_token_id = self.pad_id
@@ -97,23 +100,28 @@ class PhonemeTokenizer:
         self.noise_token_id = self.noise_id
         self.same_as_last_token_id = self.same_as_last_id
         self.eos_token_id = self.eos_id
+        self.unk_token_id = self.unk_id
         self.id_to_phoneme = self.id_to_token
         self.phoneme_to_id = self.token_to_id
         self.vocab = self.token_to_id
-        self.unk_id = self.pad_id  # Fallback for unknown tokens
 
     @property
     def vocab_size(self) -> int:
         return len(self.token_to_id)
 
     def encode(self, phonemes: Union[str, List[str]], add_eos: bool = False) -> List[int]:
-        """Convert a phoneme sequence into token IDs."""
+        """Convert a phoneme sequence into token IDs with unicode NFKD normalization."""
+        import unicodedata
+
         ids: List[int] = []
         if isinstance(phonemes, str):
-            # Decompose unicode string into characters
-            chars = list(phonemes)
+            # NFKD normalization to cleanly separate base characters from combining diacritics
+            norm_str = unicodedata.normalize("NFKD", phonemes)
+            chars = list(norm_str)
         else:
-            chars = phonemes
+            chars = []
+            for item in phonemes:
+                chars.extend(list(unicodedata.normalize("NFKD", str(item))))
 
         for ch in chars:
             token_id = self.token_to_id.get(ch, self.unk_id)

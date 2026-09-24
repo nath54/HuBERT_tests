@@ -21,6 +21,7 @@ def test_phoneme_tokenizer_special_tokens():
     assert tok.noise_token_id == 4
     assert tok.same_as_last_token_id == 5
     assert tok.eos_token_id == 6
+    assert tok.unk_token_id == 7
 
     # Test encoding and decoding
     text = "hello world"

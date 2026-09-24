@@ -55,11 +55,24 @@ class StudioState:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.char_tokenizer = CharacterTokenizer()
         self.phono_tokenizer = PhonemeTokenizer()
-        self.tokenizer = self.char_tokenizer
-        self.current_arch = "hubert_kmeans"
-        self.current_tier = "mini"
-        self.checkpoint_path = Path("checkpoints/best_model.pt")
-        self.model: Optional[HuBERTForCTC] = None
+
+        if Path("checkpoints/phono_hubert/medium/checkpoint_latest.pt").exists():
+            self.current_arch = "phono_hubert"
+            self.current_tier = "medium"
+            self.tokenizer = self.phono_tokenizer
+            self.checkpoint_path = Path("checkpoints/phono_hubert/medium/checkpoint_latest.pt")
+        elif Path("checkpoints/best_model.pt").exists():
+            self.current_arch = "hubert_kmeans"
+            self.current_tier = "mini"
+            self.tokenizer = self.char_tokenizer
+            self.checkpoint_path = Path("checkpoints/best_model.pt")
+        else:
+            self.current_arch = "phono_hubert"
+            self.current_tier = "medium"
+            self.tokenizer = self.phono_tokenizer
+            self.checkpoint_path = Path("checkpoints/phono_hubert/medium/checkpoint_latest.pt")
+
+        self.model: Optional[Any] = None
         self.explainer: Optional[AudioGradientExplainer] = None
         self.patcher: Optional[ActivationPatcher] = None
 
@@ -173,8 +186,17 @@ class StudioState:
         if self.checkpoint_path.exists():
             print(f"[Studio] Loading checkpoint: {self.checkpoint_path}")
             ckpt = torch.load(self.checkpoint_path, map_location=self.device, weights_only=False)
-            self.model = HuBERTForCTC(ckpt["config"]).to(self.device)
-            self.model.load_state_dict(ckpt["model_state_dict"])
+            cfg = ckpt.get("config")
+            if cfg is None:
+                cfg = ModelRegistry.build_config(self.current_arch, tier=self.current_tier)
+            if self.current_arch == "phono_hubert":
+                self.model = PhonoHuBERTForPreTraining(cfg).to(self.device)
+            else:
+                self.model = HuBERTForCTC(cfg).to(self.device)
+            try:
+                self.model.load_state_dict(ckpt["model_state_dict"], strict=False)
+            except Exception as e:
+                print(f"[Studio] Note on state dict load: {e}")
         else:
             print("[Studio] Creating base model.")
             config = HuBERTConfig(
@@ -695,22 +717,46 @@ def get_live_scaling_status(arch: Optional[str] = None, tier: Optional[str] = No
         p = subprocess.run(["pgrep", "-f", "run_pretrain.py.*phono_hubert"], capture_output=True, text=True)
         is_running = (p.returncode == 0 and len(p.stdout.strip()) > 0)
 
-        live_status_path = Path("logs/phono_hubert_status_live.json")
+        # Check tier-specific status first, then generic
         live_data = {}
-        if live_status_path.exists():
+        tier_status_path = Path(f"logs/phono_hubert_{tier}_status_live.json")
+        generic_status_path = Path("logs/phono_hubert_status_live.json")
+
+        if tier_status_path.exists():
             try:
-                with open(live_status_path, "r", encoding="utf-8") as f:
+                with open(tier_status_path, "r", encoding="utf-8") as f:
                     live_data = json.load(f)
             except Exception:
                 pass
+        elif generic_status_path.exists():
+            try:
+                with open(generic_status_path, "r", encoding="utf-8") as f:
+                    generic_data = json.load(f)
+                    if not tier or generic_data.get("tier") == tier:
+                        live_data = generic_data
+            except Exception:
+                pass
 
-        heartbeat_fresh = (time.time() - live_data.get("last_heartbeat", 0)) < 90
-        if heartbeat_fresh and live_data.get("is_running"):
-            is_running = True
+        # If process is running, inspect generic status to find active running tier
+        if generic_status_path.exists():
+            try:
+                with open(generic_status_path, "r", encoding="utf-8") as f:
+                    gen_data = json.load(f)
+                    running_tier = gen_data.get("tier")
+                    if is_running and running_tier:
+                        # Prioritize actively running training tier so UI immediately syncs
+                        live_data = gen_data
+                        tier = running_tier
+            except Exception:
+                pass
+
+        tier_params_map = {"mini": 8.04, "small": 24.2, "medium": 31.82, "base": 94.7}
+        params_m = tier_params_map.get(tier, 8.04)
 
         history_file = Path(f"logs/phono_hubert_{tier}_history.json")
+        step_history_file = Path(f"logs/phono_hubert_{tier}_step_history.json")
+
         milestones = []
-        history = []
         if history_file.exists():
             try:
                 with open(history_file, "r", encoding="utf-8") as f:
@@ -726,37 +772,49 @@ def get_live_scaling_status(arch: Optional[str] = None, tier: Optional[str] = No
                                 "per": h.get("librispeech_per", 100.0),
                                 "sample_pred": h.get("sample_prediction", ""),
                             })
-                        history.append({
-                            "step": h.get("step", 0),
-                            "loss": h.get("pretrain_loss", 0.0),
-                            "accuracy": h.get("masked_acc_pct", 1.0),
-                            "masked_accuracy_pct": h.get("masked_acc_pct", 1.0),
-                            "cumulative_audio_sec": h.get("cumulative_audio_hours", 0.0) * 3600.0,
-                            "cumulative_audio_hours": h.get("cumulative_audio_hours", 0.0),
-                            "disk_bytes_used": 0,
-                            "active_voices": ["piper_neural"],
-                            "active_voice": "piper_neural",
-                        })
             except Exception:
                 pass
 
+        history = []
+        if step_history_file.exists():
+            try:
+                with open(step_history_file, "r", encoding="utf-8") as f:
+                    history = json.load(f)
+            except Exception:
+                pass
+
+        # If no step_history, build from milestones or single entries
+        if not history and milestones:
+            for m in milestones:
+                history.append({
+                    "step": m["step"],
+                    "loss": m["loss"],
+                    "accuracy": 20.0,
+                    "masked_accuracy_pct": 20.0,
+                    "cumulative_audio_sec": m["hours"] * 3600.0,
+                    "cumulative_audio_hours": m["hours"],
+                    "disk_bytes_used": 0,
+                    "active_voices": ["piper_neural"],
+                    "active_voice": "piper_neural",
+                })
+
         step = live_data.get("step", history[-1]["step"] if history else 0)
-        total_steps = live_data.get("total_steps", 500)
+        total_steps = live_data.get("total_steps", 625)
         loss = live_data.get("loss", history[-1]["loss"] if history else 8.5)
         acc = live_data.get("masked_accuracy_pct", history[-1]["accuracy"] if history else 90.0)
         audio_sec = live_data.get("cumulative_audio_sec", history[-1]["cumulative_audio_sec"] if history else 0.0)
         audio_hours = live_data.get("cumulative_audio_hours", history[-1]["cumulative_audio_hours"] if history else 0.0)
         active_voice = live_data.get("active_voice", "piper")
         active_voices = live_data.get("active_voices", ["piper"])
-        avg_step_sec = live_data.get("avg_step_sec", 3.0)
+        avg_step_sec = live_data.get("avg_step_sec", 0.6)
         eta_formatted = live_data.get("eta_formatted", "--")
         estimated_finish_time = live_data.get("estimated_finish_time", "--")
 
         clean_recent_logs = []
         if history:
-            for h in history[-25:]:
+            for h in history[-35:]:
                 clean_recent_logs.append(
-                    f"[PHONO_HUBERT] Step {h['step']:4d}/{total_steps} | Loss: {h['loss']:.4f} | Masked Acc: {h.get('masked_accuracy_pct', 90.0):.1f}% | Audio: {h['cumulative_audio_hours']:.3f}h"
+                    f"[PHONO_HUBERT] Step {h['step']:4d}/{total_steps} | Loss: {h['loss']:.4f} | Masked Acc: {h.get('masked_accuracy_pct', 0.0):.1f}% | Audio: {h['cumulative_audio_hours']:.3f}h"
                 )
 
         return {
@@ -764,7 +822,7 @@ def get_live_scaling_status(arch: Optional[str] = None, tier: Optional[str] = No
             "source": "phono_hubert",
             "arch": "phono_hubert",
             "tier": tier,
-            "parameters_m": 8.04,
+            "parameters_m": params_m,
             "step": step,
             "total_steps": total_steps,
             "loss": loss,
@@ -782,6 +840,11 @@ def get_live_scaling_status(arch: Optional[str] = None, tier: Optional[str] = No
             "history": history,
             "milestones": milestones,
             "recent_logs": clean_recent_logs[-35:],
+            "buffer_occupancy": live_data.get("buffer_occupancy", 0),
+            "buffer_capacity": live_data.get("buffer_capacity", 20),
+            "buffer_watermark": live_data.get("buffer_watermark", 10),
+            "pool_size": live_data.get("pool_size", 0),
+            "profiler": live_data.get("profiler", {}),
         }
 
     # Check if process is running
@@ -972,6 +1035,11 @@ def get_live_scaling_status(arch: Optional[str] = None, tier: Optional[str] = No
         "history": history,
         "milestones": milestones,
         "recent_logs": clean_recent_logs[-35:],
+        "buffer_occupancy": live_data.get("buffer_occupancy", 0),
+        "buffer_capacity": live_data.get("buffer_capacity", 20),
+        "buffer_watermark": live_data.get("buffer_watermark", 10),
+        "pool_size": live_data.get("pool_size", 0),
+        "profiler": live_data.get("profiler", {}),
     }
 
 
