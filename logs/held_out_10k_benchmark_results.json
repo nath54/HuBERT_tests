@@ -1,0 +1,89 @@
+{
+  "num_samples": 4,
+  "total_audio_sec": 15.94,
+  "summary": {
+    "meta_hubert_large": {
+      "avg_wer_pct": 60.16,
+      "avg_cer_pct": 37.95,
+      "avg_latency_ms": 88.33,
+      "rtf": 0.0222,
+      "throughput_x": 45.0
+    },
+    "whisper_tiny": {
+      "avg_wer_pct": 56.48,
+      "avg_cer_pct": 35.55,
+      "avg_latency_ms": 140.8,
+      "rtf": 0.0353,
+      "throughput_x": 28.3
+    },
+    "scratch_hubert": {
+      "avg_wer_pct": 100.0,
+      "avg_cer_pct": 100.0,
+      "avg_latency_ms": 13.59,
+      "rtf": 0.0034,
+      "throughput_x": 294.0
+    }
+  },
+  "detailed_evals": [
+    {
+      "id": "test_en_00000",
+      "lang": "en",
+      "voice": "lessac_en_US-lessac-high",
+      "duration": 4.3421875,
+      "ground_truth_text": "He arrived at our home on a Sunday of November, 189-.",
+      "ground_truth_phonemes": "hiːʲ ɚɹˈaɪvd æɾ ˌaʊɚ hˈoʊm ˌɔn ɐ sˈʌndeɪ ʌv noʊvˈɛmbɚ, wˈʌnhˈʌndɹɪd ˈeɪɾi nˈaɪn.",
+      "scratch_pred": "",
+      "scratch_wer": 1.0,
+      "scratch_cer": 1.0,
+      "meta_pred": "he arrived at our home on a sunday of november one hundred eighty nine",
+      "meta_wer": 0.3636,
+      "whisper_pred": "he arrived at our home on a sunday of november 189.",
+      "whisper_wer": 0.0
+    },
+    {
+      "id": "test_en_00001",
+      "lang": "en",
+      "voice": "cori_en_GB-cori-medium",
+      "duration": 4.0286875,
+      "ground_truth_text": "I still say 'our home,' although the house no longer belongs to us.",
+      "ground_truth_phonemes": "aɪ stˈɪl sˈeɪ ˌaʊɚ hˈoʊm, ɔːlðˈoʊ ðə hˈaʊs nˌoʊ lˈɑːŋɡɚ bᵻlˈɔŋz tʊ ˌʌs.",
+      "scratch_pred": "",
+      "scratch_wer": 1.0,
+      "scratch_cer": 1.0,
+      "meta_pred": "istill say our home although the house no longer belongs to us",
+      "meta_wer": 0.1538,
+      "whisper_pred": "i still say i home, although the house no longer belongs to us.",
+      "whisper_wer": 0.0769
+    },
+    {
+      "id": "test_fr_00000",
+      "lang": "fr",
+      "voice": "mls_fr_FR-mls-medium",
+      "duration": 3.71525,
+      "ground_truth_text": "Il arriva chez nous un dimanche de novembre 189-….",
+      "ground_truth_phonemes": "il aʁivˈa ʃe nuz œ̃ dimˈɑ̃ʃ də- novˈɑ̃bʁ sɑ̃ katʁəvɛ̃nˈœf",
+      "scratch_pred": "",
+      "scratch_wer": 1.0,
+      "scratch_cer": 1.0,
+      "meta_pred": "ibari varchenu dimanghe de nouvone sanquetereverneuv",
+      "meta_wer": 0.8889,
+      "whisper_pred": "he parvaged us, a 10-mange of new zealand, 1899.",
+      "whisper_wer": 1.1111
+    },
+    {
+      "id": "test_fr_00001",
+      "lang": "fr",
+      "voice": "upmc_fr_FR-upmc-medium",
+      "duration": 3.8545625,
+      "ground_truth_text": "Je continue à dire « chez nous », bien que la maison ne nous appartienne plus.",
+      "ground_truth_phonemes": "ʒə- kɔ̃tinˈy a dˈiʁ ʃe nu, bjˈɛ̃ kə la- mɛzˈɔ̃ nə- nuz apaʁtjˈɛn plˈy.",
+      "scratch_pred": "",
+      "scratch_wer": 1.0,
+      "scratch_cer": 1.0,
+      "meta_pred": "jau contigneu a dier chenou bian cula mison e nu s apartiem pri",
+      "meta_wer": 1.0,
+      "whisper_pred": "i continue to say goodbye, well that the maison is not going to leave us anymore.",
+      "whisper_wer": 1.0714
+    }
+  ]
+}

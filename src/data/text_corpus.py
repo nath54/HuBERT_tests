@@ -10,17 +10,36 @@ import random
 from typing import Iterator, Optional, Generator
 
 
+import hashlib
+import json
+from pathlib import Path
+
+
 class StreamingTextCorpus:
     """
     Streams clean, naturally punctuated sentences from high-quality online sources
     (Wikipedia, Opus Books) and offline fallbacks with 0 disk storage footprint.
+    Strictly excludes all sentences present in the held-out test benchmark.
     """
 
     def __init__(self, languages: tuple[str, ...] = ("en", "fr")):
         self.languages = list(languages)
         self._book_stream = None
         self._wiki_stream = None
+        self.excluded_hashes = set()
+        self._load_exclusions()
         self._init_streams()
+
+    def _load_exclusions(self):
+        """Load hashes of held-out benchmark test sentences to prevent any data leakage."""
+        hash_path = Path("data/test_sets/held_out_hashes.json")
+        if hash_path.exists():
+            try:
+                with open(hash_path, "r", encoding="utf-8") as f:
+                    self.excluded_hashes = set(json.load(f))
+                print(f"[TextCorpus] Loaded {len(self.excluded_hashes):,} excluded held-out test hashes.")
+            except Exception as e:
+                print(f"[TextCorpus] Note: Could not load exclusion hashes: {e}")
 
     def _init_streams(self):
         """Initialize streaming generators from HuggingFace datasets."""
@@ -76,6 +95,9 @@ class StreamingTextCorpus:
             words = s.split()
             # Retain sentences with 6 to 25 words (optimal for TTS and HuBERT 2-8s frames)
             if 6 <= len(words) <= 25 and re.search(r"[a-zA-Zà-üÀ-Ü]", s):
+                h = hashlib.md5(s.lower().encode("utf-8")).hexdigest()
+                if h in self.excluded_hashes:
+                    continue
                 if not s.endswith((".", "!", "?")):
                     s += "."
                 valid.append(s)
