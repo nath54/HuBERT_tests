@@ -162,6 +162,30 @@ class VoiceQualityGuardian:
             print(f"[Voice Guardian] Error saving blocklist: {e}")
 
 
+class VoiceDepletionError(RuntimeError):
+    """Raised when no verified clean voice models remain for a requested language."""
+
+    def __init__(self, language: str, voices_dir: Path, total_available: int = 0):
+        self.language = language
+        self.voices_dir = voices_dir
+        self.total_available = total_available
+        lang_name = "French (fr_FR)" if language == "fr" else "English (en_US / en_GB)" if language == "en" else language
+        super().__init__(
+            f"\n"
+            f"================================================================================\n"
+            f"🚨 [VOICE DEPLETION ERROR] NO CLEAN VOICES LEFT FOR LANGUAGE '{language.upper()}' ({lang_name})!\n"
+            f"================================================================================\n"
+            f"All available voices for '{language}' in '{voices_dir}' were either defective\n"
+            f"(blocked due to missing phonemes) or none were found.\n\n"
+            f"👉 Total active clean voices in other languages: {total_available}\n"
+            f"👉 Action Required: Please prepare or download additional verified clean '{language}'\n"
+            f"   Piper voice models (e.g. medium or high tier with full 154+ phoneme sets) into:\n"
+            f"   {voices_dir}\n"
+            f"   Or run: .venv/bin/python scripts/download_more_voices.py --lang {language}\n"
+            f"================================================================================\n"
+        )
+
+
 class PiperVoiceManager:
     """Manages loaded Piper neural voice models with in-memory caching and real-time quality validation."""
 
@@ -210,6 +234,11 @@ class PiperVoiceManager:
         self.voice_cache.pop(voice_name, None)
         print(f"[PiperManager] Evicted voice '{voice_name}' from memory. Active voices remaining: {len(self.voice_models)}")
 
+        if "fr_FR" in voice_name and len(self.fr_voices) == 0:
+            print(f"🚨 [PiperManager Warning] Zero French voices remaining in the active pool!")
+        if ("en_US" in voice_name or "en_GB" in voice_name) and len(self.en_voices) == 0:
+            print(f"🚨 [PiperManager Warning] Zero English voices remaining in the active pool!")
+
     def validate_voice_for_text(self, voice: PiperVoice, voice_name: str, text: str) -> Tuple[bool, List[str]]:
         """Validate whether the voice model supports all phonemes produced by the text."""
         try:
@@ -227,14 +256,25 @@ class PiperVoiceManager:
             return False, [f"ERR_{e}"]
 
     def get_random_voice(self, lang: Optional[str] = None) -> Tuple[PiperVoice, str]:
-        """Retrieve a cached or newly loaded PiperVoice instance matching language."""
+        """Retrieve a cached or newly loaded PiperVoice instance matching language.
+        
+        Raises VoiceDepletionError if no clean models remain for the requested language.
+        """
         if not self.voice_models:
-            raise RuntimeError(f"No available Piper models in {self.voices_dir}")
+            raise VoiceDepletionError(language="any", voices_dir=self.voices_dir, total_available=0)
 
-        if lang == "fr" and self.fr_voices:
+        if lang == "fr":
+            if not self.fr_voices:
+                raise VoiceDepletionError(language="fr", voices_dir=self.voices_dir, total_available=len(self.voice_models))
             pool = self.fr_voices
-        elif lang == "en" and self.en_voices:
+        elif lang == "en":
+            if not self.en_voices:
+                raise VoiceDepletionError(language="en", voices_dir=self.voices_dir, total_available=len(self.voice_models))
             pool = self.en_voices
+        elif lang is not None:
+            pool = [m for m in self.voice_models if lang in str(m)]
+            if not pool:
+                raise VoiceDepletionError(language=lang, voices_dir=self.voices_dir, total_available=len(self.voice_models))
         else:
             pool = self.voice_models
 
@@ -427,6 +467,9 @@ class PiperStreamingDataset(torch.utils.data.IterableDataset):
 
             try:
                 waveform, voice_name, dur = self.voice_manager.synthesize_to_tensor_16k(text, lang=lang)
+            except VoiceDepletionError:
+                # Do NOT swallow voice depletion error! Halt and prompt the user to prepare voices.
+                raise
             except Exception as e:
                 continue
 
