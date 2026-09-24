@@ -1,122 +1,122 @@
 [
   {
-    "id": "synthetic_0080",
-    "audio_path": "data/raw/synthetic/wavs/sample_0080.wav",
-    "transcript": "one",
-    "duration": 0.775
+    "id": "synthetic_0100",
+    "audio_path": "data/raw/synthetic/wavs/sample_0100.wav",
+    "transcript": "hubert",
+    "duration": 0.8405
   },
   {
-    "id": "synthetic_0081",
-    "audio_path": "data/raw/synthetic/wavs/sample_0081.wav",
-    "transcript": "mind speech",
-    "duration": 1.5875
-  },
-  {
-    "id": "synthetic_0082",
-    "audio_path": "data/raw/synthetic/wavs/sample_0082.wav",
-    "transcript": "yes",
-    "duration": 0.8389375
-  },
-  {
-    "id": "synthetic_0083",
-    "audio_path": "data/raw/synthetic/wavs/sample_0083.wav",
-    "transcript": "learn",
-    "duration": 0.7205625
-  },
-  {
-    "id": "synthetic_0084",
-    "audio_path": "data/raw/synthetic/wavs/sample_0084.wav",
-    "transcript": "no four",
-    "duration": 1.385625
-  },
-  {
-    "id": "synthetic_0085",
-    "audio_path": "data/raw/synthetic/wavs/sample_0085.wav",
-    "transcript": "four",
-    "duration": 0.6515625
-  },
-  {
-    "id": "synthetic_0086",
-    "audio_path": "data/raw/synthetic/wavs/sample_0086.wav",
-    "transcript": "learn",
-    "duration": 0.6031875
-  },
-  {
-    "id": "synthetic_0087",
-    "audio_path": "data/raw/synthetic/wavs/sample_0087.wav",
-    "transcript": "nine hubert",
-    "duration": 1.546125
-  },
-  {
-    "id": "synthetic_0088",
-    "audio_path": "data/raw/synthetic/wavs/sample_0088.wav",
-    "transcript": "two",
-    "duration": 0.779
-  },
-  {
-    "id": "synthetic_0089",
-    "audio_path": "data/raw/synthetic/wavs/sample_0089.wav",
-    "transcript": "two",
-    "duration": 0.6748125
-  },
-  {
-    "id": "synthetic_0090",
-    "audio_path": "data/raw/synthetic/wavs/sample_0090.wav",
-    "transcript": "world six",
-    "duration": 1.34325
-  },
-  {
-    "id": "synthetic_0091",
-    "audio_path": "data/raw/synthetic/wavs/sample_0091.wav",
-    "transcript": "six",
-    "duration": 0.6915
-  },
-  {
-    "id": "synthetic_0092",
-    "audio_path": "data/raw/synthetic/wavs/sample_0092.wav",
-    "transcript": "deep",
-    "duration": 0.8169375
-  },
-  {
-    "id": "synthetic_0093",
-    "audio_path": "data/raw/synthetic/wavs/sample_0093.wav",
-    "transcript": "hubert no",
-    "duration": 1.59425
-  },
-  {
-    "id": "synthetic_0094",
-    "audio_path": "data/raw/synthetic/wavs/sample_0094.wav",
-    "transcript": "yes",
-    "duration": 0.80925
-  },
-  {
-    "id": "synthetic_0095",
-    "audio_path": "data/raw/synthetic/wavs/sample_0095.wav",
+    "id": "synthetic_0101",
+    "audio_path": "data/raw/synthetic/wavs/sample_0101.wav",
     "transcript": "speech",
-    "duration": 0.6883125
+    "duration": 0.6278125
   },
   {
-    "id": "synthetic_0096",
-    "audio_path": "data/raw/synthetic/wavs/sample_0096.wav",
-    "transcript": "speech world",
-    "duration": 1.433625
+    "id": "synthetic_0102",
+    "audio_path": "data/raw/synthetic/wavs/sample_0102.wav",
+    "transcript": "learn five",
+    "duration": 1.554625
   },
   {
-    "id": "synthetic_0097",
-    "audio_path": "data/raw/synthetic/wavs/sample_0097.wav",
+    "id": "synthetic_0103",
+    "audio_path": "data/raw/synthetic/wavs/sample_0103.wav",
+    "transcript": "zero",
+    "duration": 0.628625
+  },
+  {
+    "id": "synthetic_0104",
+    "audio_path": "data/raw/synthetic/wavs/sample_0104.wav",
+    "transcript": "hubert",
+    "duration": 0.6218125
+  },
+  {
+    "id": "synthetic_0105",
+    "audio_path": "data/raw/synthetic/wavs/sample_0105.wav",
+    "transcript": "yes zero",
+    "duration": 1.638125
+  },
+  {
+    "id": "synthetic_0106",
+    "audio_path": "data/raw/synthetic/wavs/sample_0106.wav",
+    "transcript": "seven",
+    "duration": 0.8825625
+  },
+  {
+    "id": "synthetic_0107",
+    "audio_path": "data/raw/synthetic/wavs/sample_0107.wav",
+    "transcript": "seven",
+    "duration": 0.74775
+  },
+  {
+    "id": "synthetic_0108",
+    "audio_path": "data/raw/synthetic/wavs/sample_0108.wav",
+    "transcript": "hubert hello",
+    "duration": 1.417625
+  },
+  {
+    "id": "synthetic_0109",
+    "audio_path": "data/raw/synthetic/wavs/sample_0109.wav",
     "transcript": "mind",
-    "duration": 0.81325
+    "duration": 0.79725
   },
   {
-    "id": "synthetic_0098",
-    "audio_path": "data/raw/synthetic/wavs/sample_0098.wav",
+    "id": "synthetic_0110",
+    "audio_path": "data/raw/synthetic/wavs/sample_0110.wav",
+    "transcript": "audio",
+    "duration": 0.60525
+  },
+  {
+    "id": "synthetic_0111",
+    "audio_path": "data/raw/synthetic/wavs/sample_0111.wav",
+    "transcript": "nine no",
+    "duration": 1.556375
+  },
+  {
+    "id": "synthetic_0112",
+    "audio_path": "data/raw/synthetic/wavs/sample_0112.wav",
     "transcript": "four",
-    "duration": 0.73075
+    "duration": 0.70625
   },
   {
-    "id": "synthetic_0099",
-    "audio_path": "data/raw/synthetic/wavs/sample_0099.wav",
-    "transcript": "three hello",
-    "duration": 1.386125
+    "id": "synthetic_0113",
+    "audio_path": "data/raw/synthetic/wavs/sample_0113.wav",
+    "transcript": "deep",
+    "duration": 0.8525
+  },
+  {
+    "id": "synthetic_0114",
+    "audio_path": "data/raw/synthetic/wavs/sample_0114.wav",
+    "transcript": "speech five",
+    "duration": 1.5245
+  },
+  {
+    "id": "synthetic_0115",
+    "audio_path": "data/raw/synthetic/wavs/sample_0115.wav",
+    "transcript": "six",
+    "duration": 0.7424375
+  },
+  {
+    "id": "synthetic_0116",
+    "audio_path": "data/raw/synthetic/wavs/sample_0116.wav",
+    "transcript": "two",
+    "duration": 0.6128125
+  },
+  {
+    "id": "synthetic_0117",
+    "audio_path": "data/raw/synthetic/wavs/sample_0117.wav",
+    "transcript": "world two",
+    "duration": 1.598375
+  },
+  {
+    "id": "synthetic_0118",
+    "audio_path": "data/raw/synthetic/wavs/sample_0118.wav",
+    "transcript": "hubert",
+    "duration": 0.833
+  },
+  {
+    "id": "synthetic_0119",
+    "audio_path": "data/raw/synthetic/wavs/sample_0119.wav",
+    "transcript": "deep",
+    "duration": 0.6409375
   }
 ]

@@ -1,8 +1,10 @@
 """FastAPI Backend Server for Interactive HuBERT ASR, Real Dataset & XAI Studio."""
 
+import base64
 import io
 import json
 import os
+import random
 import threading
 import time
 from pathlib import Path
@@ -80,7 +82,61 @@ class StudioState:
         self.last_sample_rate = 16000
         self.test_clean_samples: List[Dict] = []
         self.sota_runner = None
+        self.pretrain_thread: Optional[threading.Thread] = None
+        self.is_pretraining = False
+        self.should_stop_pretraining = False
+        self.streaming_components = None
+        self.init_pretrain_status()
         self.init_model()
+
+    def init_pretrain_status(self):
+        pretrain_log = Path("logs/pretrain_history.json")
+        if pretrain_log.exists():
+            try:
+                with open(pretrain_log, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    h = data.get("history", [])
+                    last_entry = h[-1] if h else {}
+                    self.pretrain_status = {
+                        "is_running": False,
+                        "step": data.get("total_steps", 0),
+                        "total_steps": max(50, data.get("total_steps", 50)),
+                        "loss": last_entry.get("loss", 4.8),
+                        "accuracy": last_entry.get("masked_accuracy_pct", 1.0),
+                        "cumulative_audio_sec": last_entry.get("cumulative_audio_sec", 0.0),
+                        "cumulative_audio_hours": data.get("cumulative_audio_hours", 0.0),
+                        "disk_space_saved_mb": round((data.get("cumulative_audio_hours", 0.0) * 3600.0 * 32000) / 1024 / 1024, 2),
+                        "active_voice": last_entry.get("active_voices", ["lessac"])[0],
+                        "sample_prompt": last_entry.get("sample_prompt", ""),
+                        "history": h,
+                    }
+                    return
+            except Exception:
+                pass
+
+        self.pretrain_status = {
+            "is_running": False,
+            "step": 0,
+            "total_steps": 50,
+            "loss": 4.85,
+            "accuracy": 1.0,
+            "cumulative_audio_sec": 0.0,
+            "cumulative_audio_hours": 0.0,
+            "disk_space_saved_mb": 0.0,
+            "active_voice": "lessac",
+            "sample_prompt": "",
+            "history": [],
+        }
+
+    def get_streaming_components(self):
+        if self.streaming_components is None:
+            from src.data.streaming_piper import PiperVoiceManager, ProceduralTextSampler, AcousticUnitExtractor
+            self.streaming_components = {
+                "voice_mgr": PiperVoiceManager(),
+                "text_sampler": ProceduralTextSampler(),
+                "unit_extractor": AcousticUnitExtractor(num_clusters=100),
+            }
+        return self.streaming_components
 
     def load_dataset_manifests(self):
         manifest_path = Path("data/librispeech/librispeech_all.json")
@@ -649,6 +705,180 @@ def compare_sota_sample(req: SOTACompareRequest):
             return {"error": "No audio sample available for comparison."}
 
     return runner.compare_audio(audio_path, ground_truth=ground_truth, blank_penalty=req.blank_penalty)
+
+
+# -------------------------------------------------------------
+# Piper SSL Pre-training Endpoints (0-Disk Streaming)
+# -------------------------------------------------------------
+class PretrainStartRequest(BaseModel):
+    steps: int = 50
+    batch_size: int = 4
+    lr: float = 3e-4
+    num_clusters: int = 100
+
+
+def background_pretrain_worker(steps: int = 50, batch_size: int = 4, lr: float = 3e-4, num_clusters: int = 100):
+    from src.data.streaming_piper import PiperStreamingDataset, collate_pretrain_batch
+    from src.models.hubert_pretrain import HuBERTForPreTraining
+    from torch.utils.data import DataLoader
+
+    state.is_pretraining = True
+    state.should_stop_pretraining = False
+    state.pretrain_status["is_running"] = True
+    state.pretrain_status["total_steps"] = steps
+
+    comps = state.get_streaming_components()
+    voice_mgr = comps["voice_mgr"]
+    text_sampler = comps["text_sampler"]
+    unit_extractor = comps["unit_extractor"]
+
+    dataset = PiperStreamingDataset(
+        voice_manager=voice_mgr,
+        text_sampler=text_sampler,
+        unit_extractor=unit_extractor,
+    )
+    dataloader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        collate_fn=collate_pretrain_batch,
+    )
+
+    config = HuBERTConfig(
+        encoder_layers=4,
+        encoder_heads=4,
+        encoder_embed_dim=256,
+        encoder_ffn_dim=1024,
+    )
+    pretrain_model = HuBERTForPreTraining(config=config, num_clusters=num_clusters).to(state.device)
+    optimizer = torch.optim.AdamW(pretrain_model.parameters(), lr=lr, betas=(0.9, 0.98), weight_decay=0.01)
+    scaler = torch.cuda.amp.GradScaler(enabled=(state.device == "cuda"))
+
+    data_iter = iter(dataloader)
+    total_audio_sec = state.pretrain_status.get("cumulative_audio_sec", 0.0)
+    current_step = state.pretrain_status.get("step", 0)
+
+    for i in range(steps):
+        if state.should_stop_pretraining:
+            break
+        current_step += 1
+        batch = next(data_iter)
+        audio = batch["audio"].to(state.device)
+        targets = batch["target_clusters"].to(state.device)
+        batch_dur = sum(batch["durations"])
+        total_audio_sec += batch_dur
+
+        optimizer.zero_grad()
+        with torch.amp.autocast(device_type="cuda" if state.device == "cuda" else "cpu", enabled=(state.device == "cuda")):
+            outputs = pretrain_model(audio=audio, target_clusters=targets)
+            loss = outputs["loss"]
+            acc = outputs["accuracy"]
+
+        scaler.scale(loss).backward()
+        scaler.unscale_(optimizer)
+        torch.nn.utils.clip_grad_norm_(pretrain_model.parameters(), max_norm=1.0)
+        scaler.step(optimizer)
+        scaler.update()
+
+        loss_val = round(float(loss.item()), 4)
+        acc_val = round(float(acc.item() * 100.0), 2) if acc is not None else 0.0
+        saved_mb = round((total_audio_sec * 32000) / 1024 / 1024, 2)
+
+        entry = {
+            "step": current_step,
+            "loss": loss_val,
+            "masked_accuracy_pct": acc_val,
+            "lr": lr,
+            "cumulative_audio_sec": round(total_audio_sec, 2),
+            "cumulative_audio_hours": round(total_audio_sec / 3600.0, 4),
+            "disk_bytes_used": 0,
+            "active_voices": batch["voices"],
+            "sample_prompt": batch["texts"][0],
+        }
+        state.pretrain_status["step"] = current_step
+        state.pretrain_status["loss"] = loss_val
+        state.pretrain_status["accuracy"] = acc_val
+        state.pretrain_status["cumulative_audio_sec"] = round(total_audio_sec, 2)
+        state.pretrain_status["cumulative_audio_hours"] = round(total_audio_sec / 3600.0, 4)
+        state.pretrain_status["disk_space_saved_mb"] = saved_mb
+        state.pretrain_status["active_voice"] = batch["voices"][0]
+        state.pretrain_status["sample_prompt"] = batch["texts"][0]
+        state.pretrain_status["history"].append(entry)
+
+        if current_step % 10 == 0 or i == steps - 1 or state.should_stop_pretraining:
+            pretrain_model.save_pretrained_backbone("checkpoints/hubert_piper_pretrained.pt")
+            with open("logs/pretrain_history.json", "w", encoding="utf-8") as f:
+                json.dump({
+                    "total_steps": current_step,
+                    "cumulative_audio_hours": round(total_audio_sec / 3600.0, 4),
+                    "disk_space_used_mb": 0.0,
+                    "history": state.pretrain_status["history"],
+                }, f, indent=2)
+
+    state.is_pretraining = False
+    state.pretrain_status["is_running"] = False
+
+
+@app.get("/api/pretrain/status")
+def get_pretrain_status():
+    return state.pretrain_status
+
+
+@app.post("/api/pretrain/start")
+def start_pretrain(req: PretrainStartRequest):
+    if state.is_pretraining:
+        return {"status": "already_running"}
+    state.pretrain_thread = threading.Thread(
+        target=background_pretrain_worker,
+        args=(req.steps, req.batch_size, req.lr, req.num_clusters),
+        daemon=True,
+    )
+    state.pretrain_thread.start()
+    return {"status": "started", "steps": req.steps}
+
+
+@app.post("/api/pretrain/stop")
+def stop_pretrain():
+    if not state.is_pretraining:
+        return {"status": "not_running"}
+    state.should_stop_pretraining = True
+    return {"status": "stopping"}
+
+
+@app.get("/api/pretrain/preview")
+def preview_streaming_sample():
+    comps = state.get_streaming_components()
+    voice_mgr = comps["voice_mgr"]
+    text_sampler = comps["text_sampler"]
+    unit_extractor = comps["unit_extractor"]
+
+    text = text_sampler.sample_sentence()
+    waveform, voice_name, dur = voice_mgr.synthesize_to_tensor_16k(text)
+    _, cluster_labels = unit_extractor.get_cluster_labels(waveform)
+
+    # Encode audio into base64
+    buf = io.BytesIO()
+    sf.write(buf, waveform.numpy(), 16000, format="WAV")
+    buf.seek(0)
+    audio_b64 = base64.b64encode(buf.read()).decode("utf-8")
+
+    seq_len = len(cluster_labels)
+    masked_indices = []
+    if seq_len > 16:
+        start1 = random.randint(3, seq_len // 2 - 4)
+        masked_indices.extend(list(range(start1, min(seq_len, start1 + 8))))
+        if seq_len > 35:
+            start2 = random.randint(seq_len // 2 + 2, seq_len - 10)
+            masked_indices.extend(list(range(start2, min(seq_len, start2 + 8))))
+
+    return {
+        "text": text,
+        "voice": voice_name,
+        "duration": round(dur, 2),
+        "num_frames": seq_len,
+        "clusters": cluster_labels.tolist()[:75],
+        "masked_indices": masked_indices,
+        "audio_base64": f"data:audio/wav;base64,{audio_b64}",
+    }
 
 
 # Serve HTML Dashboard

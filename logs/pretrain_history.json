@@ -1,0 +1,407 @@
+{
+  "total_steps": 25,
+  "cumulative_audio_hours": 0.1332,
+  "disk_space_used_mb": 0.0,
+  "history": [
+    {
+      "step": 1,
+      "loss": 4.8185,
+      "masked_accuracy_pct": 1.47,
+      "lr": 2e-05,
+      "cumulative_audio_sec": 15.66,
+      "cumulative_audio_hours": 0.0043,
+      "disk_bytes_used": 0,
+      "active_voices": [
+        "kusal_en_US-kusal-medium",
+        "lessac_en_US-lessac-low",
+        "joe_en_US-joe-medium",
+        "joe_en_US-joe-medium"
+      ],
+      "sample_prompt": "Let us review the experimental training data before making a decision."
+    },
+    {
+      "step": 2,
+      "loss": 4.8428,
+      "masked_accuracy_pct": 1.24,
+      "lr": 4e-05,
+      "cumulative_audio_sec": 35.42,
+      "cumulative_audio_hours": 0.0098,
+      "disk_bytes_used": 0,
+      "active_voices": [
+        "joe_en_US-joe-medium",
+        "jenny_dioco_en_GB-jenny_dioco-medium",
+        "jenny_dioco_en_GB-jenny_dioco-medium",
+        "hfc_female_en_US-hfc_female-medium"
+      ],
+      "sample_prompt": "After hours of testing, the team discovered that blolly directly influences disprivacied."
+    },
+    {
+      "step": 3,
+      "loss": 4.9405,
+      "masked_accuracy_pct": 0.95,
+      "lr": 6e-05,
+      "cumulative_audio_sec": 54.72,
+      "cumulative_audio_hours": 0.0152,
+      "disk_bytes_used": 0,
+      "active_voices": [
+        "amy_en_US-amy-low",
+        "alba_en_GB-alba-medium",
+        "hfc_female_en_US-hfc_female-medium",
+        "mls_fr_FR-mls-medium"
+      ],
+      "sample_prompt": "After hours of testing, the team discovered that criteriology directly influences antiboxing."
+    },
+    {
+      "step": 4,
+      "loss": 4.8175,
+      "masked_accuracy_pct": 1.24,
+      "lr": 8e-05,
+      "cumulative_audio_sec": 72.67,
+      "cumulative_audio_hours": 0.0202,
+      "disk_bytes_used": 0,
+      "active_voices": [
+        "cori_en_GB-cori-high",
+        "joe_en_US-joe-medium",
+        "kusal_en_US-kusal-medium",
+        "ljspeech_en_US-ljspeech-medium"
+      ],
+      "sample_prompt": "We noticed that concyclic and budders exhibit strong structural correlation under these conditions."
+    },
+    {
+      "step": 5,
+      "loss": 5.0784,
+      "masked_accuracy_pct": 0.72,
+      "lr": 0.0001,
+      "cumulative_audio_sec": 91.99,
+      "cumulative_audio_hours": 0.0256,
+      "disk_bytes_used": 0,
+      "active_voices": [
+        "alan_en_GB-alan-medium",
+        "kusal_en_US-kusal-medium",
+        "lessac_en_US-lessac-medium",
+        "norman_en_US-norman-medium"
+      ],
+      "sample_prompt": "Before we finalize the bray, let us carefully examine the dividend data."
+    },
+    {
+      "step": 6,
+      "loss": 4.8716,
+      "masked_accuracy_pct": 0.18,
+      "lr": 0.00012,
+      "cumulative_audio_sec": 109.57,
+      "cumulative_audio_hours": 0.0304,
+      "disk_bytes_used": 0,
+      "active_voices": [
+        "alan_en_GB-alan-medium",
+        "john_en_US-john-medium",
+        "lessac_en_US-lessac-low",
+        "cori_en_GB-cori-high"
+      ],
+      "sample_prompt": "Please ensure that the dilaters is thoroughly calibrated before processing the acrocera."
+    },
+    {
+      "step": 7,
+      "loss": 4.8641,
+      "masked_accuracy_pct": 1.14,
+      "lr": 0.00014,
+      "cumulative_audio_sec": 130.68,
+      "cumulative_audio_hours": 0.0363,
+      "disk_bytes_used": 0,
+      "active_voices": [
+        "upmc_fr_FR-upmc-medium",
+        "ryan_en_US-ryan-low",
+        "mls_fr_FR-mls-medium",
+        "ljspeech_en_US-ljspeech-high"
+      ],
+      "sample_prompt": "The technician reported that the chilostoma demonstrated unusual stability near the ferocity."
+    },
+    {
+      "step": 8,
+      "loss": 4.9284,
+      "masked_accuracy_pct": 1.12,
+      "lr": 0.00016,
+      "cumulative_audio_sec": 150.03,
+      "cumulative_audio_hours": 0.0417,
+      "disk_bytes_used": 0,
+      "active_voices": [
+        "lessac_en_US-lessac-low",
+        "hfc_female_en_US-hfc_female-medium",
+        "sam_en_US-sam-medium",
+        "kusal_en_US-kusal-medium"
+      ],
+      "sample_prompt": "The unexpected aerobus caused a significant shift in the crithmene measurement yesterday."
+    },
+    {
+      "step": 9,
+      "loss": 4.8163,
+      "masked_accuracy_pct": 0.38,
+      "lr": 0.00018,
+      "cumulative_audio_sec": 167.95,
+      "cumulative_audio_hours": 0.0467,
+      "disk_bytes_used": 0,
+      "active_voices": [
+        "ryan_en_US-ryan-low",
+        "alba_en_GB-alba-medium",
+        "cori_en_GB-cori-medium",
+        "lessac_en_US-lessac-high"
+      ],
+      "sample_prompt": "After hours of testing, the team discovered that allegiances directly influences figurations."
+    },
+    {
+      "step": 10,
+      "loss": 4.8777,
+      "masked_accuracy_pct": 0.78,
+      "lr": 0.0002,
+      "cumulative_audio_sec": 186.78,
+      "cumulative_audio_hours": 0.0519,
+      "disk_bytes_used": 0,
+      "active_voices": [
+        "danny_en_US-danny-low",
+        "hfc_male_en_US-hfc_male-medium",
+        "hfc_male_en_US-hfc_male-medium",
+        "ljspeech_en_US-ljspeech-medium"
+      ],
+      "sample_prompt": "The technician reported that the boxtop demonstrated unusual stability near the carancha."
+    },
+    {
+      "step": 11,
+      "loss": 4.8633,
+      "masked_accuracy_pct": 0.35,
+      "lr": 0.00022,
+      "cumulative_audio_sec": 206.45,
+      "cumulative_audio_hours": 0.0573,
+      "disk_bytes_used": 0,
+      "active_voices": [
+        "tom_fr_FR-tom-medium",
+        "hfc_female_en_US-hfc_female-medium",
+        "hfc_male_en_US-hfc_male-medium",
+        "alba_en_GB-alba-medium"
+      ],
+      "sample_prompt": "In modern acoustic engineering, diffracting plays an essential role alongside coeternal."
+    },
+    {
+      "step": 12,
+      "loss": 4.857,
+      "masked_accuracy_pct": 0.49,
+      "lr": 0.00024,
+      "cumulative_audio_sec": 227.38,
+      "cumulative_audio_hours": 0.0632,
+      "disk_bytes_used": 0,
+      "active_voices": [
+        "cori_en_GB-cori-medium",
+        "northern_english_male_en_GB-northern_english_male-medium",
+        "gilles_fr_FR-gilles-low",
+        "lessac_en_US-lessac-low"
+      ],
+      "sample_prompt": "Please ensure that the composed is thoroughly calibrated before processing the askarel."
+    },
+    {
+      "step": 13,
+      "loss": 4.8973,
+      "masked_accuracy_pct": 0.54,
+      "lr": 0.00026,
+      "cumulative_audio_sec": 247.67,
+      "cumulative_audio_hours": 0.0688,
+      "disk_bytes_used": 0,
+      "active_voices": [
+        "ryan_en_US-ryan-medium",
+        "tom_fr_FR-tom-medium",
+        "kathleen_en_US-kathleen-low",
+        "gilles_fr_FR-gilles-low"
+      ],
+      "sample_prompt": "Before we finalize the callower, let us carefully examine the encharge data."
+    },
+    {
+      "step": 14,
+      "loss": 4.8521,
+      "masked_accuracy_pct": 0.92,
+      "lr": 0.00028,
+      "cumulative_audio_sec": 265.02,
+      "cumulative_audio_hours": 0.0736,
+      "disk_bytes_used": 0,
+      "active_voices": [
+        "cori_en_GB-cori-medium",
+        "alba_en_GB-alba-medium",
+        "lessac_en_US-lessac-high",
+        "mike_en_US-mike-medium"
+      ],
+      "sample_prompt": "We definitely need to schedule another brainstorming session soon."
+    },
+    {
+      "step": 15,
+      "loss": 4.9223,
+      "masked_accuracy_pct": 0.6,
+      "lr": 0.0003,
+      "cumulative_audio_sec": 286.46,
+      "cumulative_audio_hours": 0.0796,
+      "disk_bytes_used": 0,
+      "active_voices": [
+        "sam_en_US-sam-medium",
+        "ljspeech_en_US-ljspeech-high",
+        "lessac_en_US-lessac-high",
+        "amy_en_US-amy-medium"
+      ],
+      "sample_prompt": "In modern acoustic engineering, calcaneus plays an essential role alongside albinal."
+    },
+    {
+      "step": 16,
+      "loss": 4.8167,
+      "masked_accuracy_pct": 0.44,
+      "lr": 0.0002927,
+      "cumulative_audio_sec": 304.39,
+      "cumulative_audio_hours": 0.0846,
+      "disk_bytes_used": 0,
+      "active_voices": [
+        "ryan_en_US-ryan-low",
+        "joe_en_US-joe-medium",
+        "alba_en_GB-alba-medium",
+        "upmc_fr_FR-upmc-medium"
+      ],
+      "sample_prompt": "It is evident that dipole provides substantial advantages when paired with drysaltery."
+    },
+    {
+      "step": 17,
+      "loss": 4.8902,
+      "masked_accuracy_pct": 1.14,
+      "lr": 0.0002714,
+      "cumulative_audio_sec": 322.91,
+      "cumulative_audio_hours": 0.0897,
+      "disk_bytes_used": 0,
+      "active_voices": [
+        "ljspeech_en_US-ljspeech-medium",
+        "tom_fr_FR-tom-medium",
+        "john_en_US-john-medium",
+        "gilles_fr_FR-gilles-low"
+      ],
+      "sample_prompt": "The weather has been unusually pleasant for this time of year."
+    },
+    {
+      "step": 18,
+      "loss": 4.8001,
+      "masked_accuracy_pct": 0.4,
+      "lr": 0.0002382,
+      "cumulative_audio_sec": 342.48,
+      "cumulative_audio_hours": 0.0951,
+      "disk_bytes_used": 0,
+      "active_voices": [
+        "amy_en_US-amy-medium",
+        "ljspeech_en_US-ljspeech-medium",
+        "norman_en_US-norman-medium",
+        "sam_en_US-sam-medium"
+      ],
+      "sample_prompt": "The unexpected feathery caused a significant shift in the cynodon measurement yesterday."
+    },
+    {
+      "step": 19,
+      "loss": 4.8352,
+      "masked_accuracy_pct": 0.29,
+      "lr": 0.0001964,
+      "cumulative_audio_sec": 365.32,
+      "cumulative_audio_hours": 0.1015,
+      "disk_bytes_used": 0,
+      "active_voices": [
+        "upmc_fr_FR-upmc-medium",
+        "upmc_fr_FR-upmc-medium",
+        "jenny_dioco_en_GB-jenny_dioco-medium",
+        "tom_fr_FR-tom-medium"
+      ],
+      "sample_prompt": "The primary objective is to enhance cinched while maintaining strict control over cottus."
+    },
+    {
+      "step": 20,
+      "loss": 4.9552,
+      "masked_accuracy_pct": 0.57,
+      "lr": 0.00015,
+      "cumulative_audio_sec": 383.83,
+      "cumulative_audio_hours": 0.1066,
+      "disk_bytes_used": 0,
+      "active_voices": [
+        "lessac_en_US-lessac-low",
+        "ryan_en_US-ryan-high",
+        "alan_en_GB-alan-medium",
+        "mike_en_US-mike-medium"
+      ],
+      "sample_prompt": "The unexpected daytimes caused a significant shift in the chairmans measurement yesterday."
+    },
+    {
+      "step": 21,
+      "loss": 4.8635,
+      "masked_accuracy_pct": 1.16,
+      "lr": 0.0001036,
+      "cumulative_audio_sec": 404.05,
+      "cumulative_audio_hours": 0.1122,
+      "disk_bytes_used": 0,
+      "active_voices": [
+        "siwis_fr_FR-siwis-medium",
+        "amy_en_US-amy-low",
+        "hfc_male_en_US-hfc_male-medium",
+        "lessac_en_US-lessac-low"
+      ],
+      "sample_prompt": "Can you verify whether the carryovers system is properly connected to the ewelease?"
+    },
+    {
+      "step": 22,
+      "loss": 4.8093,
+      "masked_accuracy_pct": 1.08,
+      "lr": 6.18e-05,
+      "cumulative_audio_sec": 422.5,
+      "cumulative_audio_hours": 0.1174,
+      "disk_bytes_used": 0,
+      "active_voices": [
+        "upmc_fr_FR-upmc-medium",
+        "cori_en_GB-cori-high",
+        "ljspeech_en_US-ljspeech-medium",
+        "hfc_female_en_US-hfc_female-medium"
+      ],
+      "sample_prompt": "Have you considered how chlorodizing might affect the performance of the chainsmith?"
+    },
+    {
+      "step": 23,
+      "loss": 4.8066,
+      "masked_accuracy_pct": 1.76,
+      "lr": 2.86e-05,
+      "cumulative_audio_sec": 443.63,
+      "cumulative_audio_hours": 0.1232,
+      "disk_bytes_used": 0,
+      "active_voices": [
+        "upmc_fr_FR-upmc-medium",
+        "ljspeech_en_US-ljspeech-high",
+        "amy_en_US-amy-medium",
+        "lessac_en_US-lessac-low"
+      ],
+      "sample_prompt": "The weather has been unusually pleasant for this time of year."
+    },
+    {
+      "step": 24,
+      "loss": 4.875,
+      "masked_accuracy_pct": 1.46,
+      "lr": 1.5e-05,
+      "cumulative_audio_sec": 461.81,
+      "cumulative_audio_hours": 0.1283,
+      "disk_bytes_used": 0,
+      "active_voices": [
+        "ryan_en_US-ryan-high",
+        "mike_en_US-mike-medium",
+        "siwis_fr_FR-siwis-medium",
+        "ryan_en_US-ryan-high"
+      ],
+      "sample_prompt": "Have you considered how adunc might affect the performance of the bowshot?"
+    },
+    {
+      "step": 25,
+      "loss": 4.9322,
+      "masked_accuracy_pct": 0.89,
+      "lr": 1.5e-05,
+      "cumulative_audio_sec": 479.68,
+      "cumulative_audio_hours": 0.1332,
+      "disk_bytes_used": 0,
+      "active_voices": [
+        "northern_english_male_en_GB-northern_english_male-medium",
+        "lessac_en_US-lessac-medium",
+        "mike_en_US-mike-medium",
+        "hfc_male_en_US-hfc_male-medium"
+      ],
+      "sample_prompt": "We should investigate the relationship between cryptomonad and alcelaphine during the next experiment."
+    }
+  ]
+}

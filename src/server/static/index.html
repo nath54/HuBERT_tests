@@ -52,6 +52,9 @@
         <button onclick="switchMainTab('sota')" id="tabBtn-sota" class="main-tab-btn px-4 py-2 bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5">
           <span>🏆</span> SOTA & Whisper Shootout
         </button>
+        <button onclick="switchMainTab('pretrain')" id="tabBtn-pretrain" class="main-tab-btn px-4 py-2 bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5">
+          <span>🧪</span> Piper SSL Pre-train (0-Disk)
+        </button>
       </div>
     </div>
 
@@ -802,6 +805,204 @@
 
     </div>
 
+    <!-- ============================================================= -->
+    <!-- TAB 6: PIPER SSL PRE-TRAINING (0-DISK STREAMING)              -->
+    <!-- ============================================================= -->
+    <div id="tab-pretrain" class="main-tab-content hidden space-y-6">
+
+      <!-- Hero Header & Methodology Banner -->
+      <div class="bg-gradient-to-r from-slate-900 via-purple-950 to-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl">
+        <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+          <div>
+            <div class="flex items-center gap-2 mb-1">
+              <span class="badge-pill bg-purple-500/20 text-purple-300 border border-purple-500/30">HuBERT SSL Pre-Training</span>
+              <span class="badge-pill bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">0 Bytes Audio on Disk (In-RAM)</span>
+              <span class="badge-pill bg-amber-500/20 text-amber-400 border border-amber-500/30">34 Piper Neural Voices</span>
+            </div>
+            <h2 class="text-xl font-bold text-white">Self-Supervised Pre-Training with Streaming Piper Voices</h2>
+            <p class="text-xs text-slate-400 mt-1 max-w-3xl">
+              Adapted from <strong class="text-indigo-300">MADGen</strong>: Infinite diverse multi-speaker speech is synthesized directly in RAM using 100k dictionary constraints, mapped to 39-dim MFCC acoustic cluster units, and masked for HuBERT self-supervised pre-training without consuming any hard drive storage.
+            </p>
+          </div>
+          <div class="flex items-center gap-2">
+            <span id="pretrainStatusBadge" class="badge-pill bg-slate-800 text-slate-300 border border-slate-700">Idle</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Real-Time Metric Gauges -->
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl">
+          <span class="text-[10px] uppercase font-mono tracking-wider text-slate-400 block mb-1">Synthesized in RAM</span>
+          <div class="flex items-baseline gap-1.5">
+            <span id="statPretrainSec" class="text-2xl font-black text-white">0.0</span>
+            <span class="text-xs font-mono text-slate-400">sec</span>
+          </div>
+          <span id="statPretrainHours" class="text-[11px] font-mono text-indigo-400 block mt-0.5">0.000 hours</span>
+        </div>
+
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl">
+          <span class="text-[10px] uppercase font-mono tracking-wider text-slate-400 block mb-1">Disk Space Saved</span>
+          <div class="flex items-baseline gap-1.5">
+            <span id="statDiskSaved" class="text-2xl font-black text-emerald-400">0.00</span>
+            <span class="text-xs font-mono text-emerald-300">MB</span>
+          </div>
+          <span class="text-[11px] font-mono text-slate-400 block mt-0.5">0 bytes stored on disk</span>
+        </div>
+
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl">
+          <span class="text-[10px] uppercase font-mono tracking-wider text-slate-400 block mb-1">Masked Unit Loss</span>
+          <div class="flex items-baseline gap-1.5">
+            <span id="statPretrainLoss" class="text-2xl font-black text-amber-400">4.85</span>
+            <span class="text-xs font-mono text-slate-400">CE</span>
+          </div>
+          <span class="text-[11px] font-mono text-slate-400 block mt-0.5">ln(100) = 4.60 random</span>
+        </div>
+
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl">
+          <span class="text-[10px] uppercase font-mono tracking-wider text-slate-400 block mb-1">Masked Prediction Acc</span>
+          <div class="flex items-baseline gap-1.5">
+            <span id="statPretrainAcc" class="text-2xl font-black text-sky-400">1.0</span>
+            <span class="text-xs font-mono text-sky-300">%</span>
+          </div>
+          <span class="text-[11px] font-mono text-slate-400 block mt-0.5">100 clusters (1% baseline)</span>
+        </div>
+      </div>
+
+      <!-- Main Layout: Charts & Controls -->
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+        <!-- Left Column: Pre-training Loss & Accuracy Canvas Chart (8 cols) -->
+        <div class="lg:col-span-8 space-y-6">
+          <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+            <div class="flex justify-between items-center">
+              <div>
+                <h3 class="text-md font-bold text-white flex items-center gap-2">
+                  <span>📈</span> Pre-training Loss & Masked Cluster Accuracy
+                </h3>
+                <p class="text-xs text-slate-400">
+                  Cross-Entropy loss and top-1 cluster accuracy over masked 200ms frame spans.
+                </p>
+              </div>
+              <div class="flex items-center gap-3 text-xs font-mono">
+                <span class="flex items-center gap-1.5 text-amber-400">
+                  <span class="w-2.5 h-2.5 rounded-full bg-amber-400"></span> Pre-train Loss
+                </span>
+                <span class="flex items-center gap-1.5 text-sky-400">
+                  <span class="w-2.5 h-2.5 rounded-full bg-sky-400"></span> Masked Acc (%)
+                </span>
+              </div>
+            </div>
+
+            <div class="h-64 w-full bg-slate-950 rounded-xl p-3 border border-slate-800 relative">
+              <canvas id="pretrainChartCanvas" class="w-full h-full"></canvas>
+            </div>
+          </div>
+
+          <!-- Pre-training Streaming History Log Feed -->
+          <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-3">
+            <div class="flex justify-between items-center">
+              <h3 class="text-md font-bold text-white flex items-center gap-2">
+                <span>📋</span> Streaming Batch Synthesis Log
+              </h3>
+              <span id="pretrainActiveVoiceBadge" class="text-xs font-mono text-indigo-300 bg-slate-950 px-2.5 py-1 rounded-lg border border-slate-800">
+                Voice: lessac_en_US
+              </span>
+            </div>
+            <div id="pretrainLogFeed" class="bg-slate-950 rounded-xl p-4 border border-slate-800 font-mono text-xs text-slate-300 h-44 overflow-y-auto space-y-1.5">
+              <div class="text-slate-500 italic">Ready to stream on-the-fly multi-speaker training data...</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right Column: Control Panel & Live Voice Inspector (4 cols) -->
+        <div class="lg:col-span-4 space-y-6">
+
+          <!-- Controller -->
+          <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+            <h3 class="text-md font-bold text-white flex items-center gap-2">
+              <span>⚙️</span> Pre-training Controller
+            </h3>
+
+            <div class="space-y-3 text-xs">
+              <div>
+                <label class="text-slate-400 block mb-1">Pre-training Steps:</label>
+                <input type="number" id="pretrainStepsInput" value="50" min="10" max="1000" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-white font-mono focus:border-indigo-500 focus:outline-none" />
+              </div>
+
+              <div>
+                <label class="text-slate-400 block mb-1">Batch Size (Utterances per step):</label>
+                <select id="pretrainBatchSizeSelect" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-white font-mono focus:border-indigo-500 focus:outline-none">
+                  <option value="2">2 utterances / step</option>
+                  <option value="4" selected>4 utterances / step (Recommended)</option>
+                  <option value="8">8 utterances / step</option>
+                </select>
+              </div>
+
+              <div>
+                <label class="text-slate-400 block mb-1">Learning Rate:</label>
+                <input type="number" id="pretrainLRInput" value="0.0003" step="0.0001" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-white font-mono focus:border-indigo-500 focus:outline-none" />
+              </div>
+            </div>
+
+            <div class="flex gap-2 pt-2">
+              <button onclick="triggerPretrainStart()" id="btnStartPretrain" class="flex-1 py-2.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-xl text-xs font-bold shadow-lg transition-all flex items-center justify-center gap-1.5">
+                <span>▶</span> Start Pre-training
+              </button>
+              <button onclick="triggerPretrainStop()" id="btnStopPretrain" class="px-4 py-2.5 bg-slate-800 hover:bg-rose-900/60 border border-slate-700 text-slate-300 hover:text-white rounded-xl text-xs font-bold transition-all">
+                <span>⏹</span> Stop
+              </button>
+            </div>
+          </div>
+
+          <!-- On-The-Fly Voice & Acoustic Unit Inspector -->
+          <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-3">
+            <div class="flex justify-between items-center">
+              <h3 class="text-md font-bold text-white flex items-center gap-2">
+                <span>🔍</span> Acoustic Unit Inspector
+              </h3>
+            </div>
+            <p class="text-[11px] text-slate-400 leading-relaxed">
+              Synthesize a sentence on-the-fly and inspect the 20ms frame acoustic cluster units ($K=100$) and masked span intervals in real time.
+            </p>
+
+            <button onclick="previewStreamingAudioSample()" id="btnPreviewStreaming" class="w-full py-2 bg-slate-800 hover:bg-indigo-900/50 border border-slate-700 text-slate-200 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5">
+              <span>🎲</span> Generate Sample (In-RAM)
+            </button>
+
+            <!-- Preview Card -->
+            <div id="streamingPreviewBox" class="p-3 bg-slate-950 rounded-xl border border-slate-800 space-y-2.5 hidden">
+              <div class="flex justify-between items-center text-[10px] font-mono text-slate-400">
+                <span id="previewVoiceBadge" class="text-indigo-400 font-bold">-</span>
+                <span id="previewDurationBadge">-</span>
+              </div>
+
+              <audio id="streamingPreviewAudio" controls class="w-full h-8"></audio>
+
+              <div class="p-2 bg-slate-900 rounded-lg border border-slate-800 text-[11px] text-slate-200">
+                <span class="text-[9px] uppercase font-mono text-slate-400 block mb-0.5">Synthesized Text:</span>
+                <p id="previewTextContent" class="italic font-medium leading-tight text-slate-300">-</p>
+              </div>
+
+              <!-- Frame Ribbon -->
+              <div>
+                <div class="flex justify-between items-center text-[10px] font-mono mb-1">
+                  <span class="text-slate-400">Acoustic Unit Stream (20ms frames):</span>
+                  <span class="text-rose-400 font-bold">■ Masked Spans</span>
+                </div>
+                <div id="unitRibbonContainer" class="flex flex-wrap gap-1 max-h-32 overflow-y-auto p-1 bg-slate-900 rounded-lg border border-slate-800 font-mono text-[9px]">
+                  <!-- Populated by JS -->
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+      </div>
+
+    </div>
+
   </div>
 
   <script>
@@ -831,6 +1032,7 @@
       if (tabKey === "training") loadTrainingLogs();
       if (tabKey === "benchmarks") loadBenchmarks();
       if (tabKey === "sota") loadSOTABenchmark();
+      if (tabKey === "pretrain") loadPretrainStatus();
     }
 
     // -------------------------------------------------------------
@@ -1606,6 +1808,286 @@
       } finally {
         btn.disabled = false;
         btn.innerHTML = `<span>📊</span> Re-run Benchmark (25 utts)`;
+      }
+    }
+
+    // -------------------------------------------------------------
+    // TAB 6: PIPER SSL PRE-TRAINING (0-DISK STREAMING)
+    // -------------------------------------------------------------
+    let pretrainPollInterval = null;
+
+    async function loadPretrainStatus() {
+      try {
+        const res = await fetch("/api/pretrain/status");
+        if (!res.ok) return;
+        const data = await res.json();
+
+        // Update gauges
+        const sec = data.cumulative_audio_sec || 0;
+        const hours = data.cumulative_audio_hours || (sec / 3600);
+        const savedMb = data.disk_space_saved_mb || (sec * 32000 / 1024 / 1024);
+
+        document.getElementById("statPretrainSec").innerText = sec.toFixed(1);
+        document.getElementById("statPretrainHours").innerText = `${hours.toFixed(4)} hours`;
+        document.getElementById("statDiskSaved").innerText = savedMb.toFixed(2);
+        document.getElementById("statPretrainLoss").innerText = data.loss ? data.loss.toFixed(3) : "4.85";
+        document.getElementById("statPretrainAcc").innerText = (data.accuracy !== undefined && data.accuracy !== null) ? data.accuracy.toFixed(1) : "1.0";
+
+        if (data.active_voice) {
+          document.getElementById("pretrainActiveVoiceBadge").innerText = `Voice: ${data.active_voice}`;
+        }
+
+        // Status badge
+        const badge = document.getElementById("pretrainStatusBadge");
+        const btnStart = document.getElementById("btnStartPretrain");
+        const btnStop = document.getElementById("btnStopPretrain");
+
+        if (data.is_running) {
+          badge.className = "badge-pill bg-purple-500/20 text-purple-300 border border-purple-500/40 animate-pulse";
+          badge.innerText = `⚡ Pre-training Live (Step ${data.step}/${data.total_steps || '?'})`;
+          btnStart.disabled = true;
+          btnStart.classList.add("opacity-50", "cursor-not-allowed");
+          btnStop.disabled = false;
+          btnStop.classList.remove("opacity-50", "cursor-not-allowed");
+        } else {
+          badge.className = "badge-pill bg-slate-800 text-slate-300 border border-slate-700";
+          badge.innerText = data.step > 0 ? `Completed ${data.step} Steps` : "Idle";
+          btnStart.disabled = false;
+          btnStart.classList.remove("opacity-50", "cursor-not-allowed");
+          btnStop.disabled = true;
+          btnStop.classList.add("opacity-50", "cursor-not-allowed");
+        }
+
+        // History logs feed
+        const logFeed = document.getElementById("pretrainLogFeed");
+        if (data.history && data.history.length > 0) {
+          logFeed.innerHTML = "";
+          const reversed = [...data.history].reverse();
+          reversed.slice(0, 30).forEach(entry => {
+            const row = document.createElement("div");
+            row.className = "flex items-center justify-between py-1 border-b border-slate-800/60 last:border-0";
+            const voices = entry.active_voices ? entry.active_voices.slice(0, 2).join(", ") : (entry.active_voice || "piper");
+            row.innerHTML = `
+              <span class="text-indigo-400 font-bold">Step ${entry.step}</span>
+              <span class="text-amber-400">Loss: ${entry.loss.toFixed(4)}</span>
+              <span class="text-sky-400">Acc: ${entry.masked_accuracy_pct !== undefined ? entry.masked_accuracy_pct.toFixed(1) : "1.0"}%</span>
+              <span class="text-emerald-400 font-mono">${(entry.cumulative_audio_sec || 0).toFixed(1)}s RAM</span>
+              <span class="text-slate-400 truncate max-w-[120px] text-[10px]">${voices}</span>
+            `;
+            logFeed.appendChild(row);
+          });
+        }
+
+        // Render chart
+        if (data.history && data.history.length > 0) {
+          renderPretrainChart(data.history);
+        }
+
+        // Auto polling
+        if (data.is_running) {
+          if (!pretrainPollInterval) {
+            pretrainPollInterval = setInterval(loadPretrainStatus, 1500);
+          }
+        } else {
+          if (pretrainPollInterval) {
+            clearInterval(pretrainPollInterval);
+            pretrainPollInterval = null;
+          }
+        }
+      } catch (err) {
+        console.error("Error loading pretrain status:", err);
+      }
+    }
+
+    function renderPretrainChart(history) {
+      const canvas = document.getElementById("pretrainChartCanvas");
+      if (!canvas) return;
+      const ctx = canvas.getContext("2d");
+      canvas.width = canvas.parentElement.clientWidth * 2;
+      canvas.height = canvas.parentElement.clientHeight * 2;
+      const W = canvas.width;
+      const H = canvas.height;
+      ctx.clearRect(0, 0, W, H);
+
+      if (!history || history.length === 0) return;
+
+      const paddingLeft = 60;
+      const paddingRight = 60;
+      const paddingTop = 30;
+      const paddingBottom = 40;
+      const plotW = W - paddingLeft - paddingRight;
+      const plotH = H - paddingTop - paddingBottom;
+
+      // Extract series
+      const steps = history.map(h => h.step);
+      const losses = history.map(h => h.loss);
+      const accs = history.map(h => h.masked_accuracy_pct !== undefined ? h.masked_accuracy_pct : 1.0);
+
+      const minLoss = Math.min(...losses) * 0.95;
+      const maxLoss = Math.max(...losses) * 1.05 || 5.0;
+
+      const minAcc = 0;
+      const maxAcc = Math.max(10.0, Math.max(...accs) * 1.2);
+
+      // Grid lines
+      ctx.strokeStyle = "#334155";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 4]);
+
+      for (let i = 0; i <= 4; i++) {
+        const y = paddingTop + (plotH / 4) * i;
+        ctx.beginPath();
+        ctx.moveTo(paddingLeft, y);
+        ctx.lineTo(W - paddingRight, y);
+        ctx.stroke();
+
+        // Loss Y label (Left)
+        const lossVal = maxLoss - (i / 4) * (maxLoss - minLoss);
+        ctx.fillStyle = "#fbbf24";
+        ctx.font = "20px monospace";
+        ctx.textAlign = "right";
+        ctx.fillText(lossVal.toFixed(2), paddingLeft - 10, y + 6);
+
+        // Acc Y label (Right)
+        const accVal = maxAcc - (i / 4) * (maxAcc - minAcc);
+        ctx.fillStyle = "#38bdf8";
+        ctx.textAlign = "left";
+        ctx.fillText(`${accVal.toFixed(1)}%`, W - paddingRight + 10, y + 6);
+      }
+      ctx.setLineDash([]);
+
+      const N = history.length;
+      const getX = (i) => paddingLeft + (i / Math.max(1, N - 1)) * plotW;
+
+      // Draw Loss line (amber)
+      ctx.strokeStyle = "#fbbf24";
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      for (let i = 0; i < N; i++) {
+        const x = getX(i);
+        const y = paddingTop + (1.0 - (losses[i] - minLoss) / Math.max(0.001, maxLoss - minLoss)) * plotH;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+
+      // Draw Accuracy line (sky)
+      ctx.strokeStyle = "#38bdf8";
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      for (let i = 0; i < N; i++) {
+        const x = getX(i);
+        const y = paddingTop + (1.0 - (accs[i] - minAcc) / Math.max(0.001, maxAcc - minAcc)) * plotH;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+
+      // Dots on points
+      for (let i = 0; i < N; i++) {
+        const x = getX(i);
+        const yLoss = paddingTop + (1.0 - (losses[i] - minLoss) / Math.max(0.001, maxLoss - minLoss)) * plotH;
+        const yAcc = paddingTop + (1.0 - (accs[i] - minAcc) / Math.max(0.001, maxAcc - minAcc)) * plotH;
+
+        ctx.fillStyle = "#fbbf24";
+        ctx.beginPath();
+        ctx.arc(x, yLoss, 6, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = "#38bdf8";
+        ctx.beginPath();
+        ctx.arc(x, yAcc, 6, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // X-axis step labels
+      ctx.fillStyle = "#94a3b8";
+      ctx.font = "18px monospace";
+      ctx.textAlign = "center";
+      const stepInterval = Math.max(1, Math.floor(N / 5));
+      for (let i = 0; i < N; i += stepInterval) {
+        ctx.fillText(`Step ${steps[i]}`, getX(i), H - 10);
+      }
+    }
+
+    async function triggerPretrainStart() {
+      const steps = parseInt(document.getElementById("pretrainStepsInput").value) || 50;
+      const batchSize = parseInt(document.getElementById("pretrainBatchSizeSelect").value) || 4;
+      const lr = parseFloat(document.getElementById("pretrainLRInput").value) || 0.0003;
+
+      const btn = document.getElementById("btnStartPretrain");
+      btn.disabled = true;
+      btn.innerHTML = `<span class="animate-spin inline-block mr-1">🌀</span> Starting...`;
+
+      try {
+        await fetch("/api/pretrain/start", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ steps: steps, batch_size: batchSize, lr: lr, num_clusters: 100 })
+        });
+      } finally {
+        btn.innerHTML = `<span>▶</span> Start Pre-training`;
+        loadPretrainStatus();
+      }
+    }
+
+    async function triggerPretrainStop() {
+      const btn = document.getElementById("btnStopPretrain");
+      btn.disabled = true;
+      btn.innerHTML = `<span class="animate-spin inline-block mr-1">🌀</span> Stopping...`;
+      try {
+        await fetch("/api/pretrain/stop", { method: "POST" });
+      } finally {
+        btn.innerHTML = `<span>⏹</span> Stop`;
+        setTimeout(loadPretrainStatus, 1000);
+      }
+    }
+
+    async function previewStreamingAudioSample() {
+      const btn = document.getElementById("btnPreviewStreaming");
+      btn.disabled = true;
+      btn.innerHTML = `<span class="animate-spin inline-block mr-1">🌀</span> Synthesizing in RAM...`;
+
+      try {
+        const res = await fetch("/api/pretrain/preview");
+        if (!res.ok) throw new Error("Synthesis failed");
+        const data = await res.json();
+
+        const box = document.getElementById("streamingPreviewBox");
+        box.classList.remove("hidden");
+
+        document.getElementById("previewVoiceBadge").innerText = `🎙️ ${data.voice}`;
+        document.getElementById("previewDurationBadge").innerText = `⏱️ ${data.duration}s (${data.num_frames} frames)`;
+        document.getElementById("previewTextContent").innerText = `"${data.text}"`;
+
+        const audio = document.getElementById("streamingPreviewAudio");
+        audio.src = data.audio_base64;
+        audio.play().catch(() => {});
+
+        // Render acoustic unit ribbon
+        const ribbon = document.getElementById("unitRibbonContainer");
+        ribbon.innerHTML = "";
+        const maskedSet = new Set(data.masked_indices || []);
+
+        data.clusters.forEach((clusterId, idx) => {
+          const pill = document.createElement("span");
+          const isMasked = maskedSet.has(idx);
+          if (isMasked) {
+            pill.className = "px-1.5 py-0.5 rounded bg-rose-500/30 text-rose-300 border border-rose-500/50 font-bold";
+            pill.innerText = `[M]`;
+            pill.title = `Frame ${idx}: MASKED -> Target Cluster ${clusterId}`;
+          } else {
+            pill.className = "px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700/60";
+            pill.innerText = `u${clusterId}`;
+            pill.title = `Frame ${idx}: Unmasked Acoustic Cluster ${clusterId}`;
+          }
+          ribbon.appendChild(pill);
+        });
+      } catch (err) {
+        alert("Streaming synthesis preview failed: " + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = `<span>🎲</span> Generate Sample (In-RAM)`;
       }
     }
 
