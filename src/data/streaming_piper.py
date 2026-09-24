@@ -4,6 +4,8 @@ Generates infinite diverse synthetic multi-speaker speech entirely in RAM (0 byt
 and assigns k-means acoustic unit pseudo-labels for HuBERT self-supervised pre-training.
 """
 
+import json
+import logging
 import math
 import os
 import random
@@ -105,13 +107,35 @@ class PiperVoiceManager:
 
     def _discover_voices(self):
         if self.voices_dir.exists():
+            import json
+            import piper.phoneme_ids
+            # Suppress missing phoneme warning spam
+            piper.phoneme_ids._LOGGER.setLevel(logging.ERROR)
+
             all_models = sorted(list(self.voices_dir.rglob("*.onnx")))
-            self.en_voices = [m for m in all_models if "en_US" in str(m) or "en_GB" in str(m)]
-            self.fr_voices = [m for m in all_models if "fr_FR" in str(m)]
+
+            # Load blocked voices configuration
+            blocked_names = set()
+            blocklist_path = Path("config/blocked_voices.json")
+            if blocklist_path.exists():
+                try:
+                    with open(blocklist_path, "r", encoding="utf-8") as f:
+                        b_data = json.load(f)
+                        blocked_names = set(b_data.get("blocked_voice_names", []))
+                except Exception:
+                    pass
+
+            # Filter out blocked voices with missing phonemes
+            clean_models = [m for m in all_models if f"{m.parent.name}_{m.stem}" not in blocked_names]
+
+            self.en_voices = [m for m in clean_models if "en_US" in str(m) or "en_GB" in str(m)]
+            self.fr_voices = [m for m in clean_models if "fr_FR" in str(m)]
             self.voice_models = self.en_voices + self.fr_voices
             if not self.voice_models:
-                self.voice_models = all_models
-            print(f"[PiperManager] Discovered {len(self.en_voices)} English & {len(self.fr_voices)} French Piper voice models in {self.voices_dir}")
+                self.voice_models = clean_models
+
+            blocked_count = len(all_models) - len(clean_models)
+            print(f"[PiperManager] Loaded {len(self.voice_models)} verified clean voices ({len(self.en_voices)} EN, {len(self.fr_voices)} FR). Blocked {blocked_count} defective models.")
         else:
             print(f"[PiperManager] Warning: Voices directory {self.voices_dir} not found.")
 
