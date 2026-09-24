@@ -78,6 +78,8 @@ class StudioState:
 
         self.last_audio_tensor: Optional[torch.Tensor] = None
         self.last_sample_rate = 16000
+        self.test_clean_samples: List[Dict] = []
+        self.sota_runner = None
         self.init_model()
 
     def load_dataset_manifests(self):
@@ -87,6 +89,20 @@ class StudioState:
                 self.librispeech_samples = json.load(f)
                 self.librispeech_sample_map = {s["id"]: s for s in self.librispeech_samples}
             print(f"[Studio] Loaded {len(self.librispeech_samples):,} real LibriSpeech utterances.")
+
+        test_clean_path = Path("data/librispeech/librispeech_test_clean.json")
+        if test_clean_path.exists():
+            with open(test_clean_path, "r", encoding="utf-8") as f:
+                self.test_clean_samples = json.load(f)
+                for s in self.test_clean_samples:
+                    self.librispeech_sample_map[s["id"]] = s
+            print(f"[Studio] Loaded {len(self.test_clean_samples):,} test-clean benchmark utterances.")
+
+    def get_sota_runner(self):
+        if self.sota_runner is None:
+            from src.benchmark.sota_evaluator import SOTABenchmarkRunner
+            self.sota_runner = SOTABenchmarkRunner(device=self.device)
+        return self.sota_runner
 
     def init_model(self):
         print(f"[Studio] Initializing model on device: {self.device}")
@@ -584,6 +600,55 @@ def stop_training():
 @app.get("/api/train/status")
 def get_training_status():
     return state.training_status
+
+
+# -------------------------------------------------------------
+# SOTA Benchmark Endpoints
+# -------------------------------------------------------------
+class SOTACompareRequest(BaseModel):
+    sample_id: Optional[str] = None
+    blank_penalty: float = 0.0
+
+
+@app.get("/api/benchmark/sota/report")
+def get_sota_benchmark_report():
+    report_file = Path("logs/sota_benchmark_results.json")
+    if report_file.exists():
+        with open(report_file, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {"status": "no_report_available"}
+
+
+@app.get("/api/benchmark/sota/samples")
+def get_sota_samples(limit: int = 30):
+    samples = getattr(state, "test_clean_samples", [])
+    if not samples and state.librispeech_samples:
+        samples = state.librispeech_samples[:limit]
+    return samples[:limit]
+
+
+@app.post("/api/benchmark/sota/compare")
+def compare_sota_sample(req: SOTACompareRequest):
+    runner = state.get_sota_runner()
+    audio_path = None
+    ground_truth = None
+
+    if req.sample_id and req.sample_id in state.librispeech_sample_map:
+        sample = state.librispeech_sample_map[req.sample_id]
+        audio_path = sample["audio_path"]
+        ground_truth = sample.get("transcript", "")
+    elif state.last_audio_tensor is not None:
+        return runner.compare_audio(state.last_audio_tensor, ground_truth=ground_truth, blank_penalty=req.blank_penalty)
+    else:
+        samples = getattr(state, "test_clean_samples", [])
+        if samples:
+            sample = samples[0]
+            audio_path = sample["audio_path"]
+            ground_truth = sample.get("transcript", "")
+        else:
+            return {"error": "No audio sample available for comparison."}
+
+    return runner.compare_audio(audio_path, ground_truth=ground_truth, blank_penalty=req.blank_penalty)
 
 
 # Serve HTML Dashboard

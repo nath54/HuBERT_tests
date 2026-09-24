@@ -49,6 +49,9 @@
         <button onclick="switchMainTab('benchmarks')" id="tabBtn-benchmarks" class="main-tab-btn px-4 py-2 bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5">
           <span>⚡</span> Weights & Scaling Laws
         </button>
+        <button onclick="switchMainTab('sota')" id="tabBtn-sota" class="main-tab-btn px-4 py-2 bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5">
+          <span>🏆</span> SOTA & Whisper Shootout
+        </button>
       </div>
     </div>
 
@@ -545,6 +548,260 @@
 
     </div>
 
+    <!-- ============================================================= -->
+    <!-- TAB 5: SOTA BENCHMARKS & MODEL SHOOTOUT                       -->
+    <!-- ============================================================= -->
+    <div id="tab-sota" class="main-tab-content hidden space-y-6">
+
+      <!-- Hero Header & Overview -->
+      <div class="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl">
+        <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+          <div>
+            <div class="flex items-center gap-2 mb-1">
+              <span class="badge-pill bg-purple-500/20 text-purple-300 border border-purple-500/30">Standard ASR Benchmarks</span>
+              <span class="badge-pill bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">LibriSpeech test-clean</span>
+              <span class="badge-pill bg-amber-500/20 text-amber-400 border border-amber-500/30">Live 3-Model Shootout</span>
+            </div>
+            <h2 class="text-xl font-bold text-white">HuBERT vs. Meta SOTA & OpenAI Whisper</h2>
+            <p class="text-xs text-slate-400 mt-1 max-w-3xl">
+              Compare our lightweight 8M model trained from scratch with Meta's official 316M HuBERT-Large (60k hours) and OpenAI's 38M Whisper-Tiny (680k hours) on standard speech benchmarks.
+            </p>
+          </div>
+          <div class="flex items-center gap-2">
+            <button onclick="runSOTABatchEval(25)" id="btnRunEvalBatch" class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-semibold shadow transition-all flex items-center gap-1.5">
+              <span>📊</span> Re-run Benchmark (25 utts)
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Standard Benchmark Leaderboard Table -->
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+        <div class="flex justify-between items-center">
+          <div>
+            <h3 class="text-md font-bold text-white flex items-center gap-2">
+              <span>🏆</span> Standard Benchmark Leaderboard: LibriSpeech test-clean
+            </h3>
+            <p class="text-xs text-slate-400">
+              Evaluated using standardized text normalization (lowercase, stripped punctuation) and word error rate (WER).
+            </p>
+          </div>
+          <span id="benchmarkEvalBadge" class="text-xs font-mono text-slate-400 bg-slate-950 px-2.5 py-1 rounded-lg border border-slate-800">
+            25 utts evaluated
+          </span>
+        </div>
+
+        <div class="overflow-x-auto rounded-xl border border-slate-800">
+          <table class="w-full text-left text-xs text-slate-300">
+            <thead class="bg-slate-950 text-slate-400 font-mono uppercase text-[10px] border-b border-slate-800">
+              <tr>
+                <th class="p-3">Model</th>
+                <th class="p-3">Architecture</th>
+                <th class="p-3">Pre-training Audio</th>
+                <th class="p-3">Supervised Audio</th>
+                <th class="p-3">Params</th>
+                <th class="p-3 text-emerald-400">WER (%)</th>
+                <th class="p-3 text-sky-400">CER (%)</th>
+                <th class="p-3">Latency (ms)</th>
+                <th class="p-3">RTF</th>
+                <th class="p-3">Speedup</th>
+              </tr>
+            </thead>
+            <tbody id="sotaLeaderboardBody" class="divide-y divide-slate-800 font-mono">
+              <!-- Populated dynamically by JS -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Interactive Shootout on Any Sample -->
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+        <div>
+          <h3 class="text-md font-bold text-white flex items-center gap-2">
+            <span>⚡</span> Interactive 3-Way Model Shootout
+          </h3>
+          <p class="text-xs text-slate-400">
+            Select any real utterance from the LibriSpeech test benchmark to run all 3 models concurrently.
+          </p>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-12 gap-3 items-center bg-slate-950 p-4 rounded-xl border border-slate-800">
+          <div class="md:col-span-8 flex flex-col md:flex-row gap-2">
+            <select id="sotaSampleSelect" onchange="onSotaSampleChange()" class="w-full bg-slate-900 border border-slate-700 text-xs text-slate-200 rounded-lg p-2.5 font-mono focus:border-indigo-500 focus:outline-none">
+              <option value="">Loading test-clean benchmark samples...</option>
+            </select>
+          </div>
+          <div class="md:col-span-4 flex items-center gap-2">
+            <button onclick="runSOTAShootout()" id="sotaShootoutBtn" class="w-full px-4 py-2.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white rounded-lg text-xs font-bold shadow-lg transition-all flex items-center justify-center gap-1.5">
+              <span>⚡</span> Run 3-Way Shootout
+            </button>
+          </div>
+        </div>
+
+        <!-- Audio Player & Ground Truth -->
+        <div id="sotaAudioBanner" class="p-4 bg-slate-950 border border-slate-800 rounded-xl space-y-3">
+          <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-2">
+            <div class="text-xs text-slate-400">
+              Selected Audio: <strong id="sotaSampleIdText" class="text-indigo-300 font-mono">-</strong>
+              <span id="sotaDurationBadge" class="ml-2 badge-pill bg-slate-800 text-slate-300 font-mono">-</span>
+            </div>
+            <audio id="sotaAudioPlayer" controls class="h-8 max-w-sm w-full"></audio>
+          </div>
+          <div class="p-3 bg-slate-900/80 rounded-lg border border-slate-800">
+            <span class="text-[10px] uppercase font-mono tracking-wider text-slate-400 block mb-0.5">Ground Truth Transcript:</span>
+            <p id="sotaGroundTruthText" class="text-sm font-semibold text-slate-100 italic">Select a sample to load transcript</p>
+          </div>
+        </div>
+
+        <!-- Three Comparison Cards -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4" id="sotaCardsGrid">
+          <!-- Card 1: Meta HuBERT-Large -->
+          <div class="bg-slate-950 border border-indigo-500/40 rounded-2xl p-4 shadow-xl space-y-3 relative overflow-hidden">
+            <div class="flex justify-between items-start">
+              <div>
+                <span class="badge-pill bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">Meta AI (SOTA)</span>
+                <h4 class="text-sm font-bold text-white mt-1">HuBERT-Large</h4>
+              </div>
+              <div class="text-right">
+                <span class="text-xs font-mono font-bold text-indigo-400">315.5M Params</span>
+                <span class="text-[10px] text-slate-400 block font-mono">60,000h pre-train</span>
+              </div>
+            </div>
+            <div class="p-3 bg-slate-900 rounded-xl border border-slate-800 min-h-[90px] flex flex-col justify-between">
+              <span class="text-[10px] uppercase font-mono text-slate-400 block">Prediction:</span>
+              <p id="cardMetaText" class="text-xs text-slate-200 font-medium my-1 leading-relaxed">-</p>
+              <div class="flex justify-between text-[10px] font-mono text-slate-400 pt-1 border-t border-slate-800/80">
+                <span>WER: <strong id="cardMetaWER" class="text-emerald-400">-</strong></span>
+                <span>CER: <strong id="cardMetaCER" class="text-sky-400">-</strong></span>
+              </div>
+            </div>
+            <div class="grid grid-cols-3 gap-2 text-center text-[10px] font-mono">
+              <div class="p-2 bg-slate-900 rounded-lg border border-slate-800">
+                <span class="text-slate-400 block">Latency</span>
+                <strong id="cardMetaLatency" class="text-white">-</strong>
+              </div>
+              <div class="p-2 bg-slate-900 rounded-lg border border-slate-800">
+                <span class="text-slate-400 block">RTF</span>
+                <strong id="cardMetaRTF" class="text-indigo-400">-</strong>
+              </div>
+              <div class="p-2 bg-slate-900 rounded-lg border border-slate-800">
+                <span class="text-slate-400 block">Throughput</span>
+                <strong id="cardMetaSpeedup" class="text-emerald-400">-</strong>
+              </div>
+            </div>
+          </div>
+
+          <!-- Card 2: OpenAI Whisper -->
+          <div class="bg-slate-950 border border-emerald-500/40 rounded-2xl p-4 shadow-xl space-y-3 relative overflow-hidden">
+            <div class="flex justify-between items-start">
+              <div>
+                <span class="badge-pill bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">OpenAI</span>
+                <h4 class="text-sm font-bold text-white mt-1">Whisper-Tiny</h4>
+              </div>
+              <div class="text-right">
+                <span class="text-xs font-mono font-bold text-emerald-400">37.8M Params</span>
+                <span class="text-[10px] text-slate-400 block font-mono">680,000h weakly sup.</span>
+              </div>
+            </div>
+            <div class="p-3 bg-slate-900 rounded-xl border border-slate-800 min-h-[90px] flex flex-col justify-between">
+              <span class="text-[10px] uppercase font-mono text-slate-400 block">Prediction:</span>
+              <p id="cardWhisperText" class="text-xs text-slate-200 font-medium my-1 leading-relaxed">-</p>
+              <div class="flex justify-between text-[10px] font-mono text-slate-400 pt-1 border-t border-slate-800/80">
+                <span>WER: <strong id="cardWhisperWER" class="text-emerald-400">-</strong></span>
+                <span>CER: <strong id="cardWhisperCER" class="text-sky-400">-</strong></span>
+              </div>
+            </div>
+            <div class="grid grid-cols-3 gap-2 text-center text-[10px] font-mono">
+              <div class="p-2 bg-slate-900 rounded-lg border border-slate-800">
+                <span class="text-slate-400 block">Latency</span>
+                <strong id="cardWhisperLatency" class="text-white">-</strong>
+              </div>
+              <div class="p-2 bg-slate-900 rounded-lg border border-slate-800">
+                <span class="text-slate-400 block">RTF</span>
+                <strong id="cardWhisperRTF" class="text-emerald-400">-</strong>
+              </div>
+              <div class="p-2 bg-slate-900 rounded-lg border border-slate-800">
+                <span class="text-slate-400 block">Throughput</span>
+                <strong id="cardWhisperSpeedup" class="text-emerald-400">-</strong>
+              </div>
+            </div>
+          </div>
+
+          <!-- Card 3: HuBERT (Ours - Scratch) -->
+          <div class="bg-slate-950 border border-sky-500/40 rounded-2xl p-4 shadow-xl space-y-3 relative overflow-hidden">
+            <div class="flex justify-between items-start">
+              <div>
+                <span class="badge-pill bg-sky-500/20 text-sky-400 border border-sky-500/30">Ours (Scratch)</span>
+                <h4 class="text-sm font-bold text-white mt-1">HuBERT-Scratch</h4>
+              </div>
+              <div class="text-right">
+                <span class="text-xs font-mono font-bold text-sky-400">8.03M Params</span>
+                <span class="text-[10px] text-slate-400 block font-mono">5.39h audio</span>
+              </div>
+            </div>
+            <div class="p-3 bg-slate-900 rounded-xl border border-slate-800 min-h-[90px] flex flex-col justify-between">
+              <span class="text-[10px] uppercase font-mono text-slate-400 block">Prediction:</span>
+              <p id="cardScratchText" class="text-xs text-slate-200 font-medium my-1 leading-relaxed">-</p>
+              <div class="flex justify-between text-[10px] font-mono text-slate-400 pt-1 border-t border-slate-800/80">
+                <span>WER: <strong id="cardScratchWER" class="text-amber-400">-</strong></span>
+                <span>CER: <strong id="cardScratchCER" class="text-amber-400">-</strong></span>
+              </div>
+            </div>
+            <div class="grid grid-cols-3 gap-2 text-center text-[10px] font-mono">
+              <div class="p-2 bg-slate-900 rounded-lg border border-slate-800">
+                <span class="text-slate-400 block">Latency</span>
+                <strong id="cardScratchLatency" class="text-white">-</strong>
+              </div>
+              <div class="p-2 bg-slate-900 rounded-lg border border-slate-800">
+                <span class="text-slate-400 block">RTF</span>
+                <strong id="cardScratchRTF" class="text-sky-400">-</strong>
+              </div>
+              <div class="p-2 bg-slate-900 rounded-lg border border-slate-800">
+                <span class="text-slate-400 block">Throughput</span>
+                <strong id="cardScratchSpeedup" class="text-emerald-400">-</strong>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Training Data Scale vs Accuracy Insights -->
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+        <div>
+          <h3 class="text-md font-bold text-white">Why Foundation Speech Models Need Scale</h3>
+          <p class="text-xs text-slate-400">
+            A deep dive into why self-supervised pre-training (HuBERT) and massive weak supervision (Whisper) achieve superhuman ASR while training CTC from scratch on small datasets struggles.
+          </p>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs text-slate-300">
+          <div class="p-4 bg-slate-950 rounded-xl border border-slate-800 space-y-2">
+            <span class="badge-pill bg-sky-500/20 text-sky-300 font-mono">Scratch CTC (5h – 100h)</span>
+            <h4 class="font-bold text-white">The Blank Collapse Dilemma</h4>
+            <p class="text-slate-400 leading-relaxed text-[11px]">
+              CTC loss compares all possible alignments of characters interspersed with &lt;blank&gt; tokens. With small datasets and no pre-trained acoustic features, predicting blank for every frame immediately collapses loss from 10.0 to 5.0, trapping gradients in a local minimum before phoneme representations can form.
+            </p>
+          </div>
+          <div class="p-4 bg-slate-950 rounded-xl border border-slate-800 space-y-2">
+            <span class="badge-pill bg-indigo-500/20 text-indigo-300 font-mono">Meta HuBERT (60,000h)</span>
+            <h4 class="font-bold text-white">Self-Supervised Acoustic Clusters</h4>
+            <p class="text-slate-400 leading-relaxed text-[11px]">
+              HuBERT uses <strong>k-means clustering</strong> on intermediate features to create pseudo-phoneme targets, training the Transformer on masked audio prediction (similar to BERT). When fine-tuned on LibriSpeech (960h), the acoustic representations are already rich, yielding an astonishing <strong>1.8% WER</strong> with standard CTC.
+            </p>
+          </div>
+          <div class="p-4 bg-slate-950 rounded-xl border border-slate-800 space-y-2">
+            <span class="badge-pill bg-emerald-500/20 text-emerald-300 font-mono">OpenAI Whisper (680,000h)</span>
+            <h4 class="font-bold text-white">Encoder-Decoder Autoregression</h4>
+            <p class="text-slate-400 leading-relaxed text-[11px]">
+              Instead of non-autoregressive CTC, Whisper pairs an audio encoder with an autoregressive text decoder, conditioned on prompts, languages, and previous tokens. Trained on <strong>680,000 hours</strong> of multilingual internet audio, it acts as a joint acoustic and language model.
+            </p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
   </div>
 
   <script>
@@ -573,6 +830,7 @@
       if (tabKey === "dataset") loadDatasetSamples();
       if (tabKey === "training") loadTrainingLogs();
       if (tabKey === "benchmarks") loadBenchmarks();
+      if (tabKey === "sota") loadSOTABenchmark();
     }
 
     // -------------------------------------------------------------
@@ -1175,6 +1433,179 @@
         });
       } catch (e) {
         console.error("Load benchmarks failed:", e);
+      }
+    }
+
+    // -------------------------------------------------------------
+    // SOTA BENCHMARKS & MODEL SHOOTOUT
+    // -------------------------------------------------------------
+    let sotaBenchmarkData = null;
+    let sotaBenchmarkSamples = [];
+
+    async function loadSOTABenchmark() {
+      try {
+        // Load Leaderboard report
+        const repRes = await fetch("/api/benchmark/sota/report");
+        sotaBenchmarkData = await repRes.json();
+        renderSOTALeaderboard(sotaBenchmarkData);
+
+        // Load benchmark test samples dropdown
+        const sampRes = await fetch("/api/benchmark/sota/samples?limit=30");
+        sotaBenchmarkSamples = await sampRes.json();
+        populateSOTASamplesDropdown(sotaBenchmarkSamples);
+      } catch (err) {
+        console.error("Failed to load SOTA benchmark data:", err);
+      }
+    }
+
+    function renderSOTALeaderboard(data) {
+      if (!data || !data.models_summary) return;
+      const tbody = document.getElementById("sotaLeaderboardBody");
+      tbody.innerHTML = "";
+
+      const modelsMeta = [
+        {
+          key: "meta_hubert_large",
+          arch: "1D CNN + Pre-LN Transformer",
+          pretrain: "60,000h (Libri-Light)",
+          sup: "960h (LibriSpeech)",
+          werColor: "text-emerald-400 font-extrabold text-sm",
+        },
+        {
+          key: "whisper_tiny",
+          arch: "Encoder-Decoder Autoregressive",
+          pretrain: "680,000h (Internet Multilingual)",
+          sup: "680,000h (Weakly Supervised)",
+          werColor: "text-sky-400 font-bold",
+        },
+        {
+          key: "scratch_hubert",
+          arch: "1D CNN + Transformer (Ours)",
+          pretrain: "0h (Scratch Baseline)",
+          sup: "5.39h (LibriSpeech dev-clean)",
+          werColor: "text-amber-400 font-bold",
+        },
+      ];
+
+      modelsMeta.forEach(m => {
+        const stats = data.models_summary[m.key];
+        if (!stats) return;
+        const tr = document.createElement("tr");
+        tr.className = "hover:bg-slate-900/60 transition-colors";
+        tr.innerHTML = `
+          <td class="p-3 text-white font-bold flex items-center gap-1.5">
+            <span class="w-2 h-2 rounded-full ${m.key === 'meta_hubert_large' ? 'bg-indigo-400' : (m.key === 'whisper_tiny' ? 'bg-emerald-400' : 'bg-sky-400')}"></span>
+            ${stats.name}
+          </td>
+          <td class="p-3 text-slate-400">${m.arch}</td>
+          <td class="p-3 text-indigo-300 font-semibold">${m.pretrain}</td>
+          <td class="p-3 text-slate-300">${m.sup}</td>
+          <td class="p-3 font-bold text-white">${stats.parameters}</td>
+          <td class="p-3 ${m.werColor}">${stats.avg_wer}%</td>
+          <td class="p-3 text-sky-400">${stats.avg_cer}%</td>
+          <td class="p-3 text-slate-300">${stats.avg_latency_ms} ms</td>
+          <td class="p-3 text-slate-400">${stats.rtf}</td>
+          <td class="p-3 text-emerald-400 font-bold">${stats.throughput_x}x Realtime</td>
+        `;
+        tbody.appendChild(tr);
+      });
+
+      document.getElementById("benchmarkEvalBadge").innerText = `${data.num_samples_evaluated || 25} test-clean utts evaluated (${data.total_audio_seconds || 215}s audio)`;
+    }
+
+    function populateSOTASamplesDropdown(samples) {
+      const select = document.getElementById("sotaSampleSelect");
+      select.innerHTML = "";
+      samples.forEach((s, idx) => {
+        const opt = document.createElement("option");
+        opt.value = s.id;
+        opt.innerText = `[#${idx+1}] ${s.id} (${s.duration}s) - "${s.transcript.slice(0, 48)}..."`;
+        select.appendChild(opt);
+      });
+
+      if (samples.length > 0) {
+        onSotaSampleChange();
+      }
+    }
+
+    function onSotaSampleChange() {
+      const select = document.getElementById("sotaSampleSelect");
+      const sampleId = select.value;
+      const sample = sotaBenchmarkSamples.find(s => s.id === sampleId);
+      if (!sample) return;
+
+      document.getElementById("sotaSampleIdText").innerText = sample.id;
+      document.getElementById("sotaDurationBadge").innerText = `${sample.duration}s | Spk: ${sample.speaker_id || 'clean'}`;
+      document.getElementById("sotaGroundTruthText").innerText = `"${sample.transcript}"`;
+
+      // Set audio player source
+      const audioPlayer = document.getElementById("sotaAudioPlayer");
+      audioPlayer.src = `/api/dataset/audio/${sample.id}`;
+    }
+
+    async function runSOTAShootout() {
+      const select = document.getElementById("sotaSampleSelect");
+      const sampleId = select.value;
+      const btn = document.getElementById("sotaShootoutBtn");
+      btn.disabled = true;
+      btn.innerHTML = `<span class="animate-spin inline-block mr-1">🌀</span> Running 3 Models on GPU...`;
+
+      try {
+        const res = await fetch("/api/benchmark/sota/compare", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sample_id: sampleId, blank_penalty: 0.0 })
+        });
+        const comp = await res.json();
+        renderSOTAShootoutResult(comp);
+      } catch (err) {
+        console.error("Shootout failed:", err);
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = `<span>⚡</span> Run 3-Way Shootout`;
+      }
+    }
+
+    function renderSOTAShootoutResult(comp) {
+      if (!comp || !comp.models) return;
+
+      // Meta
+      const meta = comp.models.meta_hubert_large;
+      document.getElementById("cardMetaText").innerText = `"${meta.raw_text}"`;
+      document.getElementById("cardMetaWER").innerText = meta.wer !== null ? `${(meta.wer * 100).toFixed(1)}%` : "N/A";
+      document.getElementById("cardMetaCER").innerText = meta.cer !== null ? `${(meta.cer * 100).toFixed(1)}%` : "N/A";
+      document.getElementById("cardMetaLatency").innerText = `${meta.latency_ms} ms`;
+      document.getElementById("cardMetaRTF").innerText = meta.rtf;
+      document.getElementById("cardMetaSpeedup").innerText = `${meta.throughput_x}x`;
+
+      // Whisper
+      const whisper = comp.models.whisper_tiny;
+      document.getElementById("cardWhisperText").innerText = `"${whisper.raw_text}"`;
+      document.getElementById("cardWhisperWER").innerText = whisper.wer !== null ? `${(whisper.wer * 100).toFixed(1)}%` : "N/A";
+      document.getElementById("cardWhisperCER").innerText = whisper.cer !== null ? `${(whisper.cer * 100).toFixed(1)}%` : "N/A";
+      document.getElementById("cardWhisperLatency").innerText = `${whisper.latency_ms} ms`;
+      document.getElementById("cardWhisperRTF").innerText = whisper.rtf;
+      document.getElementById("cardWhisperSpeedup").innerText = `${whisper.throughput_x}x`;
+
+      // Scratch
+      const scratch = comp.models.scratch_hubert;
+      document.getElementById("cardScratchText").innerText = scratch.raw_text ? `"${scratch.raw_text}"` : `<blank frames>`;
+      document.getElementById("cardScratchWER").innerText = scratch.wer !== null ? `${(scratch.wer * 100).toFixed(1)}%` : "N/A";
+      document.getElementById("cardScratchCER").innerText = scratch.cer !== null ? `${(scratch.cer * 100).toFixed(1)}%` : "N/A";
+      document.getElementById("cardScratchLatency").innerText = `${scratch.latency_ms} ms`;
+      document.getElementById("cardScratchRTF").innerText = scratch.rtf;
+      document.getElementById("cardScratchSpeedup").innerText = `${scratch.throughput_x}x`;
+    }
+
+    async function runSOTABatchEval(samplesCount) {
+      const btn = document.getElementById("btnRunEvalBatch");
+      btn.disabled = true;
+      btn.innerHTML = `<span class="animate-spin inline-block mr-1">🌀</span> Benchmarking...`;
+      try {
+        await loadSOTABenchmark();
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = `<span>📊</span> Re-run Benchmark (25 utts)`;
       }
     }
 

@@ -85,3 +85,53 @@ def build_librispeech_manifest(
 
     print(f"Saved LibriSpeech manifests to: {out_path}")
     return train_samples, val_samples
+
+
+def build_test_clean_manifest(
+    root_dir: str = "data/raw/librispeech/LibriSpeech/test-clean",
+    output_dir: str = "data/librispeech",
+) -> List[Dict]:
+    """Scan real LibriSpeech test-clean directory and create standard test manifest."""
+    root_path = Path(root_dir)
+    out_path = Path(output_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+
+    if not root_path.exists():
+        print(f"Directory {root_path} does not exist!")
+        return []
+
+    print(f"Scanning LibriSpeech test-clean in: {root_path}")
+    trans_files = list(root_path.glob("*/*/*.trans.txt"))
+    test_samples = []
+    total_audio_seconds = 0.0
+
+    for tf in trans_files:
+        speaker_id = tf.parent.parent.name
+        chapter_id = tf.parent.name
+        with open(tf, "r", encoding="utf-8") as f:
+            for line in f:
+                parts = line.strip().split(maxsplit=1)
+                if len(parts) == 2:
+                    utt_id, text = parts
+                    flac_path = tf.parent / f"{utt_id}.flac"
+                    if flac_path.exists():
+                        info = sf.info(str(flac_path))
+                        dur = float(info.duration)
+                        total_audio_seconds += dur
+                        test_samples.append({
+                            "id": utt_id,
+                            "audio_path": str(flac_path.resolve()),
+                            "transcript": text.lower(),
+                            "duration": round(dur, 2),
+                            "speaker_id": speaker_id,
+                            "chapter_id": chapter_id,
+                        })
+
+    test_samples.sort(key=lambda s: s["id"])
+    out_file = out_path / "librispeech_test_clean.json"
+    with open(out_file, "w", encoding="utf-8") as f:
+        json.dump(test_samples, f, indent=2)
+
+    print(f"Saved {len(test_samples)} test-clean samples ({total_audio_seconds/3600.0:.2f} hrs) to {out_file}")
+    return test_samples
+
