@@ -105,21 +105,29 @@ class PiperVoiceManager:
 
     def _discover_voices(self):
         if self.voices_dir.exists():
-            # Prioritize English voices (US and GB) for English vocabulary training
             all_models = sorted(list(self.voices_dir.rglob("*.onnx")))
-            self.voice_models = [m for m in all_models if "en_US" in str(m) or "en_GB" in str(m)]
+            self.en_voices = [m for m in all_models if "en_US" in str(m) or "en_GB" in str(m)]
+            self.fr_voices = [m for m in all_models if "fr_FR" in str(m)]
+            self.voice_models = self.en_voices + self.fr_voices
             if not self.voice_models:
                 self.voice_models = all_models
-            print(f"[PiperManager] Discovered {len(self.voice_models)} English Piper voice models in {self.voices_dir}")
+            print(f"[PiperManager] Discovered {len(self.en_voices)} English & {len(self.fr_voices)} French Piper voice models in {self.voices_dir}")
         else:
             print(f"[PiperManager] Warning: Voices directory {self.voices_dir} not found.")
 
-    def get_random_voice(self) -> Tuple[PiperVoice, str]:
-        """Retrieve a cached or newly loaded PiperVoice instance."""
+    def get_random_voice(self, lang: Optional[str] = None) -> Tuple[PiperVoice, str]:
+        """Retrieve a cached or newly loaded PiperVoice instance matching language."""
         if not self.voice_models:
             raise RuntimeError(f"No Piper models found in {self.voices_dir}")
 
-        chosen_model_path = random.choice(self.voice_models)
+        if lang == "fr" and self.fr_voices:
+            pool = self.fr_voices
+        elif lang == "en" and self.en_voices:
+            pool = self.en_voices
+        else:
+            pool = self.voice_models
+
+        chosen_model_path = random.choice(pool)
         voice_name = f"{chosen_model_path.parent.name}_{chosen_model_path.stem}"
 
         if voice_name in self.voice_cache:
@@ -141,9 +149,9 @@ class PiperVoiceManager:
         self.voice_cache[voice_name] = loaded_voice
         return loaded_voice, voice_name
 
-    def synthesize_to_tensor_16k(self, text: str) -> Tuple[torch.Tensor, str, float]:
+    def synthesize_to_tensor_16k(self, text: str, lang: Optional[str] = None) -> Tuple[torch.Tensor, str, float]:
         """Synthesize text entirely in RAM and return a 16 kHz float32 PyTorch tensor."""
-        voice, voice_name = self.get_random_voice()
+        voice, voice_name = self.get_random_voice(lang=lang)
 
         # Randomize speaking rate and prosody
         length_scale = random.uniform(0.90, 1.12)
@@ -276,9 +284,14 @@ class PiperStreamingDataset(torch.utils.data.IterableDataset):
 
     def __iter__(self) -> Iterator[Dict[str, any]]:
         while True:
-            text = self.text_sampler.sample_sentence()
+            res = self.text_sampler.sample_sentence()
+            if isinstance(res, tuple):
+                text, lang = res
+            else:
+                text, lang = res, "en"
+
             try:
-                waveform, voice_name, dur = self.voice_manager.synthesize_to_tensor_16k(text)
+                waveform, voice_name, dur = self.voice_manager.synthesize_to_tensor_16k(text, lang=lang)
             except Exception as e:
                 continue
 

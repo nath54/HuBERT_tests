@@ -132,8 +132,8 @@ class HuBERTForCTC(nn.Module):
         last_hidden = encoder_outputs["last_hidden_state"]  # (B, T_frames, embed_dim)
         logits = self.ctc_head(last_hidden)  # (B, T_frames, vocab_size)
 
-        # Log-softmax for CTC: shape (T_frames, B, vocab_size)
-        log_probs = F.log_softmax(logits, dim=-1).transpose(0, 1)
+        # Log-softmax for CTC in float32 for numerical stability: shape (T_frames, B, vocab_size)
+        log_probs = F.log_softmax(logits.float(), dim=-1).transpose(0, 1)
 
         loss = None
         if targets is not None and target_lengths is not None:

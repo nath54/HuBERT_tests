@@ -1,0 +1,33 @@
+{
+  "model_tier": "mini",
+  "parameters_m": 8.05,
+  "total_steps": 10,
+  "total_audio_hours": 0.0536,
+  "history": [
+    {
+      "step": 0,
+      "cumulative_audio_sec": 0.0,
+      "cumulative_audio_hours": 0.0,
+      "pretrain_loss": 4.6,
+      "masked_acc_pct": 1.0,
+      "librispeech_wer": 102.23,
+      "librispeech_cer": 195.75,
+      "sample_prediction": "o' q'owtg'wt'bi'w' rto'y wgwgw yrwgbhwt'w'w tuww'wtbwt'rw'w'tqtcwrh'grwvbywtw w'whwhwbwrtw'thtwrwrbthwhgoaghrwtrwobuwtbtwwt'rwr'ruwhoyjbwb'uhfwh'wbhb'tgrhgwrwhw b'wrwtyuw'rwwwt'r'rbrurwwotwtw'tbtwo wywtwrtrfjbtrbhwbtw'g wbtoy'w sywr'r'whbwh'b w'hthrbahrsw'wrb'w'trwrwbhwtuotuhwgt' tbgrw' 'bwhr br'wq' or'wmthwt'hvhtlahwhtrq'twuwt'rhrwrhw'y htbr'wt'w gw'hw'wtbur u'w'wbwthqt'q't'ft",
+      "disk_bytes_used": 0,
+      "plateau_detected": false
+    },
+    {
+      "step": 10,
+      "cumulative_audio_sec": 193.09,
+      "cumulative_audio_hours": 0.0536,
+      "pretrain_loss": 4.7585,
+      "masked_acc_pct": 1.57,
+      "librispeech_wer": 100.0,
+      "librispeech_cer": 100.0,
+      "sample_prediction": "",
+      "disk_bytes_used": 0,
+      "marginal_wer_gain_per_hour": 41.6,
+      "plateau_detected": false
+    }
+  ]
+}
