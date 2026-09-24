@@ -519,6 +519,136 @@ def run_ablation(req: AblationRequest):
     }
 
 
+def get_live_scaling_status() -> Optional[Dict]:
+    """Dynamically discover and parse active or recent large-scale pre-training status."""
+    import subprocess
+    import glob
+    import re
+
+    # Check if process is running
+    p = subprocess.run(["pgrep", "-f", "scale_pretrain_benchmark"], capture_output=True, text=True)
+    is_running = (p.returncode == 0 and len(p.stdout.strip()) > 0)
+
+    # Check scaling history file
+    scaling_file = Path("logs/scaling_benchmark_history.json")
+    milestones = []
+    tier = "mini"
+    params_m = 8.05
+    if scaling_file.exists():
+        try:
+            with open(scaling_file, "r", encoding="utf-8") as f:
+                sc_data = json.load(f)
+                tier = sc_data.get("model_tier", tier)
+                params_m = sc_data.get("parameters_m", params_m)
+                for h in sc_data.get("history", []):
+                    if "librispeech_wer" in h:
+                        milestones.append({
+                            "step": h.get("step", 0),
+                            "hours": h.get("cumulative_audio_hours", 0.0),
+                            "loss": h.get("pretrain_loss", 0.0),
+                            "wer": h.get("librispeech_wer", 100.0),
+                            "cer": h.get("librispeech_cer", 100.0),
+                            "per": h.get("librispeech_per", 100.0),
+                            "sample_pred": h.get("sample_prediction", ""),
+                        })
+        except Exception:
+            pass
+
+    # Find task log
+    logs = glob.glob(os.path.expanduser("~/.gemini/antigravity/brain/*/.system_generated/tasks/*.log"))
+    target_log = None
+    for l in sorted(logs, key=os.path.getmtime, reverse=True)[:10]:
+        try:
+            with open(l, "r", errors="ignore") as f:
+                head = f.read(1500)
+                if "scale_pretrain_benchmark" in head or "LARGE-SCALE HUBERT PRE-TRAINING" in head:
+                    target_log = l
+                    break
+        except Exception:
+            pass
+
+    if not target_log:
+        return None
+
+    try:
+        with open(target_log, "r", errors="ignore") as f:
+            lines = f.readlines()
+    except Exception:
+        return None
+
+    step_pattern = re.compile(
+        r"Step\s+(\d+)/(\d+)\s+\|\s+Loss:\s+([\d\.]+)\s+\|\s+Masked Acc:\s+([\d\.]+)%\s+\|\s+Audio In-RAM:\s+([\d\.]+)s\s+\(([\d\.]+)h\)\s+\|\s+(\d+)\s+Disk Bytes\s+\|\s+Voices:\s+\[(.*?)\]"
+    )
+    milestone_pattern = re.compile(
+        r"Milestone Results:\s+Pre-train Hours:\s+([\d\.]+)h\s+\|\s+Loss:\s+([\d\.]+)\s+\|\s+LibriSpeech WER:\s+([\d\.]+)%\s+\|\s+CER:\s+([\d\.]+)%\s+\|\s+PER:\s+([\d\.]+)%"
+    )
+
+    history = []
+    latest_step = None
+    clean_recent_logs = []
+
+    for line in lines:
+        if "Missing phoneme from id map" in line:
+            continue
+        line_clean = line.strip()
+        if line_clean:
+            clean_recent_logs.append(line_clean)
+        m = step_pattern.search(line)
+        if m:
+            entry = {
+                "step": int(m.group(1)),
+                "total_steps": int(m.group(2)),
+                "loss": float(m.group(3)),
+                "accuracy": float(m.group(4)),
+                "masked_accuracy_pct": float(m.group(4)),
+                "cumulative_audio_sec": float(m.group(5)),
+                "cumulative_audio_hours": float(m.group(6)),
+                "disk_bytes_used": int(m.group(7)),
+                "active_voices": [v.strip() for v in m.group(8).split(",")],
+                "active_voice": m.group(8),
+            }
+            history.append(entry)
+            latest_step = entry
+
+        ms = milestone_pattern.search(line)
+        if ms:
+            m_hours = float(ms.group(1))
+            if not any(abs(m["hours"] - m_hours) < 0.01 for m in milestones):
+                milestones.append({
+                    "step": latest_step["step"] if latest_step else 0,
+                    "hours": m_hours,
+                    "loss": float(ms.group(2)),
+                    "wer": float(ms.group(3)),
+                    "cer": float(ms.group(4)),
+                    "per": float(ms.group(5)),
+                    "sample_pred": "",
+                })
+
+    if not latest_step:
+        return None
+
+    return {
+        "is_running": is_running,
+        "source": "scaling_benchmark",
+        "tier": tier,
+        "parameters_m": params_m,
+        "step": latest_step["step"],
+        "total_steps": latest_step["total_steps"],
+        "loss": latest_step["loss"],
+        "accuracy": latest_step["accuracy"],
+        "masked_accuracy_pct": latest_step["accuracy"],
+        "cumulative_audio_sec": latest_step["cumulative_audio_sec"],
+        "cumulative_audio_hours": latest_step["cumulative_audio_hours"],
+        "disk_space_saved_mb": round((latest_step["cumulative_audio_sec"] * 32000) / 1024 / 1024, 2),
+        "disk_bytes_used": 0,
+        "active_voice": latest_step["active_voice"],
+        "active_voices": latest_step["active_voices"],
+        "history": history,
+        "milestones": milestones,
+        "recent_logs": clean_recent_logs[-35:],
+    }
+
+
 # -------------------------------------------------------------
 # TRAINING CONTROLLER & LOGS
 # -------------------------------------------------------------
@@ -527,12 +657,17 @@ def get_training_logs():
     history_file = Path("logs/training_history.json")
     saved_history = {}
     if history_file.exists():
-        with open(history_file, "r") as f:
-            saved_history = json.load(f)
+        try:
+            with open(history_file, "r") as f:
+                saved_history = json.load(f)
+        except Exception:
+            pass
 
+    live_pretrain = get_live_scaling_status()
     return {
         "live_status": state.training_status,
         "saved_history": saved_history,
+        "active_pretrain": live_pretrain if live_pretrain else state.pretrain_status,
     }
 
 
@@ -820,6 +955,9 @@ def background_pretrain_worker(steps: int = 50, batch_size: int = 4, lr: float =
 
 @app.get("/api/pretrain/status")
 def get_pretrain_status():
+    live = get_live_scaling_status()
+    if live is not None:
+        return live
     return state.pretrain_status
 
 

@@ -358,80 +358,256 @@
     <!-- ============================================================= -->
     <div id="tab-training" class="main-tab-content hidden space-y-6">
 
-      <!-- Live Training Controls -->
-      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
-        <div class="flex flex-col sm:flex-row justify-between sm:items-center gap-3">
-          <div>
-            <h3 class="text-lg font-bold text-white flex items-center gap-2">
-              <span class="w-2.5 h-2.5 rounded-full bg-indigo-400 animate-pulse"></span> PyTorch Live Training Controller
-            </h3>
-            <p class="text-xs text-slate-400">Launch background PyTorch training on either real LibriSpeech recordings or synthetic speech.</p>
-          </div>
-          <div class="flex items-center gap-2">
-            <button onclick="startTrainingFromTab('librispeech')" id="btnTabTrainLibri" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold shadow-lg transition-all">
-              Train on LibriSpeech (Real Speech)
-            </button>
-            <button onclick="startTrainingFromTab('synthetic')" class="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-bold border border-slate-700">
-              Train on Synthetic
-            </button>
-            <button onclick="stopLiveTraining()" id="btnTabStopTrain" class="px-3 py-2 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold hidden">
-              Stop
-            </button>
-          </div>
+      <!-- Training Sub-View Mode Switcher -->
+      <div class="flex flex-col sm:flex-row justify-between sm:items-center gap-3 bg-slate-900 border border-slate-800 rounded-2xl p-2.5 shadow-xl">
+        <div class="flex flex-wrap gap-2">
+          <button onclick="switchTrainingSubView('pretrain')" id="subBtn-training-pretrain" class="px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold transition-all flex items-center gap-2 shadow-lg">
+            <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
+            <span>🧪 Self-Supervised Pre-Training & Scaling (Active)</span>
+          </button>
+          <button onclick="switchTrainingSubView('ctc')" id="subBtn-training-ctc" class="px-4 py-2 bg-slate-950 hover:bg-slate-800 text-slate-300 border border-slate-800 rounded-xl text-xs font-bold transition-all flex items-center gap-2">
+            <span>🎯 Supervised CTC Fine-Tuning</span>
+          </button>
         </div>
-
-        <!-- Training Stat Cards -->
-        <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 text-center">
-          <div class="p-3 bg-slate-950 rounded-xl border border-slate-800">
-            <div class="text-[10px] text-slate-400 uppercase font-mono">Current Epoch</div>
-            <div id="tabMetricEpoch" class="text-xl font-bold text-white font-mono mt-0.5">-</div>
-          </div>
-          <div class="p-3 bg-slate-950 rounded-xl border border-slate-800">
-            <div class="text-[10px] text-slate-400 uppercase font-mono">Latest Training Loss</div>
-            <div id="tabMetricLoss" class="text-xl font-bold text-indigo-400 font-mono mt-0.5">-</div>
-          </div>
-          <div class="p-3 bg-slate-950 rounded-xl border border-slate-800">
-            <div class="text-[10px] text-slate-400 uppercase font-mono">Validation CER</div>
-            <div id="tabMetricCER" class="text-xl font-bold text-emerald-400 font-mono mt-0.5">-</div>
-          </div>
-          <div class="p-3 bg-slate-950 rounded-xl border border-slate-800">
-            <div class="text-[10px] text-slate-400 uppercase font-mono">Validation WER</div>
-            <div id="tabMetricWER" class="text-xl font-bold text-sky-400 font-mono mt-0.5">-</div>
-          </div>
+        <div class="flex items-center gap-3 px-3 text-xs font-mono text-slate-400">
+          <span id="trainingLiveTag" class="text-emerald-400 font-bold flex items-center gap-1.5">
+            <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span> Live In-RAM Stream (0 Disk Bytes)
+          </span>
         </div>
       </div>
 
-      <!-- Training Loss & Error Rate Curves (Canvas Charts) -->
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <!-- Loss Curve -->
-        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-3">
-          <div class="flex justify-between items-center">
-            <h4 class="text-sm font-bold text-white">CTC Loss Progression (Training vs. Validation)</h4>
-            <span class="text-xs text-indigo-400 font-mono">Convergence Curve</span>
-          </div>
-          <div class="relative bg-slate-950 border border-slate-800 rounded-xl h-48 overflow-hidden p-2">
-            <canvas id="lossCurveCanvas" class="w-full h-full"></canvas>
+      <!-- SUBVIEW 1: LARGE-SCALE SSL PRE-TRAINING (DEFAULT) -->
+      <div id="trainingSubView-pretrain" class="space-y-6">
+
+        <!-- Pre-training Banner -->
+        <div class="bg-gradient-to-r from-slate-900 via-indigo-950/70 to-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl">
+          <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+            <div>
+              <div class="flex flex-wrap items-center gap-2 mb-1.5">
+                <span class="badge-pill bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">HuBERT Self-Supervised Pre-Training</span>
+                <span class="badge-pill bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">0 Bytes Audio on Disk (In-RAM)</span>
+                <span class="badge-pill bg-purple-500/20 text-purple-400 border border-purple-500/30">Tier: MINI (8.05M Params)</span>
+                <span class="badge-pill bg-amber-500/20 text-amber-400 border border-amber-500/30">34 Piper Neural Voices</span>
+              </div>
+              <h2 class="text-xl font-bold text-white">Large-Scale Self-Supervised Pre-Training & Benchmark Scaling Laws</h2>
+              <p class="text-xs text-slate-400 mt-1 max-w-3xl">
+                Streaming 5,000 diverse sentences (Project Gutenberg books & Wikipedia) directly synthesized in RAM with zero disk footprints. Evaluated periodically on LibriSpeech <code class="text-indigo-300">test-clean</code> (WER, CER, PER) to monitor acoustic representation learning and detect capacity saturation plateaus.
+              </p>
+            </div>
+            <div class="flex items-center gap-2">
+              <span id="ptStatusBadge" class="badge-pill bg-purple-500/20 text-purple-300 border border-purple-500/40 animate-pulse">⚡ Pre-training Live</span>
+            </div>
           </div>
         </div>
 
-        <!-- Error Rate Curve (CER & WER) -->
-        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-3">
-          <div class="flex justify-between items-center">
-            <h4 class="text-sm font-bold text-white">Error Rate Progression (CER & WER)</h4>
-            <span class="text-xs text-emerald-400 font-mono">Target: 0.0</span>
+        <!-- 4 Key Stat Cards -->
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl">
+            <span class="text-[10px] uppercase font-mono tracking-wider text-slate-400 block mb-1">Pre-Training Step</span>
+            <div class="flex items-baseline gap-1.5">
+              <span id="ptMetricStep" class="text-2xl font-black text-white">-</span>
+              <span class="text-xs font-mono text-slate-400">/ <span id="ptMetricTotalSteps">625</span></span>
+            </div>
+            <span id="ptMetricPct" class="text-[11px] font-mono text-indigo-400 block mt-0.5">0.0% Complete</span>
           </div>
-          <div class="relative bg-slate-950 border border-slate-800 rounded-xl h-48 overflow-hidden p-2">
-            <canvas id="errorRateCurveCanvas" class="w-full h-full"></canvas>
+
+          <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl">
+            <span class="text-[10px] uppercase font-mono tracking-wider text-slate-400 block mb-1">Audio In-RAM (0-Disk)</span>
+            <div class="flex items-baseline gap-1.5">
+              <span id="ptMetricHours" class="text-2xl font-black text-emerald-400">0.00</span>
+              <span class="text-xs font-mono text-emerald-300">hours</span>
+            </div>
+            <span id="ptMetricSec" class="text-[11px] font-mono text-slate-400 block mt-0.5">0.0 sec synthesized</span>
+          </div>
+
+          <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl">
+            <span class="text-[10px] uppercase font-mono tracking-wider text-slate-400 block mb-1">Masked Unit Acc</span>
+            <div class="flex items-baseline gap-1.5">
+              <span id="ptMetricAcc" class="text-2xl font-black text-sky-400">-</span>
+              <span class="text-xs font-mono text-sky-300">%</span>
+            </div>
+            <span class="text-[11px] font-mono text-slate-400 block mt-0.5">Top-1 / 100 clusters (1% chance)</span>
+          </div>
+
+          <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl">
+            <span class="text-[10px] uppercase font-mono tracking-wider text-slate-400 block mb-1">Pre-Training Loss</span>
+            <div class="flex items-baseline gap-1.5">
+              <span id="ptMetricLoss" class="text-2xl font-black text-amber-400">-</span>
+              <span class="text-xs font-mono text-slate-400">CE</span>
+            </div>
+            <span class="text-[11px] font-mono text-slate-400 block mt-0.5">Entropy floor: ~4.605</span>
           </div>
         </div>
+
+        <!-- Dual Canvas Charts -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <!-- Pre-train Loss & Acc Chart -->
+          <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-3">
+            <div class="flex justify-between items-center">
+              <div>
+                <h4 class="text-sm font-bold text-white flex items-center gap-2">
+                  <span>📈</span> SSL Loss & Masked Accuracy Trajectory
+                </h4>
+                <p class="text-[11px] text-slate-400">Loss vs. Top-1 Masked Prediction Accuracy across steps.</p>
+              </div>
+              <div class="flex items-center gap-3 text-xs font-mono">
+                <span class="text-amber-400 flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-amber-400"></span> Loss</span>
+                <span class="text-sky-400 flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-sky-400"></span> Acc (%)</span>
+              </div>
+            </div>
+            <div class="relative bg-slate-950 border border-slate-800 rounded-xl h-56 overflow-hidden p-2">
+              <canvas id="ptLossAccCanvas" class="w-full h-full"></canvas>
+            </div>
+          </div>
+
+          <!-- LibriSpeech Benchmark Milestones Chart -->
+          <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-3">
+            <div class="flex justify-between items-center">
+              <div>
+                <h4 class="text-sm font-bold text-white flex items-center gap-2">
+                  <span>🏆</span> LibriSpeech Benchmark Scaling Curve
+                </h4>
+                <p class="text-[11px] text-slate-400">WER, CER, and Phoneme Error Rate (PER) vs Audio Scale.</p>
+              </div>
+              <div class="flex items-center gap-3 text-xs font-mono">
+                <span class="text-emerald-400 flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-emerald-400"></span> WER</span>
+                <span class="text-sky-400 flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-sky-400"></span> CER</span>
+                <span class="text-purple-400 flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-purple-400"></span> PER</span>
+              </div>
+            </div>
+            <div class="relative bg-slate-950 border border-slate-800 rounded-xl h-56 overflow-hidden p-2">
+              <canvas id="ptBenchmarkCanvas" class="w-full h-full"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <!-- LibriSpeech Benchmark Milestones Table -->
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-3">
+          <div class="flex justify-between items-center">
+            <div>
+              <h4 class="text-sm font-bold text-white flex items-center gap-2">
+                <span>🎯</span> LibriSpeech Test-Clean Downstream Milestones
+              </h4>
+              <p class="text-[11px] text-slate-400">Evaluated on real held-out audio with WER, CER, and Piper IPA Phoneme Error Rate (PER).</p>
+            </div>
+            <span class="text-xs font-mono text-indigo-400">Evaluated every 125 steps</span>
+          </div>
+          <div class="overflow-x-auto">
+            <table class="w-full text-left text-xs text-slate-300">
+              <thead class="bg-slate-950 uppercase text-[10px] text-slate-400 font-mono border-b border-slate-800">
+                <tr>
+                  <th class="p-3">Milestone Step</th>
+                  <th class="p-3">Audio Hours</th>
+                  <th class="p-3">SSL Loss</th>
+                  <th class="p-3 text-emerald-400">WER (%)</th>
+                  <th class="p-3 text-sky-400">CER (%)</th>
+                  <th class="p-3 text-purple-400">PER (%)</th>
+                  <th class="p-3">Saturation Status</th>
+                </tr>
+              </thead>
+              <tbody id="ptMilestonesTableBody" class="divide-y divide-slate-800/60 font-mono">
+                <tr><td colspan="7" class="p-4 text-center text-slate-500 italic">Waiting for milestone evaluation...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Live Streaming Pre-training Log Feed -->
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-3">
+          <div class="flex justify-between items-center">
+            <h4 class="text-sm font-bold text-white flex items-center gap-2">
+              <span>📟</span> Live Pre-Training Process Console
+            </h4>
+            <span id="ptConsoleVoiceBadge" class="text-xs font-mono text-indigo-300 bg-slate-950 px-2.5 py-1 rounded-lg border border-slate-800">
+              Piper 0-Disk Stream
+            </span>
+          </div>
+          <div id="ptConsoleOutput" class="h-48 overflow-y-auto bg-slate-950 rounded-xl p-3 font-mono text-xs text-slate-300 space-y-1 border border-slate-800">
+            <div class="text-slate-500">Connecting to live pre-training process output...</div>
+          </div>
+        </div>
+
       </div>
 
-      <!-- Live Scrolling Training Log Output -->
-      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-3">
-        <h4 class="text-sm font-bold text-white">Live Training Console Logs & Sample Predictions</h4>
-        <div id="trainingConsoleOutput" class="h-44 overflow-y-auto bg-slate-950 rounded-xl p-3 font-mono text-xs text-slate-300 space-y-1 border border-slate-800">
-          <div class="text-slate-500">No active training task. Launch training above to stream live epoch metrics.</div>
+      <!-- SUBVIEW 2: SUPERVISED CTC FINE-TUNING (ORIGINAL) -->
+      <div id="trainingSubView-ctc" class="hidden space-y-6">
+
+        <!-- Live Training Controls -->
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+          <div class="flex flex-col sm:flex-row justify-between sm:items-center gap-3">
+            <div>
+              <h3 class="text-lg font-bold text-white flex items-center gap-2">
+                <span class="w-2.5 h-2.5 rounded-full bg-indigo-400 animate-pulse"></span> PyTorch Live Training Controller
+              </h3>
+              <p class="text-xs text-slate-400">Launch background PyTorch training on either real LibriSpeech recordings or synthetic speech.</p>
+            </div>
+            <div class="flex items-center gap-2">
+              <button onclick="startTrainingFromTab('librispeech')" id="btnTabTrainLibri" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold shadow-lg transition-all">
+                Train on LibriSpeech (Real Speech)
+              </button>
+              <button onclick="startTrainingFromTab('synthetic')" class="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-bold border border-slate-700">
+                Train on Synthetic
+              </button>
+              <button onclick="stopLiveTraining()" id="btnTabStopTrain" class="px-3 py-2 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold hidden">
+                Stop
+              </button>
+            </div>
+          </div>
+
+          <!-- Training Stat Cards -->
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 text-center">
+            <div class="p-3 bg-slate-950 rounded-xl border border-slate-800">
+              <div class="text-[10px] text-slate-400 uppercase font-mono">Current Epoch</div>
+              <div id="tabMetricEpoch" class="text-xl font-bold text-white font-mono mt-0.5">-</div>
+            </div>
+            <div class="p-3 bg-slate-950 rounded-xl border border-slate-800">
+              <div class="text-[10px] text-slate-400 uppercase font-mono">Latest Training Loss</div>
+              <div id="tabMetricLoss" class="text-xl font-bold text-indigo-400 font-mono mt-0.5">-</div>
+            </div>
+            <div class="p-3 bg-slate-950 rounded-xl border border-slate-800">
+              <div class="text-[10px] text-slate-400 uppercase font-mono">Validation CER</div>
+              <div id="tabMetricCER" class="text-xl font-bold text-emerald-400 font-mono mt-0.5">-</div>
+            </div>
+            <div class="p-3 bg-slate-950 rounded-xl border border-slate-800">
+              <div class="text-[10px] text-slate-400 uppercase font-mono">Validation WER</div>
+              <div id="tabMetricWER" class="text-xl font-bold text-sky-400 font-mono mt-0.5">-</div>
+            </div>
+          </div>
         </div>
+
+        <!-- Training Loss & Error Rate Curves (Canvas Charts) -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <!-- Loss Curve -->
+          <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-3">
+            <div class="flex justify-between items-center">
+              <h4 class="text-sm font-bold text-white">CTC Loss Progression (Training vs. Validation)</h4>
+              <span class="text-xs text-indigo-400 font-mono">Convergence Curve</span>
+            </div>
+            <div class="relative bg-slate-950 border border-slate-800 rounded-xl h-48 overflow-hidden p-2">
+              <canvas id="lossCurveCanvas" class="w-full h-full"></canvas>
+            </div>
+          </div>
+
+          <!-- Error Rate Curve (CER & WER) -->
+          <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-3">
+            <div class="flex justify-between items-center">
+              <h4 class="text-sm font-bold text-white">Error Rate Progression (CER & WER)</h4>
+              <span class="text-xs text-emerald-400 font-mono">Target: 0.0</span>
+            </div>
+            <div class="relative bg-slate-950 border border-slate-800 rounded-xl h-48 overflow-hidden p-2">
+              <canvas id="errorRateCurveCanvas" class="w-full h-full"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <!-- Live Scrolling Training Log Output -->
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-3">
+          <h4 class="text-sm font-bold text-white">Live Training Console Logs & Sample Predictions</h4>
+          <div id="trainingConsoleOutput" class="h-44 overflow-y-auto bg-slate-950 rounded-xl p-3 font-mono text-xs text-slate-300 space-y-1 border border-slate-800">
+            <div class="text-slate-500">No active training task. Launch training above to stream live epoch metrics.</div>
+          </div>
+        </div>
+
       </div>
 
     </div>
@@ -1033,10 +1209,26 @@
       activeBtn.className = "main-tab-btn px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold shadow-lg transition-all flex items-center gap-1.5";
 
       if (tabKey === "dataset") loadDatasetSamples();
-      if (tabKey === "training") loadTrainingLogs();
+      if (tabKey === "training") {
+        loadTrainingLogs();
+        if (!trainingPollInterval) trainingPollInterval = setInterval(loadTrainingLogs, 2000);
+      } else {
+        if (trainingPollInterval) {
+          clearInterval(trainingPollInterval);
+          trainingPollInterval = null;
+        }
+      }
       if (tabKey === "benchmarks") loadBenchmarks();
       if (tabKey === "sota") loadSOTABenchmark();
-      if (tabKey === "pretrain") loadPretrainStatus();
+      if (tabKey === "pretrain") {
+        loadPretrainStatus();
+        if (!pretrainPollInterval) pretrainPollInterval = setInterval(loadPretrainStatus, 2000);
+      } else {
+        if (pretrainPollInterval) {
+          clearInterval(pretrainPollInterval);
+          pretrainPollInterval = null;
+        }
+      }
     }
 
     // -------------------------------------------------------------
@@ -1446,13 +1638,335 @@
     // -------------------------------------------------------------
     let trainingPollInterval = null;
 
+    function switchTrainingSubView(mode) {
+      const vPretrain = document.getElementById("trainingSubView-pretrain");
+      const vCTC = document.getElementById("trainingSubView-ctc");
+      const bPretrain = document.getElementById("subBtn-training-pretrain");
+      const bCTC = document.getElementById("subBtn-training-ctc");
+
+      if (mode === "pretrain") {
+        vPretrain.classList.remove("hidden");
+        vCTC.classList.add("hidden");
+        bPretrain.className = "px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold transition-all flex items-center gap-2 shadow-lg";
+        bCTC.className = "px-4 py-2 bg-slate-950 hover:bg-slate-800 text-slate-300 border border-slate-800 rounded-xl text-xs font-bold transition-all flex items-center gap-2";
+      } else {
+        vPretrain.classList.add("hidden");
+        vCTC.classList.remove("hidden");
+        bPretrain.className = "px-4 py-2 bg-slate-950 hover:bg-slate-800 text-slate-300 border border-slate-800 rounded-xl text-xs font-bold transition-all flex items-center gap-2";
+        bCTC.className = "px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold transition-all flex items-center gap-2 shadow-lg";
+      }
+    }
+
     async function loadTrainingLogs() {
       try {
         const res = await fetch("/api/train/logs");
         const data = await res.json();
+        if (data.active_pretrain) {
+          renderPretrainTrainingView(data.active_pretrain);
+        }
         renderTrainingCurves(data);
       } catch (e) {
         console.error("Load training logs error:", e);
+      }
+    }
+
+    function renderPretrainTrainingView(data) {
+      if (!data) return;
+
+      const step = data.step || 0;
+      const totalSteps = data.total_steps || 625;
+      const hours = data.cumulative_audio_hours || 0;
+      const sec = data.cumulative_audio_sec || 0;
+      const loss = data.loss !== undefined ? data.loss : 4.8;
+      const acc = data.accuracy !== undefined ? data.accuracy : 1.0;
+      const pct = totalSteps > 0 ? ((step / totalSteps) * 100).toFixed(1) : "0.0";
+
+      const elStep = document.getElementById("ptMetricStep");
+      if (elStep) elStep.innerText = step;
+      const elTotal = document.getElementById("ptMetricTotalSteps");
+      if (elTotal) elTotal.innerText = totalSteps;
+      const elPct = document.getElementById("ptMetricPct");
+      if (elPct) elPct.innerText = `${pct}% Complete`;
+      const elHours = document.getElementById("ptMetricHours");
+      if (elHours) elHours.innerText = hours.toFixed(2);
+      const elSec = document.getElementById("ptMetricSec");
+      if (elSec) elSec.innerText = `${sec.toFixed(0)}s in RAM (0 Disk Bytes)`;
+      const elAcc = document.getElementById("ptMetricAcc");
+      if (elAcc) elAcc.innerText = `${acc.toFixed(1)}%`;
+      const elLoss = document.getElementById("ptMetricLoss");
+      if (elLoss) elLoss.innerText = loss.toFixed(3);
+
+      const badge = document.getElementById("ptStatusBadge");
+      if (badge) {
+        if (data.is_running) {
+          badge.className = "badge-pill bg-purple-500/20 text-purple-300 border border-purple-500/40 animate-pulse";
+          badge.innerText = `⚡ Pre-training Live (Step ${step}/${totalSteps})`;
+        } else {
+          badge.className = "badge-pill bg-slate-800 text-slate-300 border border-slate-700";
+          badge.innerText = step > 0 ? `Completed ${step} Steps` : "Idle";
+        }
+      }
+
+      const voiceBadge = document.getElementById("ptConsoleVoiceBadge");
+      if (voiceBadge && data.active_voice) {
+        voiceBadge.innerText = `Voices: ${data.active_voice}`;
+      }
+
+      // Draw Curves
+      if (data.history && data.history.length > 0) {
+        drawPretrainLossAccChart("ptLossAccCanvas", data.history);
+      }
+      if (data.milestones && data.milestones.length > 0) {
+        drawBenchmarkScalingChart("ptBenchmarkCanvas", data.milestones);
+        renderMilestonesTable(data.milestones);
+      }
+
+      // Console logs
+      const consoleEl = document.getElementById("ptConsoleOutput");
+      if (consoleEl && data.recent_logs && data.recent_logs.length > 0) {
+        consoleEl.innerHTML = "";
+        data.recent_logs.forEach(line => {
+          const div = document.createElement("div");
+          if (line.includes("Milestone Results")) {
+            div.className = "text-emerald-400 font-bold py-1 bg-emerald-950/40 px-2 rounded border border-emerald-800/50";
+            div.innerText = line;
+          } else if (line.includes("Loss:")) {
+            div.className = "text-slate-300 py-0.5 flex flex-wrap justify-between font-mono text-[11px] border-b border-slate-900/60";
+            const parts = line.split("|");
+            div.innerHTML = `
+              <span class="text-indigo-400 font-bold">${parts[0] ? parts[0].trim() : ""}</span>
+              <span class="text-amber-400">${parts[1] ? parts[1].trim() : ""}</span>
+              <span class="text-sky-400">${parts[2] ? parts[2].trim() : ""}</span>
+              <span class="text-emerald-400">${parts[3] ? parts[3].trim() : ""}</span>
+              <span class="text-slate-400 truncate max-w-[220px] text-[10px]">${parts[5] ? parts[5].trim() : ""}</span>
+            `;
+          } else {
+            div.className = "text-slate-400 py-0.5";
+            div.innerText = line;
+          }
+          consoleEl.appendChild(div);
+        });
+        consoleEl.scrollTop = consoleEl.scrollHeight;
+      }
+    }
+
+    function renderMilestonesTable(milestones) {
+      const tbody = document.getElementById("ptMilestonesTableBody");
+      if (!tbody || !milestones || milestones.length === 0) return;
+      tbody.innerHTML = "";
+      milestones.forEach((m, idx) => {
+        const tr = document.createElement("tr");
+        tr.className = "hover:bg-slate-900/60 transition-colors";
+        const isBaseline = (idx === 0 || m.step === 0 || m.hours === 0);
+        const statusBadge = isBaseline
+          ? `<span class="px-2 py-0.5 rounded text-[10px] bg-slate-800 text-slate-400 border border-slate-700">Baseline (0h)</span>`
+          : `<span class="px-2 py-0.5 rounded text-[10px] bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">Milestone</span>`;
+        tr.innerHTML = `
+          <td class="p-3 text-white font-bold">Step ${m.step || (idx * 125)}</td>
+          <td class="p-3 text-emerald-400 font-semibold">${(m.hours || 0).toFixed(3)}h</td>
+          <td class="p-3 text-amber-400">${(m.loss || 0).toFixed(4)}</td>
+          <td class="p-3 text-emerald-300 font-bold">${(m.wer || 100).toFixed(1)}%</td>
+          <td class="p-3 text-sky-300">${(m.cer || 100).toFixed(1)}%</td>
+          <td class="p-3 text-purple-300 font-bold">${m.per !== undefined ? (m.per).toFixed(1) + '%' : '100.0%'}</td>
+          <td class="p-3">${statusBadge}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    function drawPretrainLossAccChart(canvasId, history) {
+      const canvas = document.getElementById(canvasId);
+      if (!canvas) return;
+      const ctx = canvas.getContext("2d");
+      canvas.width = canvas.parentElement.clientWidth * 2;
+      canvas.height = canvas.parentElement.clientHeight * 2;
+      const W = canvas.width;
+      const H = canvas.height;
+      ctx.clearRect(0, 0, W, H);
+
+      if (!history || history.length === 0) return;
+
+      const paddingLeft = 60;
+      const paddingRight = 60;
+      const paddingTop = 30;
+      const paddingBottom = 40;
+      const plotW = W - paddingLeft - paddingRight;
+      const plotH = H - paddingTop - paddingBottom;
+
+      const steps = history.map(h => h.step);
+      const losses = history.map(h => h.loss);
+      const accs = history.map(h => h.accuracy !== undefined ? h.accuracy : (h.masked_accuracy_pct !== undefined ? h.masked_accuracy_pct : 1.0));
+
+      const minLoss = Math.min(...losses) * 0.98;
+      const maxLoss = Math.max(...losses) * 1.02 || 5.0;
+      const minAcc = 0.0;
+      const maxAcc = Math.max(6.0, Math.max(...accs) * 1.3);
+
+      // Grid lines
+      ctx.strokeStyle = "#1e293b";
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 4]);
+
+      for (let i = 0; i <= 4; i++) {
+        const y = paddingTop + (plotH / 4) * i;
+        ctx.beginPath();
+        ctx.moveTo(paddingLeft, y);
+        ctx.lineTo(W - paddingRight, y);
+        ctx.stroke();
+
+        const lossVal = maxLoss - (i / 4) * (maxLoss - minLoss);
+        ctx.fillStyle = "#fbbf24";
+        ctx.font = "bold 20px monospace";
+        ctx.textAlign = "right";
+        ctx.fillText(lossVal.toFixed(2), paddingLeft - 10, y + 6);
+
+        const accVal = maxAcc - (i / 4) * (maxAcc - minAcc);
+        ctx.fillStyle = "#38bdf8";
+        ctx.textAlign = "left";
+        ctx.fillText(`${accVal.toFixed(1)}%`, W - paddingRight + 10, y + 6);
+      }
+      ctx.setLineDash([]);
+
+      const N = history.length;
+      const getX = (i) => paddingLeft + (i / Math.max(1, N - 1)) * plotW;
+
+      // Draw Loss line (amber)
+      ctx.strokeStyle = "#fbbf24";
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      for (let i = 0; i < N; i++) {
+        const x = getX(i);
+        const y = paddingTop + (1.0 - (losses[i] - minLoss) / Math.max(0.001, maxLoss - minLoss)) * plotH;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+
+      // Draw Acc line (sky)
+      ctx.strokeStyle = "#38bdf8";
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      for (let i = 0; i < N; i++) {
+        const x = getX(i);
+        const y = paddingTop + (1.0 - (accs[i] - minAcc) / Math.max(0.001, maxAcc - minAcc)) * plotH;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+
+      // Dots
+      for (let i = 0; i < N; i++) {
+        const x = getX(i);
+        const yLoss = paddingTop + (1.0 - (losses[i] - minLoss) / Math.max(0.001, maxLoss - minLoss)) * plotH;
+        const yAcc = paddingTop + (1.0 - (accs[i] - minAcc) / Math.max(0.001, maxAcc - minAcc)) * plotH;
+
+        ctx.fillStyle = "#fbbf24";
+        ctx.beginPath();
+        ctx.arc(x, yLoss, 5, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = "#38bdf8";
+        ctx.beginPath();
+        ctx.arc(x, yAcc, 5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // X-axis step labels
+      ctx.fillStyle = "#94a3b8";
+      ctx.font = "18px monospace";
+      ctx.textAlign = "center";
+      const stepInterval = Math.max(1, Math.floor(N / 5));
+      for (let i = 0; i < N; i += stepInterval) {
+        ctx.fillText(`Step ${steps[i]}`, getX(i), H - 10);
+      }
+      if (N > 1 && (N - 1) % stepInterval !== 0) {
+        ctx.fillText(`Step ${steps[N - 1]}`, getX(N - 1), H - 10);
+      }
+    }
+
+    function drawBenchmarkScalingChart(canvasId, milestones) {
+      const canvas = document.getElementById(canvasId);
+      if (!canvas) return;
+      const ctx = canvas.getContext("2d");
+      canvas.width = canvas.parentElement.clientWidth * 2;
+      canvas.height = canvas.parentElement.clientHeight * 2;
+      const W = canvas.width;
+      const H = canvas.height;
+      ctx.clearRect(0, 0, W, H);
+
+      if (!milestones || milestones.length === 0) return;
+
+      const paddingLeft = 60;
+      const paddingRight = 60;
+      const paddingTop = 30;
+      const paddingBottom = 40;
+      const plotW = W - paddingLeft - paddingRight;
+      const plotH = H - paddingTop - paddingBottom;
+
+      const wers = milestones.map(m => m.wer || 100.0);
+      const cers = milestones.map(m => m.cer || 100.0);
+      const pers = milestones.map(m => m.per !== undefined ? m.per : 100.0);
+      const hours = milestones.map(m => m.hours || 0.0);
+
+      const maxVal = Math.min(260.0, Math.max(110.0, ...cers, ...wers));
+
+      // Grid lines
+      ctx.strokeStyle = "#1e293b";
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 4]);
+
+      for (let i = 0; i <= 4; i++) {
+        const y = paddingTop + (plotH / 4) * i;
+        ctx.beginPath();
+        ctx.moveTo(paddingLeft, y);
+        ctx.lineTo(W - paddingRight, y);
+        ctx.stroke();
+
+        const val = maxVal - (i / 4) * maxVal;
+        ctx.fillStyle = "#94a3b8";
+        ctx.font = "bold 20px monospace";
+        ctx.textAlign = "right";
+        ctx.fillText(`${val.toFixed(0)}%`, paddingLeft - 10, y + 6);
+      }
+      ctx.setLineDash([]);
+
+      const N = milestones.length;
+      const getX = (i) => paddingLeft + (i / Math.max(1, N - 1)) * plotW;
+
+      const series = [
+        { vals: wers, color: "#10b981", label: "WER" },
+        { vals: cers, color: "#38bdf8", label: "CER" },
+        { vals: pers, color: "#c084fc", label: "PER" },
+      ];
+
+      series.forEach(s => {
+        ctx.strokeStyle = s.color;
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        for (let i = 0; i < N; i++) {
+          const x = getX(i);
+          const y = paddingTop + (1.0 - Math.min(1.0, s.vals[i] / maxVal)) * plotH;
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+
+        for (let i = 0; i < N; i++) {
+          const x = getX(i);
+          const y = paddingTop + (1.0 - Math.min(1.0, s.vals[i] / maxVal)) * plotH;
+          ctx.fillStyle = s.color;
+          ctx.beginPath();
+          ctx.arc(x, y, 6, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      });
+
+      // X labels
+      ctx.fillStyle = "#94a3b8";
+      ctx.font = "18px monospace";
+      ctx.textAlign = "center";
+      for (let i = 0; i < N; i++) {
+        ctx.fillText(`${hours[i].toFixed(2)}h (${milestones[i].step || 0}s)`, getX(i), H - 10);
       }
     }
 
@@ -1929,7 +2443,7 @@
       // Extract series
       const steps = history.map(h => h.step);
       const losses = history.map(h => h.loss);
-      const accs = history.map(h => h.masked_accuracy_pct !== undefined ? h.masked_accuracy_pct : 1.0);
+      const accs = history.map(h => h.masked_accuracy_pct !== undefined ? h.masked_accuracy_pct : (h.accuracy !== undefined ? h.accuracy : 1.0));
 
       const minLoss = Math.min(...losses) * 0.95;
       const maxLoss = Math.max(...losses) * 1.05 || 5.0;
