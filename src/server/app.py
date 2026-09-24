@@ -627,6 +627,30 @@ def get_live_scaling_status() -> Optional[Dict]:
     if not latest_step:
         return None
 
+    # Check if real-time live status JSON exists
+    live_status_path = Path("logs/pretrain_status_live.json")
+    live_data = {}
+    if live_status_path.exists():
+        try:
+            with open(live_status_path, "r", encoding="utf-8") as f:
+                live_data = json.load(f)
+        except Exception:
+            pass
+
+    eta_formatted = live_data.get("eta_formatted")
+    estimated_finish_time = live_data.get("estimated_finish_time")
+    avg_step_sec = live_data.get("avg_step_sec", 13.2)
+
+    if not eta_formatted and latest_step:
+        from datetime import datetime, timedelta
+        rem_steps = max(0, latest_step["total_steps"] - latest_step["step"])
+        rem_evals = max(0, (latest_step["total_steps"] - latest_step["step"]) // 125)
+        eta_seconds = (rem_steps * avg_step_sec) + (rem_evals * 35.0)
+        h = int(eta_seconds // 3600)
+        m = int((eta_seconds % 3600) // 60)
+        eta_formatted = f"{h}h {m:02d}m" if h > 0 else f"{m}m"
+        estimated_finish_time = (datetime.now() + timedelta(seconds=eta_seconds)).strftime("%H:%M:%S")
+
     return {
         "is_running": is_running,
         "source": "scaling_benchmark",
@@ -643,6 +667,9 @@ def get_live_scaling_status() -> Optional[Dict]:
         "disk_bytes_used": 0,
         "active_voice": latest_step["active_voice"],
         "active_voices": latest_step["active_voices"],
+        "eta_formatted": eta_formatted or "--",
+        "estimated_finish_time": estimated_finish_time or "--",
+        "avg_step_sec": round(avg_step_sec, 2),
         "history": history,
         "milestones": milestones,
         "recent_logs": clean_recent_logs[-35:],

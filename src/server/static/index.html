@@ -400,8 +400,8 @@
           </div>
         </div>
 
-        <!-- 4 Key Stat Cards -->
-        <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <!-- 5 Key Stat Cards -->
+        <div class="grid grid-cols-2 md:grid-cols-5 gap-4">
           <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl">
             <span class="text-[10px] uppercase font-mono tracking-wider text-slate-400 block mb-1">Pre-Training Step</span>
             <div class="flex items-baseline gap-1.5">
@@ -436,6 +436,14 @@
               <span class="text-xs font-mono text-slate-400">CE</span>
             </div>
             <span class="text-[11px] font-mono text-slate-400 block mt-0.5">Entropy floor: ~4.605</span>
+          </div>
+
+          <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl col-span-2 md:col-span-1">
+            <span class="text-[10px] uppercase font-mono tracking-wider text-slate-400 block mb-1">Estimated Time Left</span>
+            <div class="flex items-baseline gap-1.5">
+              <span id="ptMetricETA" class="text-2xl font-black text-cyan-400">--</span>
+            </div>
+            <span id="ptMetricFinish" class="text-[11px] font-mono text-cyan-300 block mt-0.5">Finish: --</span>
           </div>
         </div>
 
@@ -1027,7 +1035,7 @@
       </div>
 
       <!-- Real-Time Metric Gauges -->
-      <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div class="grid grid-cols-2 md:grid-cols-5 gap-4">
         <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl">
           <span class="text-[10px] uppercase font-mono tracking-wider text-slate-400 block mb-1">Synthesized in RAM</span>
           <div class="flex items-baseline gap-1.5">
@@ -1062,6 +1070,14 @@
             <span class="text-xs font-mono text-sky-300">%</span>
           </div>
           <span class="text-[11px] font-mono text-slate-400 block mt-0.5">100 clusters (1% baseline)</span>
+        </div>
+
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl col-span-2 md:col-span-1">
+          <span class="text-[10px] uppercase font-mono tracking-wider text-slate-400 block mb-1">Estimated Time Left</span>
+          <div class="flex items-baseline gap-1.5">
+            <span id="statPretrainETA" class="text-2xl font-black text-cyan-400">--</span>
+          </div>
+          <span id="statPretrainFinish" class="text-[11px] font-mono text-cyan-300 block mt-0.5">Finish: --</span>
         </div>
       </div>
 
@@ -1765,6 +1781,10 @@
       if (elAcc) elAcc.innerText = `${acc.toFixed(1)}%`;
       const elLoss = document.getElementById("ptMetricLoss");
       if (elLoss) elLoss.innerText = loss.toFixed(3);
+      const elETA = document.getElementById("ptMetricETA");
+      if (elETA) elETA.innerText = data.eta_formatted || "--";
+      const elFinish = document.getElementById("ptMetricFinish");
+      if (elFinish) elFinish.innerText = data.estimated_finish_time ? `Finish: ~${data.estimated_finish_time} (~${data.avg_step_sec || 13.2}s/step)` : "Finish: --";
 
       const badge = document.getElementById("ptStatusBadge");
       if (badge) {
@@ -2474,6 +2494,11 @@
         document.getElementById("statDiskSaved").innerText = savedMb.toFixed(2);
         document.getElementById("statPretrainLoss").innerText = data.loss ? data.loss.toFixed(3) : "4.85";
         document.getElementById("statPretrainAcc").innerText = (data.accuracy !== undefined && data.accuracy !== null) ? data.accuracy.toFixed(1) : "1.0";
+
+        const statETA = document.getElementById("statPretrainETA");
+        if (statETA) statETA.innerText = data.eta_formatted || "--";
+        const statFinish = document.getElementById("statPretrainFinish");
+        if (statFinish) statFinish.innerText = data.estimated_finish_time ? `Finish: ~${data.estimated_finish_time}` : "Finish: --";
 
         if (data.active_voice) {
           document.getElementById("pretrainActiveVoiceBadge").innerText = `Voice: ${data.active_voice}`;

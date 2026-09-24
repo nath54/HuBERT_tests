@@ -1,6 +1,7 @@
 """HuBERT Self-Supervised Pre-training Architecture: Masked Acoustic Unit Prediction."""
 
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, Union
+from pathlib import Path
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -192,6 +193,21 @@ class HuBERTForPreTraining(nn.Module):
             path,
         )
         print(f"[HuBERT Pretrain] Pre-trained backbone successfully saved to {path}")
+
+    def load_pretrained_backbone(self, path_or_dict):
+        """Load pre-trained backbone weights from path or checkpoint dictionary."""
+        if isinstance(path_or_dict, (str, Path)):
+            checkpoint = torch.load(path_or_dict, map_location="cpu")
+        else:
+            checkpoint = path_or_dict
+
+        if "feature_extractor" in checkpoint:
+            self.feature_extractor.load_state_dict(checkpoint["feature_extractor"])
+        if "feature_projection" in checkpoint:
+            self.feature_projection.load_state_dict(checkpoint["feature_projection"])
+        if "encoder" in checkpoint:
+            self.encoder.load_state_dict(checkpoint["encoder"])
+        print("[HuBERT Pretrain] Pre-trained backbone successfully loaded!")
 
     def transfer_to_ctc_model(self, ctc_model: nn.Module):
         """Transfer pre-trained feature extractor and Transformer encoder to a HuBERTForCTC instance."""
