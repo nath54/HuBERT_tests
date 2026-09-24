@@ -43,9 +43,9 @@
     </div>
 
     <!-- Control Bar: Input Generation & Audio Upload -->
-    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl grid grid-cols-1 lg:grid-cols-12 gap-4 items-center">
       <!-- Synthesize spoken word -->
-      <div class="space-y-1">
+      <div class="lg:col-span-5 space-y-1">
         <label class="text-xs font-semibold text-slate-300">1. Synthesize Spoken Word to Python:</label>
         <div class="flex gap-2">
           <input type="text" id="synthWordInput" value="hello" placeholder="Type a word..." class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white w-full focus:outline-none focus:ring-2 focus:ring-indigo-500">
@@ -55,21 +55,37 @@
         </div>
       </div>
 
-      <!-- Presets -->
-      <div class="space-y-1">
+      <!-- Quick Word Presets -->
+      <div class="lg:col-span-4 space-y-1">
         <label class="text-xs font-semibold text-slate-300">Quick Word Presets:</label>
         <div class="flex flex-wrap gap-1.5">
+          <button onclick="quickSynth('hello')" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded text-xs font-mono">hello</button>
           <button onclick="quickSynth('speech')" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded text-xs font-mono">speech</button>
           <button onclick="quickSynth('one')" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded text-xs font-mono">one</button>
+          <button onclick="quickSynth('bad')" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded text-xs font-mono">bad</button>
           <button onclick="quickSynth('deep')" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded text-xs font-mono">deep</button>
-          <button onclick="quickSynth('learn')" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded text-xs font-mono">learn</button>
         </div>
       </div>
 
-      <!-- Audio Upload / Mic -->
-      <div class="space-y-1">
-        <label class="text-xs font-semibold text-slate-300">2. Or Upload Audio File (.wav/.flac):</label>
+      <!-- Audio Upload -->
+      <div class="lg:col-span-3 space-y-1">
+        <label class="text-xs font-semibold text-slate-300">2. Or Upload Audio File:</label>
         <input type="file" id="audioFileInput" accept=".wav,.flac,.ogg" class="text-xs text-slate-400 file:mr-2 file:py-1 file:px-3 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-slate-800 file:text-indigo-400 hover:file:bg-slate-700 cursor-pointer">
+      </div>
+    </div>
+
+    <!-- Interactive CTC Sensitivity / Blank Penalty Slider Bar -->
+    <div class="bg-gradient-to-r from-slate-900 via-indigo-950/40 to-slate-900 border border-slate-800 rounded-xl p-3.5 shadow flex flex-col md:flex-row justify-between items-center gap-4">
+      <div class="flex items-center gap-2">
+        <span class="text-xs font-bold text-sky-400 uppercase tracking-wider">CTC Blank Penalty (Sensitivity):</span>
+        <span class="text-xs text-slate-400 hidden sm:inline">Adjusts blank token threshold to reveal underlying character spikes</span>
+      </div>
+      <div class="flex items-center gap-3 w-full md:w-auto">
+        <span class="text-[11px] text-slate-500 font-mono">0.0 (Strict)</span>
+        <input type="range" id="blankPenaltySlider" min="0" max="4.0" step="0.2" value="1.0" class="w-48 h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-500" oninput="updateBlankPenaltyDisplay(this.value)">
+        <span class="text-[11px] text-slate-500 font-mono">4.0 (High)</span>
+        <span id="blankPenaltyValueText" class="text-xs font-mono font-bold text-indigo-400 w-12 text-right">1.0</span>
+        <button onclick="triggerSynthesis()" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-[11px] text-slate-200 rounded font-semibold">Apply</button>
       </div>
     </div>
 
@@ -97,7 +113,7 @@
           <div class="space-y-1">
             <div class="flex justify-between text-[11px] text-slate-400 font-mono">
               <span>Waveform (Blue) & Captum Integrated Gradients (Crimson)</span>
-              <span id="attributionLegendText">Click a character below to highlight attribution</span>
+              <span id="attributionLegendText" class="text-rose-400">Click any token below to highlight attribution</span>
             </div>
             <div class="relative bg-slate-950 border border-slate-800 rounded-xl overflow-hidden h-36">
               <canvas id="liveWaveformCanvas" class="w-full h-full"></canvas>
@@ -118,37 +134,56 @@
 
         <!-- Live CTC Decoding & Alignment -->
         <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
-          <div class="flex justify-between items-center">
-            <h3 class="text-md font-bold text-white flex items-center gap-2">
-              <span class="w-2 h-2 rounded-full bg-emerald-400"></span> Live CTC Output & Token Emissions
-            </h3>
-            <span class="text-xs font-mono text-emerald-400" id="decodedTranscriptDisplay">Decoded: "..."</span>
+          <div class="flex flex-col sm:flex-row justify-between sm:items-center gap-2">
+            <div>
+              <h3 class="text-md font-bold text-white flex items-center gap-2">
+                <span class="w-2 h-2 rounded-full bg-emerald-400"></span> Live CTC Output & Phonetic Tokens
+              </h3>
+              <div class="text-xs font-mono text-emerald-400 mt-0.5">
+                CTC Decoded Transcript: <strong id="decodedTranscriptDisplay" class="text-white bg-slate-950 px-2 py-0.5 rounded border border-emerald-500/40">"..."</strong>
+              </div>
+            </div>
+            <div class="text-right">
+              <span class="text-[11px] text-slate-400 font-mono block">Top Phonetic Sequence:</span>
+              <span id="topNonBlankDisplay" class="text-xs font-mono font-bold text-sky-400">...</span>
+            </div>
           </div>
 
           <!-- Interactive Token Attribution Bar -->
           <div class="space-y-2">
             <div class="flex justify-between text-xs text-slate-400">
-              <span>Interactive Captum Token Picker (Click any character to run live attribution):</span>
+              <span class="font-semibold text-slate-300">1. Click Any Emitted Character to Run Captum Attribution:</span>
               <span class="text-[10px] text-slate-500 font-mono">POST /api/xai/attribute</span>
             </div>
-            <div id="tokenButtonGroup" class="flex flex-wrap gap-1.5 p-2 bg-slate-950 rounded-xl border border-slate-800 min-h-[44px]">
+            <div id="tokenButtonGroup" class="flex flex-wrap gap-1.5 p-2.5 bg-slate-950 rounded-xl border border-slate-800 min-h-[46px] items-center">
               <!-- Clickable tokens generated dynamically -->
+            </div>
+          </div>
+
+          <!-- Direct Character Quick Attribute Selector -->
+          <div class="space-y-1.5 p-3 bg-slate-950/60 rounded-xl border border-slate-800">
+            <div class="flex justify-between items-center text-xs">
+              <span class="text-slate-300 font-semibold">2. Or Attribute ANY Character at Current Scrubber Frame:</span>
+              <span id="selectedFramePrompt" class="text-indigo-400 font-mono text-[11px]">Frame #15</span>
+            </div>
+            <div class="flex flex-wrap gap-1" id="quickCharButtons">
+              <!-- Quick alphabet characters -->
             </div>
           </div>
 
           <!-- Frame Emissions Breakdown -->
           <div class="space-y-1 font-mono">
             <div class="flex justify-between text-[11px] text-slate-400">
-              <span>Raw Frame Sequence (Hover frame to see top-4 token probabilities):</span>
+              <span>Time Frame Sequence (Click any frame pill to inspect & attribute):</span>
               <span id="totalFramesCount" class="text-sky-400">Frames: 0</span>
             </div>
-            <div id="framePillList" class="flex flex-wrap gap-1 max-h-32 overflow-y-auto p-2 bg-slate-950 rounded-xl border border-slate-800 text-[11px]">
+            <div id="framePillList" class="flex flex-wrap gap-1 max-h-36 overflow-y-auto p-2.5 bg-slate-950 rounded-xl border border-slate-800 text-[11px]">
               <!-- Frame pills populated dynamically -->
             </div>
           </div>
 
-          <div id="frameDetailBox" class="p-2.5 bg-slate-950/80 rounded-lg border border-slate-800 text-xs font-mono text-slate-400">
-            Hover over any frame pill above to inspect its real softmax probability distribution.
+          <div id="frameDetailBox" class="p-3 bg-slate-950/90 rounded-lg border border-slate-800 text-xs font-mono text-slate-300 flex justify-between items-center">
+            <span>Hover or click any frame above to inspect its real softmax distribution.</span>
           </div>
         </div>
 
@@ -223,7 +258,7 @@
 
   </div>
 
-  <!-- LIVE TRAINING MODAL / DRAWER -->
+  <!-- LIVE TRAINING MODAL -->
   <div id="trainingModal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
     <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl max-w-2xl w-full space-y-5">
       <div class="flex justify-between items-center border-b border-slate-800 pb-3">
@@ -291,30 +326,55 @@
     let selectedStudioLayer = 0;
     let currentAttributionCurve = null;
     let trainingPollInterval = null;
+    let currentActiveFrame = 15;
+
+    function updateBlankPenaltyDisplay(val) {
+      document.getElementById("blankPenaltyValueText").innerText = parseFloat(val).toFixed(1);
+    }
+
+    // Initialize Alphabet Quick Buttons
+    function initQuickCharButtons() {
+      const group = document.getElementById("quickCharButtons");
+      group.innerHTML = "";
+      const commonChars = ["h", "e", "l", "o", "s", "p", "a", "t", "r", "d", "n", "m", "_"];
+      commonChars.forEach(c => {
+        const btn = document.createElement("button");
+        btn.className = "px-2 py-0.5 bg-slate-900 hover:bg-rose-900/60 border border-slate-700 text-xs font-mono font-bold text-slate-200 rounded transition-all";
+        btn.innerText = c === "_" ? "<blank>" : `'${c}'`;
+        btn.onclick = () => runCaptumAttribution(currentActiveFrame, null, c);
+        group.appendChild(btn);
+      });
+    }
 
     // Fetch initial backend status
     async function initStudio() {
+      initQuickCharButtons();
       try {
         const res = await fetch("/api/status");
         const status = await res.json();
         document.getElementById("deviceBadge").innerText = `PyTorch: ${status.device.toUpperCase()}`;
         document.getElementById("modelInfoBadge").innerText = `HuBERT (${status.encoder_layers} Layers, ${status.embed_dim}d)`;
       } catch (e) {
-        console.error("Backend offline or loading...", e);
+        console.error("Backend loading...", e);
       }
-      // Run initial inference
       triggerSynthesis();
     }
 
-    // Trigger Synthesis & Inference
+    // Trigger Synthesis & Inference with Blank Penalty
     async function triggerSynthesis() {
       const word = document.getElementById("synthWordInput").value || "hello";
+      const penalty = parseFloat(document.getElementById("blankPenaltySlider").value) || 0.0;
       showSpinner(true);
       try {
         const res = await fetch("/api/synthesize_and_infer", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ word: word, duration: 0.8, f0: 140.0 })
+          body: JSON.stringify({
+            word: word,
+            duration: 0.8,
+            f0: 140.0,
+            blank_penalty: penalty
+          })
         });
         const data = await res.json();
         renderInferenceData(data);
@@ -335,8 +395,10 @@
       const file = e.target.files[0];
       if (!file) return;
 
+      const penalty = parseFloat(document.getElementById("blankPenaltySlider").value) || 0.0;
       const formData = new FormData();
       formData.append("file", file);
+      formData.append("blank_penalty", penalty);
 
       showSpinner(true);
       try {
@@ -364,40 +426,62 @@
       currentInferenceData = data;
       currentAttributionCurve = null;
 
-      document.getElementById("audioMetaText").innerText = `Duration: ${data.duration_sec}s (${data.num_audio_samples.toLocaleString()} samples) | Transcript: '${data.transcript}'`;
-      document.getElementById("decodedTranscriptDisplay").innerText = `Decoded: "${data.decoded_text}"`;
+      document.getElementById("audioMetaText").innerText = `Duration: ${data.duration_sec}s (${data.num_audio_samples.toLocaleString()} samples) | Input Text: '${data.transcript}'`;
+      document.getElementById("decodedTranscriptDisplay").innerText = `"${data.decoded_text || '(silence)'}"`;
+      document.getElementById("topNonBlankDisplay").innerText = data.top_non_blank_text ? `"${data.top_non_blank_text.slice(0, 20)}..."` : "-";
       document.getElementById("totalFramesCount").innerText = `Frames: ${data.num_frames}`;
 
-      // Populate Token Attribution Buttons
+      // Populate Token Attribution Buttons: Candidates & High Confidence
       const btnGroup = document.getElementById("tokenButtonGroup");
       btnGroup.innerHTML = "";
-      const emissions = data.frame_emissions;
 
-      // Extract unique characters for attribution
-      emissions.forEach((em) => {
-        if (!em.is_blank) {
+      const candidates = data.candidate_tokens || [];
+      const seenChars = new Set();
+
+      candidates.forEach((cand) => {
+        const key = `${cand.char}_${Math.floor(cand.frame / 5)}`;
+        if (!seenChars.has(key)) {
+          seenChars.add(key);
           const btn = document.createElement("button");
-          btn.className = "px-2.5 py-1 bg-slate-900 hover:bg-rose-900/60 border border-slate-700 hover:border-rose-500 rounded-lg text-xs font-mono font-bold text-slate-100 transition-all";
-          btn.innerHTML = `'${em.char}' <span class="text-[10px] text-slate-400">f:${em.frame}</span>`;
-          btn.onclick = () => runCaptumAttribution(em.frame, em.token_id, em.char);
+          btn.className = "px-3 py-1.5 bg-slate-900 hover:bg-rose-900/60 border border-slate-700 hover:border-rose-500 rounded-lg text-xs font-mono font-bold text-slate-100 transition-all flex items-center gap-1.5 shadow-sm";
+          btn.innerHTML = `<span class="text-rose-400 font-bold text-sm">'${cand.char}'</span> <span class="text-[10px] text-slate-400">@ ${cand.time_sec}s (f:${cand.frame})</span>`;
+          btn.onclick = () => runCaptumAttribution(cand.frame, cand.token_id, cand.char);
           btnGroup.appendChild(btn);
         }
       });
 
       if (btnGroup.children.length === 0) {
-        btnGroup.innerHTML = "<span class='text-xs text-slate-500'>All frames are blank or silent.</span>";
+        // Fallback: populate with top 3 most prominent frames
+        for (let f = 5; f < data.num_frames - 5; f += 8) {
+          const em = data.frame_emissions[f];
+          const btn = document.createElement("button");
+          btn.className = "px-3 py-1 bg-slate-900 hover:bg-rose-900/60 border border-slate-700 text-xs font-mono rounded-lg text-slate-200";
+          btn.innerHTML = `'${em.top_non_blank_char}' <span class="text-[10px] text-slate-400">@ ${em.time_sec}s</span>`;
+          btn.onclick = () => runCaptumAttribution(f, em.top_non_blank_id, em.top_non_blank_char);
+          btnGroup.appendChild(btn);
+        }
       }
 
       // Populate Frame Pill List
       const pillList = document.getElementById("framePillList");
       pillList.innerHTML = "";
-      emissions.forEach(em => {
+      data.frame_emissions.forEach((em) => {
         const pill = document.createElement("div");
-        pill.className = `px-2 py-0.5 rounded cursor-pointer border ${em.is_blank ? 'bg-slate-900/50 text-slate-600 border-slate-800' : 'bg-indigo-950/60 text-indigo-300 border-indigo-700 font-bold'}`;
-        pill.innerText = em.char;
+        pill.className = `px-2 py-1 rounded cursor-pointer border text-center transition-all ${em.frame === currentActiveFrame ? 'border-sky-400 bg-sky-950/80 font-bold' : (em.is_blank ? 'bg-slate-900/40 text-slate-500 border-slate-800 hover:border-slate-700' : 'bg-indigo-950/80 text-indigo-300 border-indigo-600 font-bold')}`;
+        pill.innerHTML = `<div>${em.is_blank ? '_' : em.char}</div><div class="text-[9px] text-slate-500 font-normal">[${em.top_non_blank_char}]</div>`;
         pill.onmouseenter = () => showFrameDetail(em);
+        pill.onclick = () => {
+          currentActiveFrame = em.frame;
+          document.getElementById("selectedFramePrompt").innerText = `Frame #${em.frame} (${em.time_sec}s)`;
+          showFrameDetail(em);
+          runCaptumAttribution(em.frame, em.top_non_blank_id, em.top_non_blank_char);
+        };
         pillList.appendChild(pill);
       });
+
+      if (data.frame_emissions.length > currentActiveFrame) {
+        showFrameDetail(data.frame_emissions[currentActiveFrame]);
+      }
 
       drawWaveform();
       drawSpectrogram();
@@ -405,12 +489,20 @@
     }
 
     function showFrameDetail(em) {
+      currentActiveFrame = em.frame;
+      document.getElementById("selectedFramePrompt").innerText = `Frame #${em.frame} (${em.time_sec}s)`;
+
       const box = document.getElementById("frameDetailBox");
       const topStr = em.top_probs.map(p => `'${p.char}': ${(p.prob * 100).toFixed(1)}%`).join(" | ");
       box.innerHTML = `
-        <span class="text-indigo-400 font-bold">Frame #${em.frame} (${em.time_sec}s):</span>
-        Argmax: <strong>'${em.char}'</strong> (Conf: ${(em.confidence * 100).toFixed(1)}%) |
-        Top Probabilities: <span class="text-slate-300">${topStr}</span>
+        <div>
+          <span class="text-indigo-400 font-bold">Frame #${em.frame} (${em.time_sec}s):</span>
+          Argmax: <strong>'${em.char}'</strong> | Top Non-Blank: <strong class="text-sky-300">'${em.top_non_blank_char}'</strong> |
+          <span class="text-slate-400">${topStr}</span>
+        </div>
+        <button onclick="runCaptumAttribution(${em.frame}, ${em.top_non_blank_id}, '${em.top_non_blank_char}')" class="px-2.5 py-1 bg-rose-600 hover:bg-rose-500 text-white rounded text-[11px] font-bold shrink-0">
+          Attribute Frame #${em.frame}
+        </button>
       `;
     }
 
@@ -424,13 +516,14 @@
           body: JSON.stringify({
             frame_idx: frameIdx,
             token_idx: tokenIdx,
+            char: char,
             method: "integrated_gradients",
             steps: 20
           })
         });
         const attrData = await res.json();
         currentAttributionCurve = attrData.attribution_curve;
-        document.getElementById("attributionLegendText").innerText = `Captum IG Overlay for '${char}' [Frame ${frameIdx}] (Max Attr: ${attrData.max_attr.toFixed(4)})`;
+        document.getElementById("attributionLegendText").innerText = `Captum IG Overlay for '${attrData.char}' [Frame ${frameIdx}] (Max Attr: ${attrData.max_attr.toFixed(4)})`;
         drawWaveform();
       } catch (err) {
         console.error("Attribution error:", err);
@@ -451,8 +544,8 @@
         box.innerHTML = `
           <span class="text-rose-400 font-bold">Causal Ablation Layer ${layerIdx+1} Result:</span><br>
           • Mean Logit Shift: <span class="text-amber-300 font-bold">${d.logit_mean_diff}</span><br>
-          • Original Output:  <span class="text-emerald-400 font-bold">"${d.orig_text}"</span><br>
-          • Degraded Output:  <span class="text-rose-400 font-bold">"${d.ablated_text}"</span>
+          • Original Output:  <span class="text-emerald-400 font-bold">"${d.orig_text || '(silence)'}"</span><br>
+          • Degraded Output:  <span class="text-rose-400 font-bold">"${d.ablated_text || '(silence)'}"</span>
         `;
       } catch (err) {
         console.error("Ablation error:", err);
@@ -527,13 +620,13 @@
 
         ctx.fillStyle = "rgba(244, 63, 94, 0.35)";
         ctx.strokeStyle = "#f43f5e";
-        ctx.lineWidth = 2;
+        ctx.lineWidth = 2.5;
         ctx.beginPath();
         ctx.moveTo(0, H);
 
         for (let i = 0; i < attr.length; i++) {
           const normA = Math.abs(attr[i]) / maxAttr;
-          const y = H - (normA * (H * 0.7));
+          const y = H - (normA * (H * 0.75));
           const x = i * attrStep;
           ctx.lineTo(x, y);
         }
@@ -555,7 +648,7 @@
       const H = canvas.height;
 
       ctx.clearRect(0, 0, W, H);
-      const spec = currentInferenceData.spectrogram; // (T_frames, 16 bins)
+      const spec = currentInferenceData.spectrogram;
       const numFrames = spec.length;
       const numBins = spec[0]?.length || 16;
 
@@ -588,7 +681,7 @@
       const layer = currentInferenceData.layer_representations[selectedStudioLayer];
       if (!layer) return;
 
-      const matrix = layer.features_2d; // (32 dims, T_frames)
+      const matrix = layer.features_2d;
       const numDims = matrix.length;
       const numFrames = matrix[0].length;
 
@@ -619,7 +712,6 @@
       const H = canvas.height;
 
       ctx.clearRect(0, 0, W, H);
-      // Attention layer index (0 to 3)
       const attnIdx = Math.min(selectedStudioLayer, currentInferenceData.attentions.length - 1);
       const attn = currentInferenceData.attentions[attnIdx]?.attention_matrix;
       if (!attn) return;
@@ -630,7 +722,7 @@
 
       for (let i = 0; i < T; i++) {
         for (let j = 0; j < T; j++) {
-          const val = Math.min(1, attn[i][j] * 4); // Boost contrast
+          const val = Math.min(1, attn[i][j] * 4);
           ctx.fillStyle = `rgba(244, 63, 94, ${val})`;
           ctx.fillRect(i * stepX, j * stepY, stepX - 0.5, stepY - 0.5);
         }

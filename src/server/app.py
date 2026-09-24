@@ -101,18 +101,20 @@ class SynthesizeRequest(BaseModel):
     word: str = "hello"
     duration: float = 0.8
     f0: float = 140.0
+    blank_penalty: float = 0.0
 
 
 class AttributeRequest(BaseModel):
-    frame_idx: int
-    token_idx: int
+    frame_idx: int = 15
+    token_idx: Optional[int] = None
+    char: Optional[str] = None
     method: str = "integrated_gradients"
     steps: int = 20
 
 
 class AblationRequest(BaseModel):
     layer_idx: int
-    ablation_type: str = "zero"  # 'zero' or 'skip'
+    ablation_type: str = "zero"
 
 
 class TrainStartRequest(BaseModel):
@@ -129,12 +131,13 @@ def get_status():
         "checkpoint_exists": state.checkpoint_path.exists(),
         "is_training": state.is_training,
         "vocab_size": state.tokenizer.vocab_size,
+        "vocab": state.tokenizer.vocab,
         "encoder_layers": state.model.config.encoder_layers if state.model else 0,
         "embed_dim": state.model.config.encoder_embed_dim if state.model else 0,
     }
 
 
-def process_audio_tensor(audio: torch.Tensor, transcript: str = ""):
+def process_audio_tensor(audio: torch.Tensor, transcript: str = "", blank_penalty: float = 0.0):
     """Helper to run model and prepare complete layer inspection payload."""
     state.last_audio_tensor = audio.clone()
     audio = audio.to(state.device)
@@ -145,14 +148,26 @@ def process_audio_tensor(audio: torch.Tensor, transcript: str = ""):
     with torch.no_grad():
         outputs = state.model(audio, output_hidden_states=True, output_attentions=True)
 
-    logits = outputs["logits"]  # (1, T_frames, V)
-    probs = F.softmax(logits, dim=-1).squeeze(0).cpu().numpy()  # (T_frames, V)
-    t_frames = probs.shape[0]
+    logits = outputs["logits"].clone()  # (1, T_frames, V)
+    t_frames = logits.shape[1]
 
-    # Greedy decode
+    # Apply interactive blank penalty if requested
+    penalized_logits = logits.clone()
+    if blank_penalty > 0.0:
+        penalized_logits[:, :, state.model.config.blank_index] -= blank_penalty
+
+    probs = F.softmax(logits, dim=-1).squeeze(0).cpu().numpy()  # True probabilities (T_frames, V)
+    penalized_probs = F.softmax(penalized_logits, dim=-1).squeeze(0).cpu().numpy()
+
+    # Greedy decode with penalty
     out_lengths = outputs["output_lengths"]
-    decoded_tokens = state.model.decode_greedy(logits, lengths=out_lengths)[0]
+    decoded_tokens = state.model.decode_greedy(penalized_logits, lengths=out_lengths)[0]
     decoded_text = state.tokenizer.decode(decoded_tokens)
+
+    # Top non-blank character per frame (ignoring blank token)
+    non_blank_logits = logits.squeeze(0)[:, 1:]  # (T, V-1)
+    top_nb_ids = (non_blank_logits.argmax(dim=-1) + 1).cpu().tolist()
+    top_non_blank_text = "".join([state.tokenizer.id_to_char.get(i, "") for i in top_nb_ids])
 
     # Raw audio downsampled for snappy web transfer
     raw_audio = audio.squeeze().cpu().numpy()
@@ -161,8 +176,7 @@ def process_audio_tensor(audio: torch.Tensor, transcript: str = ""):
     step = max(1, num_samples // target_plot_points)
     plot_waveform = raw_audio[::step].tolist()
 
-    # Time-frequency spectrogram approximation for display
-    # Downsample time to match frames
+    # Spectrogram approximation
     frame_step = max(1, num_samples // t_frames)
     spec_energy = []
     for f in range(t_frames):
@@ -174,41 +188,72 @@ def process_audio_tensor(audio: torch.Tensor, transcript: str = ""):
             spec_energy.append([0.0] * 16)
 
     # Frame emissions
-    argmax_ids = logits.squeeze(0).argmax(dim=-1).cpu().tolist()
+    argmax_ids = penalized_logits.squeeze(0).argmax(dim=-1).cpu().tolist()
     frame_emissions = []
+    candidate_tokens = []  # Prominent non-blank tokens to present to user
+
     for t in range(t_frames):
         tok_id = argmax_ids[t]
         char = state.tokenizer.id_to_char.get(tok_id, "")
         is_blank = (tok_id == state.model.config.blank_index)
-        frame_emissions.append({
+
+        # Top non-blank for this frame
+        nb_tok_id = top_nb_ids[t]
+        nb_char = state.tokenizer.id_to_char.get(nb_tok_id, "")
+        nb_prob = float(probs[t, nb_tok_id])
+
+        # Rank all tokens at this frame
+        top_indices = np.argsort(probs[t])[-5:][::-1]
+        top_list = [
+            {
+                "char": state.tokenizer.id_to_char.get(int(i), ""),
+                "token_id": int(i),
+                "prob": round(float(probs[t, i]), 4),
+                "is_blank": int(i) == state.model.config.blank_index,
+            }
+            for i in top_indices
+        ]
+
+        frame_data = {
             "frame": t,
             "time_sec": round(t * 0.02, 3),
             "token_id": tok_id,
             "char": "_" if is_blank else char,
-            "confidence": round(float(probs[t, tok_id]), 4),
             "is_blank": is_blank,
-            "top_probs": [
-                {"char": state.tokenizer.id_to_char.get(i, ""), "prob": round(float(probs[t, i]), 3)}
-                for i in np.argsort(probs[t])[-4:][::-1]
-            ]
-        })
+            "confidence": round(float(penalized_probs[t, tok_id]), 4),
+            "top_non_blank_char": nb_char,
+            "top_non_blank_id": nb_tok_id,
+            "top_non_blank_prob": round(nb_prob, 4),
+            "top_probs": top_list,
+        }
+        frame_emissions.append(frame_data)
 
-    # Layer hidden representations (first 32 dimensions across all frames)
+        # If this frame has non-blank emission or is a local non-blank peak, record as candidate
+        if not is_blank or nb_prob > 0.005:
+            candidate_tokens.append({
+                "frame": t,
+                "token_id": nb_tok_id,
+                "char": nb_char,
+                "prob": round(nb_prob, 4),
+                "time_sec": round(t * 0.02, 3),
+            })
+
+    # Layer hidden representations
     layer_representations = []
     for l_idx, h in enumerate(outputs["hidden_states"]):
-        h_np = h.squeeze(0).cpu().numpy()  # (T_frames, embed_dim)
+        h_np = h.squeeze(0).cpu().numpy()
         layer_representations.append({
             "layer_idx": l_idx,
             "name": "CNN Out" if l_idx == 0 else f"Layer {l_idx}",
-            "features_2d": h_np[:, :32].T.tolist(),  # (32 dims, T_frames)
+            "features_2d": h_np[:, :32].T.tolist(),
             "mean_energy": float(np.mean(h_np ** 2)),
         })
 
-    # Multi-head attention (average across heads for each layer)
+    # Attention weights
     attentions = []
     if outputs["attentions"] is not None:
         for l_idx, attn in enumerate(outputs["attentions"]):
-            attn_np = attn.squeeze(0).cpu().numpy()  # (H, T, T)
+            attn_np = attn.squeeze(0).cpu().numpy()
             avg_attn = np.mean(attn_np, axis=0).tolist()
             attentions.append({
                 "layer_idx": l_idx,
@@ -221,9 +266,12 @@ def process_audio_tensor(audio: torch.Tensor, transcript: str = ""):
         "num_frames": t_frames,
         "transcript": transcript,
         "decoded_text": decoded_text,
+        "top_non_blank_text": top_non_blank_text,
+        "blank_penalty": blank_penalty,
         "waveform": plot_waveform,
         "spectrogram": spec_energy,
         "frame_emissions": frame_emissions,
+        "candidate_tokens": candidate_tokens,
         "layer_representations": layer_representations,
         "attentions": attentions,
         "vocab": state.tokenizer.vocab,
@@ -232,14 +280,12 @@ def process_audio_tensor(audio: torch.Tensor, transcript: str = ""):
 
 @app.post("/api/synthesize_and_infer")
 def synthesize_and_infer(req: SynthesizeRequest):
-    """Synthesize speech word on the fly with formant synthesizer and run live PyTorch inference."""
     audio = synthesize_spoken_word(req.word, duration_s=req.duration, sample_rate=16000, f0=req.f0)
-    return process_audio_tensor(audio, transcript=req.word)
+    return process_audio_tensor(audio, transcript=req.word, blank_penalty=req.blank_penalty)
 
 
 @app.post("/api/upload_audio")
-async def upload_audio(file: UploadFile = File(...)):
-    """Upload custom WAV/audio file and run live PyTorch inference."""
+async def upload_audio(file: UploadFile = File(...), blank_penalty: float = Form(0.0)):
     contents = await file.read()
     wav_np, sr = sf.read(io.BytesIO(contents), dtype="float32")
     audio = torch.from_numpy(wav_np)
@@ -251,32 +297,40 @@ async def upload_audio(file: UploadFile = File(...)):
         resampler = torchaudio.transforms.Resample(sr, 16000)
         audio = resampler(audio)
 
-    return process_audio_tensor(audio, transcript=file.filename)
+    return process_audio_tensor(audio, transcript=file.filename, blank_penalty=blank_penalty)
 
 
 @app.post("/api/xai/attribute")
 def run_attribution(req: AttributeRequest):
-    """Run real-time Captum Integrated Gradients or Saliency on the current audio tensor."""
+    """Run real-time Captum Integrated Gradients or Saliency."""
     if state.last_audio_tensor is None:
         return JSONResponse(status_code=400, content={"error": "No active audio. Run inference first."})
+
+    token_idx = req.token_idx
+    if token_idx is None and req.char is not None:
+        token_idx = state.tokenizer.char_to_id.get(req.char, 0)
+    elif token_idx is None:
+        token_idx = 0
 
     audio = state.last_audio_tensor.clone()
     result = state.explainer.explain_token(
         audio=audio,
         frame_idx=req.frame_idx,
-        token_idx=req.token_idx,
+        token_idx=token_idx,
         method=req.method,
         n_steps=req.steps,
     )
 
     attr = result["attributions"].cpu().numpy()
-    # Downsample to 500 points for plot
     step = max(1, len(attr) // 500)
     plot_attr = attr[::step].tolist()
 
+    char_name = state.tokenizer.id_to_char.get(token_idx, f"id_{token_idx}")
+
     return {
         "frame_idx": req.frame_idx,
-        "token_idx": req.token_idx,
+        "token_idx": token_idx,
+        "char": char_name,
         "method": req.method,
         "attribution_curve": plot_attr,
         "max_attr": float(np.max(np.abs(attr))),
@@ -285,7 +339,6 @@ def run_attribution(req: AttributeRequest):
 
 @app.post("/api/xai/ablate")
 def run_ablation(req: AblationRequest):
-    """Live causal intervention: zero-ablate or bypass a Transformer layer and measure logit shift."""
     if state.last_audio_tensor is None:
         return JSONResponse(status_code=400, content={"error": "No active audio. Run inference first."})
 
@@ -398,7 +451,6 @@ def background_train_task(epochs: int, lr: float, batch_size: int):
             "val_cer": state.training_status["val_cer"],
         })
 
-        # Save latest model
         torch.save({
             "epoch": epoch,
             "model_state_dict": state.model.state_dict(),
@@ -442,4 +494,4 @@ def serve_index():
     index_file = STATIC_DIR / "index.html"
     if index_file.exists():
         return index_file.read_text(encoding="utf-8")
-    return "<h1>HuBERT Studio Backend Running. index.html not found.</h1>"
+    return "<h1>HuBERT Studio Backend Running.</h1>"
