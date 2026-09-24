@@ -77,9 +77,9 @@ def main():
     voice_manager = PiperVoiceManager()
 
     results_by_model = {
-        "scratch_hubert": {"wers": [], "cers": [], "latencies": []},
-        "meta_hubert_large": {"wers": [], "cers": [], "latencies": []},
-        "whisper_tiny": {"wers": [], "cers": [], "latencies": []},
+        "scratch_hubert": {"wers": [], "cers": [], "pers": [], "latencies": []},
+        "meta_hubert_large": {"wers": [], "cers": [], "pers": [], "latencies": []},
+        "whisper_tiny": {"wers": [], "cers": [], "pers": [], "latencies": []},
     }
 
     detailed_evals = []
@@ -107,6 +107,8 @@ def main():
             m_res = models[m_key]
             results_by_model[m_key]["wers"].append(m_res["wer"] if m_res["wer"] is not None else 1.0)
             results_by_model[m_key]["cers"].append(m_res["cer"] if m_res["cer"] is not None else 1.0)
+            if m_res.get("per") is not None:
+                results_by_model[m_key]["pers"].append(m_res["per"])
             results_by_model[m_key]["latencies"].append(m_res["latency_ms"])
 
         detailed_evals.append({
@@ -119,10 +121,15 @@ def main():
             "scratch_pred": models["scratch_hubert"]["raw_text"],
             "scratch_wer": models["scratch_hubert"]["wer"],
             "scratch_cer": models["scratch_hubert"]["cer"],
+            "scratch_per": models["scratch_hubert"].get("per"),
             "meta_pred": models["meta_hubert_large"]["raw_text"],
             "meta_wer": models["meta_hubert_large"]["wer"],
+            "meta_cer": models["meta_hubert_large"]["cer"],
+            "meta_per": models["meta_hubert_large"].get("per"),
             "whisper_pred": models["whisper_tiny"]["raw_text"],
             "whisper_wer": models["whisper_tiny"]["wer"],
+            "whisper_cer": models["whisper_tiny"]["cer"],
+            "whisper_per": models["whisper_tiny"].get("per"),
         })
 
         if (idx + 1) % 10 == 0 or idx == len(samples) - 1:
@@ -133,30 +140,33 @@ def main():
     for m_key in ["meta_hubert_large", "whisper_tiny", "scratch_hubert"]:
         wers = results_by_model[m_key]["wers"]
         cers = results_by_model[m_key]["cers"]
+        pers = results_by_model[m_key]["pers"]
         lats = results_by_model[m_key]["latencies"]
         avg_wer = round(float(sum(wers) / max(1, len(wers))) * 100.0, 2)
         avg_cer = round(float(sum(cers) / max(1, len(cers))) * 100.0, 2)
+        avg_per = round(float(sum(pers) / max(1, len(pers))) * 100.0, 2)
         avg_lat = round(float(sum(lats) / max(1, len(lats))), 2)
         rtf = round((avg_lat / 1000.0) / (total_audio_sec / max(1, len(samples))), 4)
 
         summary[m_key] = {
             "avg_wer_pct": avg_wer,
             "avg_cer_pct": avg_cer,
+            "avg_per_pct": avg_per,
             "avg_latency_ms": avg_lat,
             "rtf": rtf,
             "throughput_x": round(1.0 / (rtf + 1e-6), 1),
         }
 
     # Print Leaderboard
-    print("\n" + "=" * 75)
-    print("                      HELD-OUT BENCHMARK LEADERBOARD")
-    print("=" * 75)
-    print(f"{'Model':<24} | {'WER (%)':<10} | {'CER (%)':<10} | {'Latency':<12} | {'Throughput':<12}")
-    print("-" * 75)
-    print(f"{'Meta HuBERT-Large':<24} | {summary['meta_hubert_large']['avg_wer_pct']:>8.2f}% | {summary['meta_hubert_large']['avg_cer_pct']:>8.2f}% | {summary['meta_hubert_large']['avg_latency_ms']:>8.1f} ms | {summary['meta_hubert_large']['throughput_x']:>8.1f}x RT")
-    print(f"{'OpenAI Whisper-Tiny':<24} | {summary['whisper_tiny']['avg_wer_pct']:>8.2f}% | {summary['whisper_tiny']['avg_cer_pct']:>8.2f}% | {summary['whisper_tiny']['avg_latency_ms']:>8.1f} ms | {summary['whisper_tiny']['throughput_x']:>8.1f}x RT")
-    print(f"{'OurHuBERT':<24} | {summary['scratch_hubert']['avg_wer_pct']:>8.2f}% | {summary['scratch_hubert']['avg_cer_pct']:>8.2f}% | {summary['scratch_hubert']['avg_latency_ms']:>8.1f} ms | {summary['scratch_hubert']['throughput_x']:>8.1f}x RT")
-    print("=" * 75)
+    print("\n" + "=" * 85)
+    print("                              HELD-OUT BENCHMARK LEADERBOARD")
+    print("=" * 85)
+    print(f"{'Model':<22} | {'WER (%)':<9} | {'CER (%)':<9} | {'PER (%)':<9} | {'Latency':<11} | {'Throughput':<11}")
+    print("-" * 85)
+    print(f"{'Meta HuBERT-Large':<22} | {summary['meta_hubert_large']['avg_wer_pct']:>7.2f}% | {summary['meta_hubert_large']['avg_cer_pct']:>7.2f}% | {summary['meta_hubert_large']['avg_per_pct']:>7.2f}% | {summary['meta_hubert_large']['avg_latency_ms']:>7.1f} ms | {summary['meta_hubert_large']['throughput_x']:>7.1f}x RT")
+    print(f"{'OpenAI Whisper-Tiny':<22} | {summary['whisper_tiny']['avg_wer_pct']:>7.2f}% | {summary['whisper_tiny']['avg_cer_pct']:>7.2f}% | {summary['whisper_tiny']['avg_per_pct']:>7.2f}% | {summary['whisper_tiny']['avg_latency_ms']:>7.1f} ms | {summary['whisper_tiny']['throughput_x']:>7.1f}x RT")
+    print(f"{'OurHuBERT':<22} | {summary['scratch_hubert']['avg_wer_pct']:>7.2f}% | {summary['scratch_hubert']['avg_cer_pct']:>7.2f}% | {summary['scratch_hubert']['avg_per_pct']:>7.2f}% | {summary['scratch_hubert']['avg_latency_ms']:>7.1f} ms | {summary['scratch_hubert']['throughput_x']:>7.1f}x RT")
+    print("=" * 85)
 
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)

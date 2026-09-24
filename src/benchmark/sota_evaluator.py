@@ -37,6 +37,32 @@ class SOTABenchmarkRunner:
         self.whisper_processor = None
         self.whisper_model = None
         self.models_loaded = False
+        self.phonemizer_voice = None
+
+    def get_phonemizer(self):
+        """Lazy load Piper voice for phonetic transcription and PER evaluation."""
+        if self.phonemizer_voice is None:
+            try:
+                from piper.voice import PiperVoice
+                p = Path("/home/nathan/github/MADGen/data/piper_voices/en/en_US/lessac/en_US-lessac-medium.onnx")
+                if p.exists():
+                    self.phonemizer_voice = PiperVoice.load(str(p))
+            except Exception:
+                pass
+        return self.phonemizer_voice
+
+    def phonemize_text(self, text: str) -> str:
+        """Convert transcript to canonical IPA phonemes for Phoneme Error Rate (PER)."""
+        if not text:
+            return ""
+        v = self.get_phonemizer()
+        if v is not None:
+            try:
+                chunks = v.phonemize(text)
+                return " ".join("".join(c) for c in chunks)
+            except Exception:
+                pass
+        return ""
 
     def load_models(self, include_meta: bool = True, include_whisper: bool = True):
         """Lazy-load the models to GPU/CPU memory."""
@@ -189,16 +215,19 @@ class SOTABenchmarkRunner:
         out_whisper = self.transcribe_whisper(speech_np)
         out_scratch = self.transcribe_scratch(speech_tensor, blank_penalty=blank_penalty)
 
-        # Normalize texts for evaluation
+        # Normalize texts and phonemes for evaluation
         ref_norm = normalize_text(ground_truth) if ground_truth else ""
+        ref_phonemes = self.phonemize_text(ground_truth) if ground_truth else ""
 
         def eval_pred(raw_text):
             pred_norm = normalize_text(raw_text)
+            pred_ph = self.phonemize_text(raw_text)
             if not ref_norm:
-                return {"pred_norm": pred_norm, "wer": None, "cer": None}
+                return {"pred_norm": pred_norm, "pred_phonemes": pred_ph, "wer": None, "cer": None, "per": None}
             w = round(float(jiwer.wer(ref_norm, pred_norm)), 4) if ref_norm else 0.0
             c = round(float(jiwer.cer(ref_norm, pred_norm)), 4) if ref_norm else 0.0
-            return {"pred_norm": pred_norm, "wer": w, "cer": c}
+            p = round(float(jiwer.wer(ref_phonemes, pred_ph)), 4) if ref_phonemes and pred_ph else (1.0 if ref_phonemes else 0.0)
+            return {"pred_norm": pred_norm, "pred_phonemes": pred_ph, "wer": w, "cer": c, "per": p}
 
         meta_eval = eval_pred(out_meta["text"])
         whisper_eval = eval_pred(out_whisper["text"])
@@ -208,6 +237,7 @@ class SOTABenchmarkRunner:
             "audio_duration_sec": round(duration, 2),
             "ground_truth": ground_truth or "",
             "ground_truth_normalized": ref_norm,
+            "ground_truth_phonemes": ref_phonemes,
             "models": {
                 "scratch_hubert": {
                     "name": "HuBERT (Ours - Scratch)",
@@ -216,8 +246,10 @@ class SOTABenchmarkRunner:
                     "supervised_hours": "5.39h",
                     "raw_text": out_scratch["text"],
                     "normalized_text": scratch_eval["pred_norm"],
+                    "phonemes": scratch_eval["pred_phonemes"],
                     "wer": scratch_eval["wer"],
                     "cer": scratch_eval["cer"],
+                    "per": scratch_eval["per"],
                     "latency_ms": out_scratch["latency_ms"],
                     "rtf": round((out_scratch["latency_ms"] / 1000.0) / duration, 4),
                     "throughput_x": round(duration / (out_scratch["latency_ms"] / 1000.0 + 1e-6), 1),
@@ -229,8 +261,10 @@ class SOTABenchmarkRunner:
                     "supervised_hours": "960h (LibriSpeech)",
                     "raw_text": out_meta["text"],
                     "normalized_text": meta_eval["pred_norm"],
+                    "phonemes": meta_eval["pred_phonemes"],
                     "wer": meta_eval["wer"],
                     "cer": meta_eval["cer"],
+                    "per": meta_eval["per"],
                     "latency_ms": out_meta["latency_ms"],
                     "rtf": round((out_meta["latency_ms"] / 1000.0) / duration, 4),
                     "throughput_x": round(duration / (out_meta["latency_ms"] / 1000.0 + 1e-6), 1),
@@ -242,8 +276,10 @@ class SOTABenchmarkRunner:
                     "supervised_hours": "680,000h (Weakly Supervised)",
                     "raw_text": out_whisper["text"],
                     "normalized_text": whisper_eval["pred_norm"],
+                    "phonemes": whisper_eval["pred_phonemes"],
                     "wer": whisper_eval["wer"],
                     "cer": whisper_eval["cer"],
+                    "per": whisper_eval["per"],
                     "latency_ms": out_whisper["latency_ms"],
                     "rtf": round((out_whisper["latency_ms"] / 1000.0) / duration, 4),
                     "throughput_x": round(duration / (out_whisper["latency_ms"] / 1000.0 + 1e-6), 1),
@@ -274,9 +310,9 @@ class SOTABenchmarkRunner:
 
         total_audio_sec = 0.0
         results_by_model = {
-            "scratch_hubert": {"wers": [], "cers": [], "latencies": []},
-            "meta_hubert_large": {"wers": [], "cers": [], "latencies": []},
-            "whisper_tiny": {"wers": [], "cers": [], "latencies": []},
+            "scratch_hubert": {"wers": [], "cers": [], "pers": [], "latencies": []},
+            "meta_hubert_large": {"wers": [], "cers": [], "pers": [], "latencies": []},
+            "whisper_tiny": {"wers": [], "cers": [], "pers": [], "latencies": []},
         }
 
         detailed_samples = []
@@ -298,18 +334,27 @@ class SOTABenchmarkRunner:
                 if m_info["wer"] is not None:
                     results_by_model[m_key]["wers"].append(m_info["wer"])
                     results_by_model[m_key]["cers"].append(m_info["cer"])
+                    if m_info.get("per") is not None:
+                        results_by_model[m_key]["pers"].append(m_info["per"])
                 results_by_model[m_key]["latencies"].append(m_info["latency_ms"])
 
             detailed_samples.append({
                 "id": sample["id"],
                 "duration": dur,
                 "ground_truth": ground_truth,
+                "ground_truth_phonemes": comp.get("ground_truth_phonemes", ""),
                 "scratch_pred": comp["models"]["scratch_hubert"]["raw_text"],
                 "scratch_wer": comp["models"]["scratch_hubert"]["wer"],
+                "scratch_cer": comp["models"]["scratch_hubert"]["cer"],
+                "scratch_per": comp["models"]["scratch_hubert"].get("per"),
                 "meta_pred": comp["models"]["meta_hubert_large"]["raw_text"],
                 "meta_wer": comp["models"]["meta_hubert_large"]["wer"],
+                "meta_cer": comp["models"]["meta_hubert_large"]["cer"],
+                "meta_per": comp["models"]["meta_hubert_large"].get("per"),
                 "whisper_pred": comp["models"]["whisper_tiny"]["raw_text"],
                 "whisper_wer": comp["models"]["whisper_tiny"]["wer"],
+                "whisper_cer": comp["models"]["whisper_tiny"]["cer"],
+                "whisper_per": comp["models"]["whisper_tiny"].get("per"),
             })
 
             if (i + 1) % 10 == 0 or (i + 1) == len(samples):
@@ -324,10 +369,12 @@ class SOTABenchmarkRunner:
         ]:
             wers = results_by_model[m_key]["wers"]
             cers = results_by_model[m_key]["cers"]
+            pers = results_by_model[m_key]["pers"]
             lats = results_by_model[m_key]["latencies"]
 
             avg_wer = sum(wers) / len(wers) if wers else 0.0
             avg_cer = sum(cers) / len(cers) if cers else 0.0
+            avg_per = sum(pers) / len(pers) if pers else 0.0
             avg_lat = sum(lats) / len(lats) if lats else 0.0
             total_lat_sec = sum(lats) / 1000.0
             rtf = total_lat_sec / total_audio_sec if total_audio_sec > 0 else 0.0
@@ -338,6 +385,7 @@ class SOTABenchmarkRunner:
                 "training_data": train_hrs,
                 "avg_wer": round(avg_wer * 100.0, 2),  # as %
                 "avg_cer": round(avg_cer * 100.0, 2),  # as %
+                "avg_per": round(avg_per * 100.0, 2),  # as %
                 "avg_latency_ms": round(avg_lat, 2),
                 "rtf": round(rtf, 4),
                 "throughput_x": round(total_audio_sec / (total_lat_sec + 1e-6), 1),

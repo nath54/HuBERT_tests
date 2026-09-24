@@ -605,6 +605,7 @@
                 <th class="p-3">Params</th>
                 <th class="p-3 text-emerald-400">WER (%)</th>
                 <th class="p-3 text-sky-400">CER (%)</th>
+                <th class="p-3 text-purple-400">PER (%)</th>
                 <th class="p-3">Latency (ms)</th>
                 <th class="p-3">RTF</th>
                 <th class="p-3">Speedup</th>
@@ -676,6 +677,7 @@
               <div class="flex justify-between text-[10px] font-mono text-slate-400 pt-1 border-t border-slate-800/80">
                 <span>WER: <strong id="cardMetaWER" class="text-emerald-400">-</strong></span>
                 <span>CER: <strong id="cardMetaCER" class="text-sky-400">-</strong></span>
+                <span>PER: <strong id="cardMetaPER" class="text-purple-400">-</strong></span>
               </div>
             </div>
             <div class="grid grid-cols-3 gap-2 text-center text-[10px] font-mono">
@@ -712,6 +714,7 @@
               <div class="flex justify-between text-[10px] font-mono text-slate-400 pt-1 border-t border-slate-800/80">
                 <span>WER: <strong id="cardWhisperWER" class="text-emerald-400">-</strong></span>
                 <span>CER: <strong id="cardWhisperCER" class="text-sky-400">-</strong></span>
+                <span>PER: <strong id="cardWhisperPER" class="text-purple-400">-</strong></span>
               </div>
             </div>
             <div class="grid grid-cols-3 gap-2 text-center text-[10px] font-mono">
@@ -748,6 +751,7 @@
               <div class="flex justify-between text-[10px] font-mono text-slate-400 pt-1 border-t border-slate-800/80">
                 <span>WER: <strong id="cardScratchWER" class="text-amber-400">-</strong></span>
                 <span>CER: <strong id="cardScratchCER" class="text-amber-400">-</strong></span>
+                <span>PER: <strong id="cardScratchPER" class="text-purple-400">-</strong></span>
               </div>
             </div>
             <div class="grid grid-cols-3 gap-2 text-center text-[10px] font-mono">
@@ -1705,6 +1709,7 @@
           <td class="p-3 font-bold text-white">${stats.parameters}</td>
           <td class="p-3 ${m.werColor}">${stats.avg_wer}%</td>
           <td class="p-3 text-sky-400">${stats.avg_cer}%</td>
+          <td class="p-3 text-purple-400 font-bold">${stats.avg_per !== undefined ? stats.avg_per + '%' : 'N/A'}</td>
           <td class="p-3 text-slate-300">${stats.avg_latency_ms} ms</td>
           <td class="p-3 text-slate-400">${stats.rtf}</td>
           <td class="p-3 text-emerald-400 font-bold">${stats.throughput_x}x Realtime</td>
@@ -1776,6 +1781,7 @@
       document.getElementById("cardMetaText").innerText = `"${meta.raw_text}"`;
       document.getElementById("cardMetaWER").innerText = meta.wer !== null ? `${(meta.wer * 100).toFixed(1)}%` : "N/A";
       document.getElementById("cardMetaCER").innerText = meta.cer !== null ? `${(meta.cer * 100).toFixed(1)}%` : "N/A";
+      document.getElementById("cardMetaPER").innerText = meta.per !== undefined && meta.per !== null ? `${(meta.per * 100).toFixed(1)}%` : "N/A";
       document.getElementById("cardMetaLatency").innerText = `${meta.latency_ms} ms`;
       document.getElementById("cardMetaRTF").innerText = meta.rtf;
       document.getElementById("cardMetaSpeedup").innerText = `${meta.throughput_x}x`;
@@ -1785,6 +1791,7 @@
       document.getElementById("cardWhisperText").innerText = `"${whisper.raw_text}"`;
       document.getElementById("cardWhisperWER").innerText = whisper.wer !== null ? `${(whisper.wer * 100).toFixed(1)}%` : "N/A";
       document.getElementById("cardWhisperCER").innerText = whisper.cer !== null ? `${(whisper.cer * 100).toFixed(1)}%` : "N/A";
+      document.getElementById("cardWhisperPER").innerText = whisper.per !== undefined && whisper.per !== null ? `${(whisper.per * 100).toFixed(1)}%` : "N/A";
       document.getElementById("cardWhisperLatency").innerText = `${whisper.latency_ms} ms`;
       document.getElementById("cardWhisperRTF").innerText = whisper.rtf;
       document.getElementById("cardWhisperSpeedup").innerText = `${whisper.throughput_x}x`;
@@ -1794,6 +1801,7 @@
       document.getElementById("cardScratchText").innerText = scratch.raw_text ? `"${scratch.raw_text}"` : `<blank frames>`;
       document.getElementById("cardScratchWER").innerText = scratch.wer !== null ? `${(scratch.wer * 100).toFixed(1)}%` : "N/A";
       document.getElementById("cardScratchCER").innerText = scratch.cer !== null ? `${(scratch.cer * 100).toFixed(1)}%` : "N/A";
+      document.getElementById("cardScratchPER").innerText = scratch.per !== undefined && scratch.per !== null ? `${(scratch.per * 100).toFixed(1)}%` : "N/A";
       document.getElementById("cardScratchLatency").innerText = `${scratch.latency_ms} ms`;
       document.getElementById("cardScratchRTF").innerText = scratch.rtf;
       document.getElementById("cardScratchSpeedup").innerText = `${scratch.throughput_x}x`;

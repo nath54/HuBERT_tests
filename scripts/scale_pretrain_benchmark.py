@@ -122,7 +122,7 @@ def evaluate_on_benchmark(ctc_model: HuBERTForCTC, tokenizer: CharacterTokenizer
         samples = json.load(f)[:num_samples]
 
     runner = SOTABenchmarkRunner(device=str(device))
-    wers, cers = [], []
+    wers, cers, pers = [], [], []
     sample_pred = ""
     ctc_model.eval()
 
@@ -157,15 +157,22 @@ def evaluate_on_benchmark(ctc_model: HuBERTForCTC, tokenizer: CharacterTokenizer
 
         ref_norm = normalize_text(s["transcript"])
         pred_norm = normalize_text(pred_text)
+        ref_phonemes = runner.phonemize_text(s["transcript"])
+        pred_phonemes = runner.phonemize_text(pred_text)
+
         w = round(float(jiwer.wer(ref_norm, pred_norm)), 4) if ref_norm else 1.0
         c = round(float(jiwer.cer(ref_norm, pred_norm)), 4) if ref_norm else 1.0
+        p = round(float(jiwer.wer(ref_phonemes, pred_phonemes)), 4) if ref_phonemes and pred_phonemes else (1.0 if ref_phonemes else 0.0)
+
         wers.append(w)
         cers.append(c)
+        pers.append(p)
 
     avg_wer = round(float(sum(wers) / max(1, len(wers))) * 100.0, 2)
     avg_cer = round(float(sum(cers) / max(1, len(cers))) * 100.0, 2)
+    avg_per = round(float(sum(pers) / max(1, len(pers))) * 100.0, 2)
 
-    return {"wer": avg_wer, "cer": avg_cer, "sample_pred": sample_pred}
+    return {"wer": avg_wer, "cer": avg_cer, "per": avg_per, "sample_pred": sample_pred}
 
 
 def main():
@@ -296,6 +303,7 @@ def main():
                 "masked_acc_pct": acc_val,
                 "librispeech_wer": bench_res["wer"],
                 "librispeech_cer": bench_res["cer"],
+                "librispeech_per": bench_res["per"],
                 "sample_prediction": bench_res["sample_pred"],
                 "disk_bytes_used": 0,
                 "marginal_wer_gain_per_hour": round(slope, 2),
@@ -303,7 +311,7 @@ def main():
             }
             history.append(entry)
 
-            print(f"🏆 Milestone Results: Pre-train Hours: {hours}h | Loss: {loss_val:.4f} | LibriSpeech WER: {bench_res['wer']}% | CER: {bench_res['cer']}%")
+            print(f"🏆 Milestone Results: Pre-train Hours: {hours}h | Loss: {loss_val:.4f} | LibriSpeech WER: {bench_res['wer']}% | CER: {bench_res['cer']}% | PER: {bench_res['per']}%")
             if bench_res["sample_pred"]:
                 print(f"   Sample Decoded: \"{bench_res['sample_pred']}\"")
 
