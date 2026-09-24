@@ -318,9 +318,13 @@ class PiperVoiceManager:
                 continue
 
             # 2. Synthesis Execution
+            num_spk = getattr(voice.config, "num_speakers", 1) or 1
+            speaker_id = random.randint(0, num_spk - 1) if num_spk > 1 else None
+
             length_scale = random.uniform(0.90, 1.12)
             noise_scale = random.uniform(0.55, 0.75)
             syn_config = SynthesisConfig(
+                speaker_id=speaker_id,
                 length_scale=length_scale,
                 noise_scale=noise_scale,
                 volume=1.0,
@@ -361,7 +365,8 @@ class PiperVoiceManager:
                 waveform = waveform / max_val * 0.95
 
             # 100% verified, clean sample
-            return waveform, voice_name, duration
+            display_name = f"{voice_name}#spk{speaker_id}" if speaker_id is not None else voice_name
+            return waveform, display_name, duration
 
         # If all retries failed for this specific text
         raise RuntimeError(f"Text rejected after {max_retries} attempts: '{text[:40]}'")
