@@ -58,6 +58,55 @@
       </div>
     </div>
 
+    <!-- Architecture & Model Tier Selector Bar -->
+    <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 shadow-xl backdrop-blur flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+      <div class="flex flex-wrap items-center gap-4">
+        <!-- Architecture Dropdown -->
+        <div class="space-y-1">
+          <label class="text-[10px] uppercase font-mono tracking-wider text-slate-400 font-bold flex items-center gap-1.5">
+            <span>🧠</span> Speech Architecture:
+          </label>
+          <select id="globalArchSelect" onchange="onModelConfigChange()" class="bg-slate-950 border border-indigo-500/50 rounded-xl px-3 py-1.5 text-xs font-bold text-indigo-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer">
+            <option value="hubert_kmeans">HuBERT (Acoustic K-Means SSL · 100 Clusters)</option>
+            <option value="phono_hubert">PhonoHuBERT (Direct Phonemes · 64 IPA Tokens)</option>
+          </select>
+        </div>
+
+        <!-- Tier / Size Dropdown -->
+        <div class="space-y-1">
+          <label class="text-[10px] uppercase font-mono tracking-wider text-slate-400 font-bold flex items-center gap-1.5">
+            <span>📏</span> Parameter Size / Tier:
+          </label>
+          <select id="globalTierSelect" onchange="onModelConfigChange()" class="bg-slate-950 border border-slate-700 rounded-xl px-3 py-1.5 text-xs font-semibold text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer">
+            <option value="mini">Mini (8.0M params · 4L · 256D · 4H)</option>
+            <option value="small">Small (24.2M params · 6L · 384D · 6H)</option>
+            <option value="medium">Medium (48.5M params · 8L · 512D · 8H)</option>
+            <option value="base">Base (94.7M params · 12L · 768D · 12H)</option>
+          </select>
+        </div>
+
+        <!-- Checkpoint Selector Badge -->
+        <div class="space-y-1 hidden sm:block">
+          <label class="text-[10px] uppercase font-mono tracking-wider text-slate-400 font-bold flex items-center gap-1.5">
+            <span>💾</span> Loaded Checkpoint:
+          </label>
+          <span id="activeCheckpointBadge" class="badge-pill bg-slate-950 text-indigo-300 border border-slate-800 text-[11px] font-mono py-1 px-2.5">
+            checkpoints/best_model.pt
+          </span>
+        </div>
+      </div>
+
+      <!-- Action status & Quick Reload Button -->
+      <div class="flex items-center gap-3 w-full md:w-auto justify-between md:justify-end">
+        <span id="modelSwitchStatus" class="text-xs text-emerald-400 font-mono hidden flex items-center gap-1">
+          <span>✓</span> Loaded
+        </span>
+        <button onclick="onModelConfigChange(true)" id="btnApplyModel" class="px-4 py-1.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white rounded-xl text-xs font-bold shadow-lg transition-all flex items-center gap-1.5">
+          <span>🔄</span> Switch / Reload Model
+        </button>
+      </div>
+    </div>
+
     <!-- ============================================================= -->
     <!-- TAB 1: LIVE STUDIO & XAI (INFERENCE & LAYER INSPECTION)       -->
     <!-- ============================================================= -->
@@ -2480,7 +2529,11 @@
 
     async function loadPretrainStatus() {
       try {
-        const res = await fetch("/api/pretrain/status");
+        const archSelect = document.getElementById("globalArchSelect");
+        const tierSelect = document.getElementById("globalTierSelect");
+        const arch = archSelect ? archSelect.value : "hubert_kmeans";
+        const tier = tierSelect ? tierSelect.value : "mini";
+        const res = await fetch(`/api/pretrain/status?arch=${encodeURIComponent(arch)}&tier=${encodeURIComponent(tier)}`);
         if (!res.ok) return;
         const data = await res.json();
 
@@ -2511,14 +2564,14 @@
 
         if (data.is_running) {
           badge.className = "badge-pill bg-purple-500/20 text-purple-300 border border-purple-500/40 animate-pulse";
-          badge.innerText = `⚡ Pre-training Live (Step ${data.step}/${data.total_steps || '?'})`;
+          badge.innerText = `⚡ Pre-training Live (${data.arch || arch} [${data.tier || tier}] · Step ${data.step}/${data.total_steps || '?'})`;
           btnStart.disabled = true;
           btnStart.classList.add("opacity-50", "cursor-not-allowed");
           btnStop.disabled = false;
           btnStop.classList.remove("opacity-50", "cursor-not-allowed");
         } else {
           badge.className = "badge-pill bg-slate-800 text-slate-300 border border-slate-700";
-          badge.innerText = data.step > 0 ? `Completed ${data.step} Steps` : "Idle";
+          badge.innerText = data.step > 0 ? `Completed ${data.step} Steps (${data.arch || arch} [${data.tier || tier}])` : "Idle";
           btnStart.disabled = false;
           btnStart.classList.remove("opacity-50", "cursor-not-allowed");
           btnStop.disabled = true;
@@ -2574,6 +2627,8 @@
       const steps = parseInt(document.getElementById("pretrainStepsInput").value) || 50;
       const batchSize = parseInt(document.getElementById("pretrainBatchSizeSelect").value) || 4;
       const lr = parseFloat(document.getElementById("pretrainLRInput").value) || 0.0003;
+      const arch = document.getElementById("globalArchSelect") ? document.getElementById("globalArchSelect").value : "hubert_kmeans";
+      const tier = document.getElementById("globalTierSelect") ? document.getElementById("globalTierSelect").value : "mini";
 
       const btn = document.getElementById("btnStartPretrain");
       btn.disabled = true;
@@ -2583,7 +2638,7 @@
         await fetch("/api/pretrain/start", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ steps: steps, batch_size: batchSize, lr: lr, num_clusters: 100 })
+          body: JSON.stringify({ steps: steps, batch_size: batchSize, lr: lr, num_clusters: 100, arch: arch, tier: tier })
         });
       } finally {
         btn.innerHTML = `<span>▶</span> Start Pre-training`;
@@ -2608,8 +2663,10 @@
       btn.disabled = true;
       btn.innerHTML = `<span class="animate-spin inline-block mr-1">🌀</span> Synthesizing in RAM...`;
 
+      const arch = document.getElementById("globalArchSelect") ? document.getElementById("globalArchSelect").value : "hubert_kmeans";
+
       try {
-        const res = await fetch("/api/pretrain/preview");
+        const res = await fetch(`/api/pretrain/preview?arch=${encodeURIComponent(arch)}`);
         if (!res.ok) throw new Error("Synthesis failed");
         const data = await res.json();
 
@@ -2624,22 +2681,40 @@
         audio.src = data.audio_base64;
         audio.play().catch(() => {});
 
-        // Render acoustic unit ribbon
+        // Render acoustic unit or phoneme token ribbon
         const ribbon = document.getElementById("unitRibbonContainer");
         ribbon.innerHTML = "";
         const maskedSet = new Set(data.masked_indices || []);
+        const isPhono = (data.target_type === "phonemes") || !!data.tokens;
+        const items = isPhono ? data.tokens : data.clusters;
 
-        data.clusters.forEach((clusterId, idx) => {
+        items.forEach((item, idx) => {
           const pill = document.createElement("span");
           const isMasked = maskedSet.has(idx);
           if (isMasked) {
             pill.className = "px-1.5 py-0.5 rounded bg-rose-500/30 text-rose-300 border border-rose-500/50 font-bold";
             pill.innerText = `[M]`;
-            pill.title = `Frame ${idx}: MASKED -> Target Cluster ${clusterId}`;
+            pill.title = `Frame ${idx}: MASKED -> Target ${item}`;
+          } else if (item === "<silence>" || item === "sil") {
+            pill.className = "px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700 italic";
+            pill.innerText = `🤫 sil`;
+            pill.title = `Frame ${idx}: <silence>`;
+          } else if (item === "<same_phoneme_than_last_one>") {
+            pill.className = "px-1.5 py-0.5 rounded bg-purple-500/30 text-purple-300 border border-purple-500/50 font-bold";
+            pill.innerText = `🔁 repeat`;
+            pill.title = `Frame ${idx}: <same_phoneme_than_last_one>`;
+          } else if (item === "<eos>") {
+            pill.className = "px-1.5 py-0.5 rounded bg-amber-500/30 text-amber-300 border border-amber-500/50 font-bold";
+            pill.innerText = `🏁 eos`;
+            pill.title = `Frame ${idx}: <eos>`;
+          } else if (item === "<noise>") {
+            pill.className = "px-1.5 py-0.5 rounded bg-orange-500/30 text-orange-300 border border-orange-500/50";
+            pill.innerText = `🔊 noise`;
+            pill.title = `Frame ${idx}: <noise>`;
           } else {
-            pill.className = "px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700/60";
-            pill.innerText = `u${clusterId}`;
-            pill.title = `Frame ${idx}: Unmasked Acoustic Cluster ${clusterId}`;
+            pill.className = "px-1.5 py-0.5 rounded bg-indigo-950/60 text-indigo-300 border border-indigo-700/60 font-semibold";
+            pill.innerText = isPhono ? `/${item}/` : `u${item}`;
+            pill.title = `Frame ${idx}: Unmasked ${isPhono ? "Phoneme" : "Cluster"} ${item}`;
           }
           ribbon.appendChild(pill);
         });
@@ -2651,9 +2726,115 @@
       }
     }
 
+    // -------------------------------------------------------------
+    // MODEL CATALOG & DYNAMIC ARCHITECTURE/TIER SWITCHING
+    // -------------------------------------------------------------
+    async function loadModelCatalog() {
+      try {
+        const res = await fetch("/api/models/catalog");
+        if (!res.ok) return;
+        const data = await res.json();
+
+        // Populate Architecture dropdown
+        const archSelect = document.getElementById("globalArchSelect");
+        if (archSelect && data.models) {
+          const currentVal = (data.current && data.current.arch) ? data.current.arch : archSelect.value;
+          archSelect.innerHTML = "";
+          data.models.forEach(m => {
+            const opt = document.createElement("option");
+            opt.value = m.id;
+            opt.innerText = `${m.name} (${m.target_type === "phoneme_tokens" ? "Phonemes" : "Clusters"})`;
+            if (m.id === currentVal) opt.selected = true;
+            archSelect.appendChild(opt);
+          });
+          if (data.current && data.current.arch) {
+            archSelect.value = data.current.arch;
+          }
+        }
+
+        // Populate Tier dropdown
+        const tierSelect = document.getElementById("globalTierSelect");
+        if (tierSelect && data.current && data.current.tier) {
+          tierSelect.value = data.current.tier;
+        }
+
+        updateModelBadges(data.current);
+      } catch (err) {
+        console.error("Error loading model catalog:", err);
+      }
+    }
+
+    function updateModelBadges(currentInfo) {
+      if (!currentInfo) return;
+      const modelBadge = document.getElementById("modelInfoBadge");
+      if (modelBadge && currentInfo.parameters_m) {
+        modelBadge.innerText = `${currentInfo.parameters_m}M Parameters (${currentInfo.arch || 'Model'})`;
+      }
+      const ckptBadge = document.getElementById("activeCheckpointBadge");
+      if (ckptBadge) {
+        const p = currentInfo.checkpoint_path || "Dynamic Model";
+        ckptBadge.innerText = p.split("/").pop();
+        ckptBadge.title = p;
+      }
+    }
+
+    async function onModelConfigChange(force = false) {
+      const archSelect = document.getElementById("globalArchSelect");
+      const tierSelect = document.getElementById("globalTierSelect");
+      const btn = document.getElementById("btnApplyModel");
+      const statusSpan = document.getElementById("modelSwitchStatus");
+      if (!archSelect || !tierSelect) return;
+
+      const arch = archSelect.value;
+      const tier = tierSelect.value;
+
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = `<span class="animate-spin inline-block mr-1">🌀</span> Loading...`;
+      }
+
+      try {
+        const res = await fetch("/api/models/select", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ arch: arch, tier: tier })
+        });
+        const result = await res.json();
+        if (result.status === "ok") {
+          updateModelBadges(result);
+          if (statusSpan) {
+            statusSpan.classList.remove("hidden");
+            statusSpan.innerText = `✓ Loaded ${arch} [${tier}]`;
+            setTimeout(() => statusSpan.classList.add("hidden"), 3500);
+          }
+
+          // Refresh current active view
+          const activeTabEl = document.querySelector(".main-tab-content:not(.hidden)");
+          const activeTabId = activeTabEl ? activeTabEl.id.replace("tab-", "") : "studio";
+
+          if (activeTabId === "studio") {
+            triggerSynthesis();
+          } else if (activeTabId === "benchmarks") {
+            loadBenchmarks();
+          } else if (activeTabId === "pretrain") {
+            loadPretrainStatus();
+          }
+        }
+      } catch (err) {
+        console.error("Failed to select model:", err);
+        alert("Error switching model: " + err.message);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.innerHTML = `<span>🔄</span> Switch / Reload Model`;
+        }
+      }
+    }
+
     // Initialize
     window.addEventListener("DOMContentLoaded", () => {
       initQuickCharButtons();
+      loadModelCatalog();
       triggerSynthesis();
     });
   </script>

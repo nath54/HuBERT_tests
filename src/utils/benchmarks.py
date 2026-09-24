@@ -52,13 +52,16 @@ def get_model_parameters_breakdown(model: HuBERTForCTC) -> Dict[str, any]:
             "description": f"MHSA: {attn_p:,} | FFN: {ffn_p:,} | Norms: {ln_p:,}",
         })
 
-    # 5. CTC Output Head
-    ctc_params = sum(p.numel() for p in model.ctc_head.parameters())
-    breakdown.append({
-        "component": "CTC Prediction Head",
-        "params": ctc_params,
-        "description": f"Linear projection to {model.config.vocab_size} character logits",
-    })
+    # 5. Output Head
+    head = getattr(model, "ctc_head", getattr(model, "phoneme_head", None))
+    if head is not None:
+        head_params = sum(p.numel() for p in head.parameters())
+        head_name = "Phoneme Prediction Head" if hasattr(model, "phoneme_head") else "CTC Prediction Head"
+        breakdown.append({
+            "component": head_name,
+            "params": head_params,
+            "description": f"Linear projection to {model.config.vocab_size} vocabulary logits",
+        })
 
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)

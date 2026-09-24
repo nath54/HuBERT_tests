@@ -851,5 +851,890 @@
       "siwis_fr_FR-siwis-medium"
     ],
     "active_voice": "l2arctic_en_US-l2arctic-medium#spk7, siwis_fr_FR-siwis-medium"
+  },
+  {
+    "step": 433,
+    "total_steps": 625,
+    "loss": 4.3441,
+    "accuracy": 3.96,
+    "masked_accuracy_pct": 3.96,
+    "cumulative_audio_sec": 17315.4,
+    "cumulative_audio_hours": 4.8098,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "tjiho_fr_FR-tjiho-model2",
+      "kathleen_en_US-kathleen-low"
+    ],
+    "active_voice": "tjiho_fr_FR-tjiho-model2, kathleen_en_US-kathleen-low"
+  },
+  {
+    "step": 434,
+    "total_steps": 625,
+    "loss": 4.2762,
+    "accuracy": 3.95,
+    "masked_accuracy_pct": 3.95,
+    "cumulative_audio_sec": 17355.6,
+    "cumulative_audio_hours": 4.821,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "bryce_en_US-bryce-medium",
+      "tjiho_fr_FR-tjiho-model2"
+    ],
+    "active_voice": "bryce_en_US-bryce-medium, tjiho_fr_FR-tjiho-model2"
+  },
+  {
+    "step": 435,
+    "total_steps": 625,
+    "loss": 4.2394,
+    "accuracy": 5.89,
+    "masked_accuracy_pct": 5.89,
+    "cumulative_audio_sec": 17397.0,
+    "cumulative_audio_hours": 4.8325,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "tjiho_fr_FR-tjiho-model1",
+      "tom_fr_FR-tom-medium"
+    ],
+    "active_voice": "tjiho_fr_FR-tjiho-model1, tom_fr_FR-tom-medium"
+  },
+  {
+    "step": 436,
+    "total_steps": 625,
+    "loss": 4.3764,
+    "accuracy": 4.28,
+    "masked_accuracy_pct": 4.28,
+    "cumulative_audio_sec": 17435.1,
+    "cumulative_audio_hours": 4.8431,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "cori_en_GB-cori-high",
+      "ryan_en_US-ryan-low"
+    ],
+    "active_voice": "cori_en_GB-cori-high, ryan_en_US-ryan-low"
+  },
+  {
+    "step": 437,
+    "total_steps": 625,
+    "loss": 4.3285,
+    "accuracy": 3.43,
+    "masked_accuracy_pct": 3.43,
+    "cumulative_audio_sec": 17475.7,
+    "cumulative_audio_hours": 4.8544,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "tjiho_fr_FR-tjiho-model1",
+      "tjiho_fr_FR-tjiho-model3"
+    ],
+    "active_voice": "tjiho_fr_FR-tjiho-model1, tjiho_fr_FR-tjiho-model3"
+  },
+  {
+    "step": 438,
+    "total_steps": 625,
+    "loss": 4.3757,
+    "accuracy": 3.46,
+    "masked_accuracy_pct": 3.46,
+    "cumulative_audio_sec": 17525.6,
+    "cumulative_audio_hours": 4.8682,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "tjiho_fr_FR-tjiho-model2",
+      "libritts_en_US-libritts-high#spk239"
+    ],
+    "active_voice": "tjiho_fr_FR-tjiho-model2, libritts_en_US-libritts-high#spk239"
+  },
+  {
+    "step": 439,
+    "total_steps": 625,
+    "loss": 4.303,
+    "accuracy": 4.19,
+    "masked_accuracy_pct": 4.19,
+    "cumulative_audio_sec": 17570.7,
+    "cumulative_audio_hours": 4.8807,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "lessac_en_US-lessac-low",
+      "tjiho_fr_FR-tjiho-model1"
+    ],
+    "active_voice": "lessac_en_US-lessac-low, tjiho_fr_FR-tjiho-model1"
+  },
+  {
+    "step": 440,
+    "total_steps": 625,
+    "loss": 4.2523,
+    "accuracy": 5.62,
+    "masked_accuracy_pct": 5.62,
+    "cumulative_audio_sec": 17616.4,
+    "cumulative_audio_hours": 4.8934,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "siwis_fr_FR-siwis-medium",
+      "tjiho_fr_FR-tjiho-model1"
+    ],
+    "active_voice": "siwis_fr_FR-siwis-medium, tjiho_fr_FR-tjiho-model1"
+  },
+  {
+    "step": 441,
+    "total_steps": 625,
+    "loss": 4.3422,
+    "accuracy": 2.57,
+    "masked_accuracy_pct": 2.57,
+    "cumulative_audio_sec": 17654.7,
+    "cumulative_audio_hours": 4.9041,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "siwis_fr_FR-siwis-medium",
+      "libritts_en_US-libritts-high#spk418"
+    ],
+    "active_voice": "siwis_fr_FR-siwis-medium, libritts_en_US-libritts-high#spk418"
+  },
+  {
+    "step": 442,
+    "total_steps": 625,
+    "loss": 4.2648,
+    "accuracy": 4.9,
+    "masked_accuracy_pct": 4.9,
+    "cumulative_audio_sec": 17707.4,
+    "cumulative_audio_hours": 4.9187,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "tjiho_fr_FR-tjiho-model2",
+      "arctic_en_US-arctic-medium#spk16"
+    ],
+    "active_voice": "tjiho_fr_FR-tjiho-model2, arctic_en_US-arctic-medium#spk16"
+  },
+  {
+    "step": 443,
+    "total_steps": 625,
+    "loss": 4.2341,
+    "accuracy": 2.99,
+    "masked_accuracy_pct": 2.99,
+    "cumulative_audio_sec": 17749.9,
+    "cumulative_audio_hours": 4.9305,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "sam_en_US-sam-medium",
+      "amy_en_US-amy-medium"
+    ],
+    "active_voice": "sam_en_US-sam-medium, amy_en_US-amy-medium"
+  },
+  {
+    "step": 444,
+    "total_steps": 625,
+    "loss": 4.2324,
+    "accuracy": 3.47,
+    "masked_accuracy_pct": 3.47,
+    "cumulative_audio_sec": 17788.6,
+    "cumulative_audio_hours": 4.9413,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "danny_en_US-danny-low",
+      "ljspeech_en_US-ljspeech-high"
+    ],
+    "active_voice": "danny_en_US-danny-low, ljspeech_en_US-ljspeech-high"
+  },
+  {
+    "step": 445,
+    "total_steps": 625,
+    "loss": 4.2283,
+    "accuracy": 4.61,
+    "masked_accuracy_pct": 4.61,
+    "cumulative_audio_sec": 17823.8,
+    "cumulative_audio_hours": 4.9511,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "tjiho_fr_FR-tjiho-model3",
+      "tjiho_fr_FR-tjiho-model2"
+    ],
+    "active_voice": "tjiho_fr_FR-tjiho-model3, tjiho_fr_FR-tjiho-model2"
+  },
+  {
+    "step": 446,
+    "total_steps": 625,
+    "loss": 4.2593,
+    "accuracy": 5.84,
+    "masked_accuracy_pct": 5.84,
+    "cumulative_audio_sec": 17863.9,
+    "cumulative_audio_hours": 4.9622,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "sam_en_US-sam-medium",
+      "mls_fr_FR-mls-medium#spk111"
+    ],
+    "active_voice": "sam_en_US-sam-medium, mls_fr_FR-mls-medium#spk111"
+  },
+  {
+    "step": 447,
+    "total_steps": 625,
+    "loss": 4.4331,
+    "accuracy": 6.2,
+    "masked_accuracy_pct": 6.2,
+    "cumulative_audio_sec": 17899.8,
+    "cumulative_audio_hours": 4.9722,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "tjiho_fr_FR-tjiho-model3",
+      "tjiho_fr_FR-tjiho-model3"
+    ],
+    "active_voice": "tjiho_fr_FR-tjiho-model3, tjiho_fr_FR-tjiho-model3"
+  },
+  {
+    "step": 448,
+    "total_steps": 625,
+    "loss": 4.3252,
+    "accuracy": 3.57,
+    "masked_accuracy_pct": 3.57,
+    "cumulative_audio_sec": 17954.6,
+    "cumulative_audio_hours": 4.9874,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "danny_en_US-danny-low",
+      "tjiho_fr_FR-tjiho-model1"
+    ],
+    "active_voice": "danny_en_US-danny-low, tjiho_fr_FR-tjiho-model1"
+  },
+  {
+    "step": 449,
+    "total_steps": 625,
+    "loss": 4.4134,
+    "accuracy": 4.78,
+    "masked_accuracy_pct": 4.78,
+    "cumulative_audio_sec": 17997.6,
+    "cumulative_audio_hours": 4.9993,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "libritts_r_en_US-libritts_r-medium#spk190",
+      "tom_fr_FR-tom-medium"
+    ],
+    "active_voice": "libritts_r_en_US-libritts_r-medium#spk190, tom_fr_FR-tom-medium"
+  },
+  {
+    "step": 450,
+    "total_steps": 625,
+    "loss": 4.2142,
+    "accuracy": 7.39,
+    "masked_accuracy_pct": 7.39,
+    "cumulative_audio_sec": 18030.5,
+    "cumulative_audio_hours": 5.0085,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "kathleen_en_US-kathleen-low",
+      "mls_fr_FR-mls-medium#spk124"
+    ],
+    "active_voice": "kathleen_en_US-kathleen-low, mls_fr_FR-mls-medium#spk124"
+  },
+  {
+    "step": 451,
+    "total_steps": 625,
+    "loss": 4.2171,
+    "accuracy": 4.79,
+    "masked_accuracy_pct": 4.79,
+    "cumulative_audio_sec": 18065.3,
+    "cumulative_audio_hours": 5.0181,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "ryan_en_US-ryan-high",
+      "siwis_fr_FR-siwis-medium"
+    ],
+    "active_voice": "ryan_en_US-ryan-high, siwis_fr_FR-siwis-medium"
+  },
+  {
+    "step": 452,
+    "total_steps": 625,
+    "loss": 4.2411,
+    "accuracy": 6.9,
+    "masked_accuracy_pct": 6.9,
+    "cumulative_audio_sec": 18098.1,
+    "cumulative_audio_hours": 5.0273,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "lessac_en_US-lessac-low",
+      "mls_fr_FR-mls-medium#spk108"
+    ],
+    "active_voice": "lessac_en_US-lessac-low, mls_fr_FR-mls-medium#spk108"
+  },
+  {
+    "step": 453,
+    "total_steps": 625,
+    "loss": 4.2657,
+    "accuracy": 3.83,
+    "masked_accuracy_pct": 3.83,
+    "cumulative_audio_sec": 18139.1,
+    "cumulative_audio_hours": 5.0386,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "mike_en_US-mike-medium",
+      "upmc_fr_FR-upmc-medium#spk1"
+    ],
+    "active_voice": "mike_en_US-mike-medium, upmc_fr_FR-upmc-medium#spk1"
+  },
+  {
+    "step": 454,
+    "total_steps": 625,
+    "loss": 4.3351,
+    "accuracy": 3.98,
+    "masked_accuracy_pct": 3.98,
+    "cumulative_audio_sec": 18176.9,
+    "cumulative_audio_hours": 5.0491,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "tjiho_fr_FR-tjiho-model2",
+      "kathleen_en_US-kathleen-low"
+    ],
+    "active_voice": "tjiho_fr_FR-tjiho-model2, kathleen_en_US-kathleen-low"
+  },
+  {
+    "step": 455,
+    "total_steps": 625,
+    "loss": 4.2967,
+    "accuracy": 2.46,
+    "masked_accuracy_pct": 2.46,
+    "cumulative_audio_sec": 18218.3,
+    "cumulative_audio_hours": 5.0606,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "mls_fr_FR-mls-medium#spk31",
+      "norman_en_US-norman-medium"
+    ],
+    "active_voice": "mls_fr_FR-mls-medium#spk31, norman_en_US-norman-medium"
+  },
+  {
+    "step": 456,
+    "total_steps": 625,
+    "loss": 4.2916,
+    "accuracy": 2.87,
+    "masked_accuracy_pct": 2.87,
+    "cumulative_audio_sec": 18252.2,
+    "cumulative_audio_hours": 5.0701,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "jenny_dioco_en_GB-jenny_dioco-medium",
+      "tjiho_fr_FR-tjiho-model2"
+    ],
+    "active_voice": "jenny_dioco_en_GB-jenny_dioco-medium, tjiho_fr_FR-tjiho-model2"
+  },
+  {
+    "step": 457,
+    "total_steps": 625,
+    "loss": 4.2949,
+    "accuracy": 7.91,
+    "masked_accuracy_pct": 7.91,
+    "cumulative_audio_sec": 18292.3,
+    "cumulative_audio_hours": 5.0812,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "upmc_fr_FR-upmc-medium#spk1",
+      "tjiho_fr_FR-tjiho-model2"
+    ],
+    "active_voice": "upmc_fr_FR-upmc-medium#spk1, tjiho_fr_FR-tjiho-model2"
+  },
+  {
+    "step": 458,
+    "total_steps": 625,
+    "loss": 4.3583,
+    "accuracy": 1.88,
+    "masked_accuracy_pct": 1.88,
+    "cumulative_audio_sec": 18333.3,
+    "cumulative_audio_hours": 5.0926,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "siwis_fr_FR-siwis-medium",
+      "alba_en_GB-alba-medium"
+    ],
+    "active_voice": "siwis_fr_FR-siwis-medium, alba_en_GB-alba-medium"
+  },
+  {
+    "step": 459,
+    "total_steps": 625,
+    "loss": 4.1918,
+    "accuracy": 3.52,
+    "masked_accuracy_pct": 3.52,
+    "cumulative_audio_sec": 18362.3,
+    "cumulative_audio_hours": 5.1006,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "alan_en_GB-alan-medium",
+      "mls_fr_FR-mls-medium#spk104"
+    ],
+    "active_voice": "alan_en_GB-alan-medium, mls_fr_FR-mls-medium#spk104"
+  },
+  {
+    "step": 460,
+    "total_steps": 625,
+    "loss": 4.2481,
+    "accuracy": 4.03,
+    "masked_accuracy_pct": 4.03,
+    "cumulative_audio_sec": 18396.5,
+    "cumulative_audio_hours": 5.1101,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "tjiho_fr_FR-tjiho-model1",
+      "mike_en_US-mike-medium"
+    ],
+    "active_voice": "tjiho_fr_FR-tjiho-model1, mike_en_US-mike-medium"
+  },
+  {
+    "step": 461,
+    "total_steps": 625,
+    "loss": 4.4199,
+    "accuracy": 1.23,
+    "masked_accuracy_pct": 1.23,
+    "cumulative_audio_sec": 18446.1,
+    "cumulative_audio_hours": 5.1239,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "alba_en_GB-alba-medium",
+      "tjiho_fr_FR-tjiho-model1"
+    ],
+    "active_voice": "alba_en_GB-alba-medium, tjiho_fr_FR-tjiho-model1"
+  },
+  {
+    "step": 462,
+    "total_steps": 625,
+    "loss": 4.3256,
+    "accuracy": 1.91,
+    "masked_accuracy_pct": 1.91,
+    "cumulative_audio_sec": 18485.7,
+    "cumulative_audio_hours": 5.1349,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "siwis_fr_FR-siwis-medium",
+      "upmc_fr_FR-upmc-medium#spk0"
+    ],
+    "active_voice": "siwis_fr_FR-siwis-medium, upmc_fr_FR-upmc-medium#spk0"
+  },
+  {
+    "step": 463,
+    "total_steps": 625,
+    "loss": 4.2964,
+    "accuracy": 3.29,
+    "masked_accuracy_pct": 3.29,
+    "cumulative_audio_sec": 18534.8,
+    "cumulative_audio_hours": 5.1486,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "tjiho_fr_FR-tjiho-model2",
+      "cori_en_GB-cori-high"
+    ],
+    "active_voice": "tjiho_fr_FR-tjiho-model2, cori_en_GB-cori-high"
+  },
+  {
+    "step": 464,
+    "total_steps": 625,
+    "loss": 4.3281,
+    "accuracy": 2.58,
+    "masked_accuracy_pct": 2.58,
+    "cumulative_audio_sec": 18579.2,
+    "cumulative_audio_hours": 5.1609,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "mls_fr_FR-mls-medium#spk45",
+      "alba_en_GB-alba-medium"
+    ],
+    "active_voice": "mls_fr_FR-mls-medium#spk45, alba_en_GB-alba-medium"
+  },
+  {
+    "step": 465,
+    "total_steps": 625,
+    "loss": 4.3136,
+    "accuracy": 3.17,
+    "masked_accuracy_pct": 3.17,
+    "cumulative_audio_sec": 18610.9,
+    "cumulative_audio_hours": 5.1697,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "tjiho_fr_FR-tjiho-model1",
+      "tjiho_fr_FR-tjiho-model2"
+    ],
+    "active_voice": "tjiho_fr_FR-tjiho-model1, tjiho_fr_FR-tjiho-model2"
+  },
+  {
+    "step": 466,
+    "total_steps": 625,
+    "loss": 4.2808,
+    "accuracy": 3.44,
+    "masked_accuracy_pct": 3.44,
+    "cumulative_audio_sec": 18646.9,
+    "cumulative_audio_hours": 5.1797,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "john_en_US-john-medium",
+      "alan_en_GB-alan-medium"
+    ],
+    "active_voice": "john_en_US-john-medium, alan_en_GB-alan-medium"
+  },
+  {
+    "step": 467,
+    "total_steps": 625,
+    "loss": 4.2588,
+    "accuracy": 3.99,
+    "masked_accuracy_pct": 3.99,
+    "cumulative_audio_sec": 18694.8,
+    "cumulative_audio_hours": 5.193,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "amy_en_US-amy-medium",
+      "alba_en_GB-alba-medium"
+    ],
+    "active_voice": "amy_en_US-amy-medium, alba_en_GB-alba-medium"
+  },
+  {
+    "step": 468,
+    "total_steps": 625,
+    "loss": 4.3745,
+    "accuracy": 4.64,
+    "masked_accuracy_pct": 4.64,
+    "cumulative_audio_sec": 18736.4,
+    "cumulative_audio_hours": 5.2045,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "lessac_en_US-lessac-medium",
+      "amy_en_US-amy-low"
+    ],
+    "active_voice": "lessac_en_US-lessac-medium, amy_en_US-amy-low"
+  },
+  {
+    "step": 469,
+    "total_steps": 625,
+    "loss": 4.2905,
+    "accuracy": 5.67,
+    "masked_accuracy_pct": 5.67,
+    "cumulative_audio_sec": 18771.0,
+    "cumulative_audio_hours": 5.2142,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "siwis_fr_FR-siwis-medium",
+      "upmc_fr_FR-upmc-medium#spk0"
+    ],
+    "active_voice": "siwis_fr_FR-siwis-medium, upmc_fr_FR-upmc-medium#spk0"
+  },
+  {
+    "step": 470,
+    "total_steps": 625,
+    "loss": 4.3612,
+    "accuracy": 4.34,
+    "masked_accuracy_pct": 4.34,
+    "cumulative_audio_sec": 18801.1,
+    "cumulative_audio_hours": 5.2225,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "tjiho_fr_FR-tjiho-model1",
+      "tjiho_fr_FR-tjiho-model2"
+    ],
+    "active_voice": "tjiho_fr_FR-tjiho-model1, tjiho_fr_FR-tjiho-model2"
+  },
+  {
+    "step": 471,
+    "total_steps": 625,
+    "loss": 4.2602,
+    "accuracy": 3.85,
+    "masked_accuracy_pct": 3.85,
+    "cumulative_audio_sec": 18839.2,
+    "cumulative_audio_hours": 5.2331,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "tjiho_fr_FR-tjiho-model1",
+      "l2arctic_en_US-l2arctic-medium#spk19"
+    ],
+    "active_voice": "tjiho_fr_FR-tjiho-model1, l2arctic_en_US-l2arctic-medium#spk19"
+  },
+  {
+    "step": 472,
+    "total_steps": 625,
+    "loss": 4.3276,
+    "accuracy": 3.27,
+    "masked_accuracy_pct": 3.27,
+    "cumulative_audio_sec": 18887.9,
+    "cumulative_audio_hours": 5.2466,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "alba_en_GB-alba-medium",
+      "upmc_fr_FR-upmc-medium#spk0"
+    ],
+    "active_voice": "alba_en_GB-alba-medium, upmc_fr_FR-upmc-medium#spk0"
+  },
+  {
+    "step": 473,
+    "total_steps": 625,
+    "loss": 4.3954,
+    "accuracy": 2.64,
+    "masked_accuracy_pct": 2.64,
+    "cumulative_audio_sec": 18926.7,
+    "cumulative_audio_hours": 5.2574,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "sam_en_US-sam-medium",
+      "ljspeech_en_US-ljspeech-medium"
+    ],
+    "active_voice": "sam_en_US-sam-medium, ljspeech_en_US-ljspeech-medium"
+  },
+  {
+    "step": 474,
+    "total_steps": 625,
+    "loss": 4.2917,
+    "accuracy": 4.82,
+    "masked_accuracy_pct": 4.82,
+    "cumulative_audio_sec": 18955.2,
+    "cumulative_audio_hours": 5.2653,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "tjiho_fr_FR-tjiho-model3",
+      "ryan_en_US-ryan-medium"
+    ],
+    "active_voice": "tjiho_fr_FR-tjiho-model3, ryan_en_US-ryan-medium"
+  },
+  {
+    "step": 475,
+    "total_steps": 625,
+    "loss": 4.2999,
+    "accuracy": 3.85,
+    "masked_accuracy_pct": 3.85,
+    "cumulative_audio_sec": 18994.3,
+    "cumulative_audio_hours": 5.2762,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "arctic_en_US-arctic-medium#spk11",
+      "joe_en_US-joe-medium"
+    ],
+    "active_voice": "arctic_en_US-arctic-medium#spk11, joe_en_US-joe-medium"
+  },
+  {
+    "step": 476,
+    "total_steps": 625,
+    "loss": 4.2268,
+    "accuracy": 3.92,
+    "masked_accuracy_pct": 3.92,
+    "cumulative_audio_sec": 19043.3,
+    "cumulative_audio_hours": 5.2898,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "kathleen_en_US-kathleen-low",
+      "tom_fr_FR-tom-medium"
+    ],
+    "active_voice": "kathleen_en_US-kathleen-low, tom_fr_FR-tom-medium"
+  },
+  {
+    "step": 477,
+    "total_steps": 625,
+    "loss": 4.1567,
+    "accuracy": 5.69,
+    "masked_accuracy_pct": 5.69,
+    "cumulative_audio_sec": 19077.3,
+    "cumulative_audio_hours": 5.2993,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "tjiho_fr_FR-tjiho-model2",
+      "sam_en_US-sam-medium"
+    ],
+    "active_voice": "tjiho_fr_FR-tjiho-model2, sam_en_US-sam-medium"
+  },
+  {
+    "step": 478,
+    "total_steps": 625,
+    "loss": 4.3501,
+    "accuracy": 3.41,
+    "masked_accuracy_pct": 3.41,
+    "cumulative_audio_sec": 19095.9,
+    "cumulative_audio_hours": 5.3044,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "tjiho_fr_FR-tjiho-model2",
+      "siwis_fr_FR-siwis-medium"
+    ],
+    "active_voice": "tjiho_fr_FR-tjiho-model2, siwis_fr_FR-siwis-medium"
+  },
+  {
+    "step": 479,
+    "total_steps": 625,
+    "loss": 4.2816,
+    "accuracy": 3.12,
+    "masked_accuracy_pct": 3.12,
+    "cumulative_audio_sec": 19122.1,
+    "cumulative_audio_hours": 5.3117,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "tom_fr_FR-tom-medium",
+      "l2arctic_en_US-l2arctic-medium#spk19"
+    ],
+    "active_voice": "tom_fr_FR-tom-medium, l2arctic_en_US-l2arctic-medium#spk19"
+  },
+  {
+    "step": 480,
+    "total_steps": 625,
+    "loss": 4.2444,
+    "accuracy": 3.78,
+    "masked_accuracy_pct": 3.78,
+    "cumulative_audio_sec": 19148.7,
+    "cumulative_audio_hours": 5.3191,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "tjiho_fr_FR-tjiho-model2",
+      "tjiho_fr_FR-tjiho-model2"
+    ],
+    "active_voice": "tjiho_fr_FR-tjiho-model2, tjiho_fr_FR-tjiho-model2"
+  },
+  {
+    "step": 481,
+    "total_steps": 625,
+    "loss": 4.1642,
+    "accuracy": 4.44,
+    "masked_accuracy_pct": 4.44,
+    "cumulative_audio_sec": 19178.5,
+    "cumulative_audio_hours": 5.3274,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "tjiho_fr_FR-tjiho-model3",
+      "alba_en_GB-alba-medium"
+    ],
+    "active_voice": "tjiho_fr_FR-tjiho-model3, alba_en_GB-alba-medium"
+  },
+  {
+    "step": 482,
+    "total_steps": 625,
+    "loss": 4.2375,
+    "accuracy": 4.03,
+    "masked_accuracy_pct": 4.03,
+    "cumulative_audio_sec": 19213.0,
+    "cumulative_audio_hours": 5.3369,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "cori_en_GB-cori-medium",
+      "tjiho_fr_FR-tjiho-model1"
+    ],
+    "active_voice": "cori_en_GB-cori-medium, tjiho_fr_FR-tjiho-model1"
+  },
+  {
+    "step": 483,
+    "total_steps": 625,
+    "loss": 4.1874,
+    "accuracy": 2.8,
+    "masked_accuracy_pct": 2.8,
+    "cumulative_audio_sec": 19250.1,
+    "cumulative_audio_hours": 5.3472,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "tjiho_fr_FR-tjiho-model2",
+      "alba_en_GB-alba-medium"
+    ],
+    "active_voice": "tjiho_fr_FR-tjiho-model2, alba_en_GB-alba-medium"
+  },
+  {
+    "step": 484,
+    "total_steps": 625,
+    "loss": 4.3673,
+    "accuracy": 3.1,
+    "masked_accuracy_pct": 3.1,
+    "cumulative_audio_sec": 19285.4,
+    "cumulative_audio_hours": 5.3571,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "upmc_fr_FR-upmc-medium#spk0",
+      "tjiho_fr_FR-tjiho-model1"
+    ],
+    "active_voice": "upmc_fr_FR-upmc-medium#spk0, tjiho_fr_FR-tjiho-model1"
+  },
+  {
+    "step": 485,
+    "total_steps": 625,
+    "loss": 4.375,
+    "accuracy": 3.03,
+    "masked_accuracy_pct": 3.03,
+    "cumulative_audio_sec": 19316.5,
+    "cumulative_audio_hours": 5.3657,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "ryan_en_US-ryan-low",
+      "amy_en_US-amy-low"
+    ],
+    "active_voice": "ryan_en_US-ryan-low, amy_en_US-amy-low"
+  },
+  {
+    "step": 486,
+    "total_steps": 625,
+    "loss": 4.2332,
+    "accuracy": 3.34,
+    "masked_accuracy_pct": 3.34,
+    "cumulative_audio_sec": 19341.7,
+    "cumulative_audio_hours": 5.3727,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "libritts_r_en_US-libritts_r-medium#spk753",
+      "alan_en_GB-alan-medium"
+    ],
+    "active_voice": "libritts_r_en_US-libritts_r-medium#spk753, alan_en_GB-alan-medium"
+  },
+  {
+    "step": 487,
+    "total_steps": 625,
+    "loss": 4.4176,
+    "accuracy": 3.27,
+    "masked_accuracy_pct": 3.27,
+    "cumulative_audio_sec": 19378.7,
+    "cumulative_audio_hours": 5.383,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "kathleen_en_US-kathleen-low",
+      "northern_english_male_en_GB-northern_english_male-medium"
+    ],
+    "active_voice": "kathleen_en_US-kathleen-low, northern_english_male_en_GB-northern_english_male-medium"
+  },
+  {
+    "step": 488,
+    "total_steps": 625,
+    "loss": 4.2874,
+    "accuracy": 7.57,
+    "masked_accuracy_pct": 7.57,
+    "cumulative_audio_sec": 19410.0,
+    "cumulative_audio_hours": 5.3917,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "tjiho_fr_FR-tjiho-model3",
+      "ljspeech_en_US-ljspeech-high"
+    ],
+    "active_voice": "tjiho_fr_FR-tjiho-model3, ljspeech_en_US-ljspeech-high"
+  },
+  {
+    "step": 489,
+    "total_steps": 625,
+    "loss": 4.2068,
+    "accuracy": 5.49,
+    "masked_accuracy_pct": 5.49,
+    "cumulative_audio_sec": 19442.5,
+    "cumulative_audio_hours": 5.4007,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "upmc_fr_FR-upmc-medium#spk0",
+      "upmc_fr_FR-upmc-medium#spk1"
+    ],
+    "active_voice": "upmc_fr_FR-upmc-medium#spk0, upmc_fr_FR-upmc-medium#spk1"
+  },
+  {
+    "step": 490,
+    "total_steps": 625,
+    "loss": 4.278,
+    "accuracy": 3.44,
+    "masked_accuracy_pct": 3.44,
+    "cumulative_audio_sec": 19484.6,
+    "cumulative_audio_hours": 5.4124,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "lessac_en_US-lessac-high",
+      "bryce_en_US-bryce-medium"
+    ],
+    "active_voice": "lessac_en_US-lessac-high, bryce_en_US-bryce-medium"
+  },
+  {
+    "step": 491,
+    "total_steps": 625,
+    "loss": 4.2806,
+    "accuracy": 5.24,
+    "masked_accuracy_pct": 5.24,
+    "cumulative_audio_sec": 19529.6,
+    "cumulative_audio_hours": 5.4249,
+    "disk_bytes_used": 0,
+    "active_voices": [
+      "ljspeech_en_US-ljspeech-medium",
+      "cori_en_GB-cori-high"
+    ],
+    "active_voice": "ljspeech_en_US-ljspeech-medium, cori_en_GB-cori-high"
   }
 ]

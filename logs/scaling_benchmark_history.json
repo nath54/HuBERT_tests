@@ -1,8 +1,8 @@
 {
   "model_tier": "mini",
   "parameters_m": 8.05,
-  "total_steps": 125,
-  "total_audio_hours": 1.398,
+  "total_steps": 375,
+  "total_audio_hours": 4.165,
   "history": [
     {
       "step": 0,
@@ -29,6 +29,34 @@
       "disk_bytes_used": 0,
       "marginal_wer_gain_per_hour": 0.0,
       "plateau_detected": false
+    },
+    {
+      "step": 250,
+      "cumulative_audio_sec": 10026.53,
+      "cumulative_audio_hours": 2.7851,
+      "pretrain_loss": 4.8306,
+      "masked_acc_pct": 1.63,
+      "librispeech_wer": 100.0,
+      "librispeech_cer": 100.0,
+      "librispeech_per": 100.0,
+      "sample_prediction": "",
+      "disk_bytes_used": 0,
+      "marginal_wer_gain_per_hour": 0.0,
+      "plateau_detected": true
+    },
+    {
+      "step": 375,
+      "cumulative_audio_sec": 14994.1,
+      "cumulative_audio_hours": 4.165,
+      "pretrain_loss": 4.1993,
+      "masked_acc_pct": 6.39,
+      "librispeech_wer": 100.0,
+      "librispeech_cer": 97.14,
+      "librispeech_per": 100.0,
+      "sample_prediction": "g e",
+      "disk_bytes_used": 0,
+      "marginal_wer_gain_per_hour": 0.0,
+      "plateau_detected": true
     }
   ]
 }

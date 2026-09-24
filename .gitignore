@@ -15,3 +15,7 @@ logs/events*
 outputs/gradients/*.png
 outputs/naps/*.png
 outputs/probes/*.png
+
+*.pt
+logs/
+*history*.json
