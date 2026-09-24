@@ -4,14 +4,17 @@ Generates infinite diverse synthetic multi-speaker speech entirely in RAM (0 byt
 and assigns k-means acoustic unit pseudo-labels for HuBERT self-supervised pre-training.
 """
 
+import collections
 import json
 import logging
 import math
 import os
 import random
+import re
 import sys
+import time
 from pathlib import Path
-from typing import Dict, Iterator, List, Optional, Tuple
+from typing import Dict, Iterator, List, Optional, Set, Tuple
 
 import numpy as np
 import soundfile as sf
@@ -96,9 +99,81 @@ class ProceduralTextSampler:
 class PiperVoiceManager:
     """Manages loaded Piper neural voice models with in-memory caching."""
 
-    def __init__(self, voices_dir: Path = PIPER_VOICES_DIR, max_cached_voices: int = 8):
+class VoiceQualityGuardian:
+    """Monitors speech synthesis quality, detects missing phoneme warnings, and enforces permanent voice blocking."""
+
+    def __init__(self, max_warnings: int = 3, blocklist_file: Path = Path("config/blocked_voices.json")):
+        self.max_warnings = max_warnings
+        self.blocklist_file = blocklist_file
+        self.warnings_count: Dict[str, int] = collections.defaultdict(int)
+        self.missing_phonemes: Dict[str, Set[str]] = collections.defaultdict(set)
+        self.blocked_voices: Set[str] = set()
+        self._load_blocklist()
+
+    def _load_blocklist(self):
+        if self.blocklist_file.exists():
+            try:
+                with open(self.blocklist_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    self.blocked_voices = set(data.get("blocked_voice_names", []))
+            except Exception:
+                pass
+
+    def is_blocked(self, voice_name: str) -> bool:
+        return voice_name in self.blocked_voices
+
+    def record_warning(self, voice_name: str, missing: List[str], text_snippet: str = "") -> bool:
+        """Add strike to voice. If threshold reached, block permanently. Returns True if newly blocked."""
+        self.warnings_count[voice_name] += 1
+        for p in missing:
+            self.missing_phonemes[voice_name].add(p)
+
+        count = self.warnings_count[voice_name]
+        missing_str = ", ".join(f"'{p}'" for p in sorted(list(self.missing_phonemes[voice_name])))
+
+        if count >= self.max_warnings:
+            self.block_voice(voice_name, reason=f"Accumulated {count} warnings (missing phonemes: {missing_str})")
+            return True
+        else:
+            print(f"⚠️ [Voice Guardian] Warning {count}/{self.max_warnings} for '{voice_name}' (missing: [{missing_str}]) on text: \"{text_snippet[:35]}...\". Sample discarded, switching voice!")
+            return False
+
+    def block_voice(self, voice_name: str, reason: str = ""):
+        self.blocked_voices.add(voice_name)
+        print(f"\n🚫 [Voice Guardian] Voice '{voice_name}' has reached {self.max_warnings} warnings!")
+        print(f"   👉 Definitively BLOCKED from training pipeline. Reason: {reason}\n")
+        self._save_blocklist()
+
+    def _save_blocklist(self):
+        self.blocklist_file.parent.mkdir(parents=True, exist_ok=True)
+        data = {
+            "updated_at": time.time(),
+            "blocked_count": len(self.blocked_voices),
+            "blocked_voice_names": sorted(list(self.blocked_voices)),
+            "warnings_summary": {
+                k: {"warnings": v, "missing_phonemes": sorted(list(self.missing_phonemes[k]))}
+                for k, v in self.warnings_count.items()
+            },
+        }
+        try:
+            with open(self.blocklist_file, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            print(f"[Voice Guardian] Error saving blocklist: {e}")
+
+
+class PiperVoiceManager:
+    """Manages loaded Piper neural voice models with in-memory caching and real-time quality validation."""
+
+    def __init__(
+        self,
+        voices_dir: Path = PIPER_VOICES_DIR,
+        max_cached_voices: int = 8,
+        guardian: Optional[VoiceQualityGuardian] = None,
+    ):
         self.voices_dir = voices_dir
         self.max_cached = max_cached_voices
+        self.guardian = guardian or VoiceQualityGuardian(max_warnings=3)
         self.voice_models: List[Path] = []
         self.voice_cache: Dict[str, PiperVoice] = {}
         self.resamplers: Dict[int, T.Resample] = {}
@@ -107,26 +182,14 @@ class PiperVoiceManager:
 
     def _discover_voices(self):
         if self.voices_dir.exists():
-            import json
             import piper.phoneme_ids
             # Suppress missing phoneme warning spam
             piper.phoneme_ids._LOGGER.setLevel(logging.ERROR)
 
             all_models = sorted(list(self.voices_dir.rglob("*.onnx")))
 
-            # Load blocked voices configuration
-            blocked_names = set()
-            blocklist_path = Path("config/blocked_voices.json")
-            if blocklist_path.exists():
-                try:
-                    with open(blocklist_path, "r", encoding="utf-8") as f:
-                        b_data = json.load(f)
-                        blocked_names = set(b_data.get("blocked_voice_names", []))
-                except Exception:
-                    pass
-
-            # Filter out blocked voices with missing phonemes
-            clean_models = [m for m in all_models if f"{m.parent.name}_{m.stem}" not in blocked_names]
+            # Filter out blocked voices
+            clean_models = [m for m in all_models if not self.guardian.is_blocked(f"{m.parent.name}_{m.stem}")]
 
             self.en_voices = [m for m in clean_models if "en_US" in str(m) or "en_GB" in str(m)]
             self.fr_voices = [m for m in clean_models if "fr_FR" in str(m)]
@@ -139,10 +202,34 @@ class PiperVoiceManager:
         else:
             print(f"[PiperManager] Warning: Voices directory {self.voices_dir} not found.")
 
+    def remove_voice(self, voice_name: str):
+        """Immediately remove a newly blocked voice from active pools and memory cache."""
+        self.voice_models = [m for m in self.voice_models if f"{m.parent.name}_{m.stem}" != voice_name]
+        self.en_voices = [m for m in self.en_voices if f"{m.parent.name}_{m.stem}" != voice_name]
+        self.fr_voices = [m for m in self.fr_voices if f"{m.parent.name}_{m.stem}" != voice_name]
+        self.voice_cache.pop(voice_name, None)
+        print(f"[PiperManager] Evicted voice '{voice_name}' from memory. Active voices remaining: {len(self.voice_models)}")
+
+    def validate_voice_for_text(self, voice: PiperVoice, voice_name: str, text: str) -> Tuple[bool, List[str]]:
+        """Validate whether the voice model supports all phonemes produced by the text."""
+        try:
+            phonemes_sentences = voice.phonemize(text)
+            id_map = voice.config.phoneme_id_map
+            missing = []
+            for s in phonemes_sentences:
+                for ph in s:
+                    if ph not in id_map:
+                        missing.append(ph)
+            if missing:
+                return False, sorted(list(set(missing)))
+            return True, []
+        except Exception as e:
+            return False, [f"ERR_{e}"]
+
     def get_random_voice(self, lang: Optional[str] = None) -> Tuple[PiperVoice, str]:
         """Retrieve a cached or newly loaded PiperVoice instance matching language."""
         if not self.voice_models:
-            raise RuntimeError(f"No Piper models found in {self.voices_dir}")
+            raise RuntimeError(f"No available Piper models in {self.voices_dir}")
 
         if lang == "fr" and self.fr_voices:
             pool = self.fr_voices
@@ -173,47 +260,71 @@ class PiperVoiceManager:
         self.voice_cache[voice_name] = loaded_voice
         return loaded_voice, voice_name
 
-    def synthesize_to_tensor_16k(self, text: str, lang: Optional[str] = None) -> Tuple[torch.Tensor, str, float]:
-        """Synthesize text entirely in RAM and return a 16 kHz float32 PyTorch tensor."""
-        voice, voice_name = self.get_random_voice(lang=lang)
+    def synthesize_to_tensor_16k(self, text: str, lang: Optional[str] = None, max_retries: int = 6) -> Tuple[torch.Tensor, str, float]:
+        """Synthesize text entirely in RAM with pre-validation, quality verification, and automatic retry on missing phonemes."""
+        for attempt in range(max_retries):
+            try:
+                voice, voice_name = self.get_random_voice(lang=lang)
+            except Exception:
+                break
 
-        # Randomize speaking rate and prosody
-        length_scale = random.uniform(0.90, 1.12)
-        noise_scale = random.uniform(0.55, 0.75)
-        syn_config = SynthesisConfig(
-            length_scale=length_scale,
-            noise_scale=noise_scale,
-            volume=1.0,
-        )
+            # 1. Pre-synthesis Phoneme Validation
+            valid, missing = self.validate_voice_for_text(voice, voice_name, text)
+            if not valid:
+                just_blocked = self.guardian.record_warning(voice_name, missing, text_snippet=text)
+                if just_blocked:
+                    self.remove_voice(voice_name)
+                # Discard sample and retry with another voice
+                continue
 
-        chunks = []
-        source_sr = 22050
-        for chunk in voice.synthesize(text, syn_config=syn_config):
-            source_sr = chunk.sample_rate
-            chunks.append(chunk.audio_float_array)
+            # 2. Synthesis Execution
+            length_scale = random.uniform(0.90, 1.12)
+            noise_scale = random.uniform(0.55, 0.75)
+            syn_config = SynthesisConfig(
+                length_scale=length_scale,
+                noise_scale=noise_scale,
+                volume=1.0,
+            )
 
-        if not chunks:
-            # Fallback silence
-            return torch.zeros(16000), voice_name, 1.0
+            chunks = []
+            source_sr = 22050
+            try:
+                for chunk in voice.synthesize(text, syn_config=syn_config):
+                    source_sr = chunk.sample_rate
+                    chunks.append(chunk.audio_float_array)
+            except Exception as e:
+                just_blocked = self.guardian.record_warning(voice_name, [f"SYN_{e}"], text_snippet=text)
+                if just_blocked:
+                    self.remove_voice(voice_name)
+                continue
 
-        audio_np = np.concatenate(chunks).astype(np.float32)
-        audio_tensor = torch.from_numpy(audio_np).unsqueeze(0)  # (1, T_raw)
+            if not chunks:
+                continue
 
-        # Resample to 16,000 Hz if needed
-        if source_sr != 16000:
-            if source_sr not in self.resamplers:
-                self.resamplers[source_sr] = T.Resample(orig_freq=source_sr, new_freq=16000)
-            audio_tensor = self.resamplers[source_sr](audio_tensor)
+            audio_np = np.concatenate(chunks).astype(np.float32)
+            if np.isnan(audio_np).any() or np.isinf(audio_np).any() or np.max(np.abs(audio_np)) < 1e-4:
+                continue
 
-        waveform = audio_tensor.squeeze(0)  # (T_16k,)
-        duration = len(waveform) / 16000.0
+            # Resample to 16,000 Hz if needed
+            audio_tensor = torch.from_numpy(audio_np).unsqueeze(0)  # (1, T_raw)
+            if source_sr != 16000:
+                if source_sr not in self.resamplers:
+                    self.resamplers[source_sr] = T.Resample(orig_freq=source_sr, new_freq=16000)
+                audio_tensor = self.resamplers[source_sr](audio_tensor)
 
-        # Normalize amplitude safely
-        max_val = torch.max(torch.abs(waveform))
-        if max_val > 1e-4:
-            waveform = waveform / max_val * 0.95
+            waveform = audio_tensor.squeeze(0)  # (T_16k,)
+            duration = len(waveform) / 16000.0
 
-        return waveform, voice_name, duration
+            # Normalize amplitude safely
+            max_val = torch.max(torch.abs(waveform))
+            if max_val > 1e-4:
+                waveform = waveform / max_val * 0.95
+
+            # 100% verified, clean sample
+            return waveform, voice_name, duration
+
+        # If all retries failed for this specific text
+        raise RuntimeError(f"Text rejected after {max_retries} attempts: '{text[:40]}'")
 
 
 class AcousticUnitExtractor:
