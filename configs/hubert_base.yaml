@@ -1,0 +1,35 @@
+# HuBERT Base Architecture Configuration
+model:
+  sample_rate: 16000
+  in_channels: 1
+
+  # 7-layer temporal 1D convolution encoder (320x total downsampling)
+  # (out_channels, kernel_size, stride)
+  conv_layers:
+    - [256, 10, 5]
+    - [256, 3, 2]
+    - [256, 3, 2]
+    - [256, 3, 2]
+    - [256, 3, 2]
+    - [256, 2, 2]
+    - [256, 2, 2]
+  conv_feature_dim: 256
+
+  # Transformer Encoder
+  encoder_embed_dim: 256
+  encoder_layers: 4
+  encoder_heads: 4
+  encoder_ffn_dim: 1024
+  dropout: 0.1
+  attention_dropout: 0.1
+  activation_fn: "gelu"
+  layer_norm_first: true
+
+  # Positional Conv Embedding
+  pos_conv_kernel: 64
+  pos_conv_groups: 16
+
+  # CTC Vocabulary
+  vocab_size: 32
+  blank_index: 0
+  pad_index: 1

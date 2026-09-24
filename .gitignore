@@ -1,0 +1,16 @@
+# Environments
+.venv/
+env/
+venv/
+__pycache__/
+*.pyc
+
+# Data & Output artifacts
+data/raw/synthetic/wavs/
+*.wav
+*.flac
+checkpoints/*.pt
+logs/events*
+outputs/gradients/*.png
+outputs/naps/*.png
+outputs/probes/*.png

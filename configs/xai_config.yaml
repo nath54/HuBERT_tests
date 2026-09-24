@@ -1,0 +1,23 @@
+# Explainable AI (XAI) Suite Configuration
+xai:
+  output_dir: "outputs"
+  
+  captum:
+    methods:
+      - "integrated_gradients"
+      - "saliency"
+    ig_steps: 30
+    save_plots: true
+
+  naps:
+    max_samples: 50
+    top_k_selective_neurons: 20
+    ablation_types:
+      - "zero"
+      - "skip"
+
+  probes:
+    diagnostic_probe_epochs: 8
+    num_classes: 4
+    reconstruction_epochs: 6
+    n_mels: 32

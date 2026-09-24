@@ -1,0 +1,20 @@
+# Training Pipeline Configuration
+training:
+  epochs: 15
+  batch_size: 16
+  lr: 0.0005
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  use_amp: true
+  num_workers: 2
+
+  checkpoint_dir: "checkpoints"
+  log_dir: "logs"
+  save_every: 5
+
+data:
+  dataset_dir: "data/raw/synthetic"
+  sample_rate: 16000
+  max_duration_s: 3.0
+  normalize_audio: true
+  augment: true

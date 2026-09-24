@@ -1,0 +1,702 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HuBERT Live Python ASR & XAI Studio</title>
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+  <style>
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(148, 163, 184, 0.3); border-radius: 3px; }
+    .badge-pill { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 9999px; font-size: 0.72rem; font-weight: 600; }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 antialiased p-4 md:p-6 font-sans">
+
+  <div class="max-w-7xl mx-auto space-y-6">
+
+    <!-- Header & Connection Status -->
+    <div class="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 border border-slate-800 rounded-2xl p-5 shadow-2xl flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+      <div>
+        <div class="flex items-center gap-2 mb-1.5">
+          <span class="badge-pill bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center gap-1.5">
+            <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span> Python Backend Connected
+          </span>
+          <span id="deviceBadge" class="badge-pill bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">PyTorch GPU</span>
+          <span id="modelInfoBadge" class="badge-pill bg-sky-500/20 text-sky-400 border border-sky-500/30">HuBERT 4-Layer</span>
+        </div>
+        <h1 class="text-2xl md:text-3xl font-extrabold text-white">
+          HuBERT <span class="text-indigo-400">Live ASR & XAI Studio</span>
+        </h1>
+        <p class="text-slate-400 text-xs md:text-sm mt-0.5">
+          Fully connected to real PyTorch inference, live layer activations, Captum Integrated Gradients, and live training loop.
+        </p>
+      </div>
+
+      <!-- Quick Action Buttons -->
+      <div class="flex flex-wrap gap-2">
+        <button onclick="toggleTrainingModal()" class="px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl text-xs font-bold shadow-lg flex items-center gap-2 transition-all">
+          <span class="w-2 h-2 rounded-full bg-white"></span> Live Training Console
+        </button>
+      </div>
+    </div>
+
+    <!-- Control Bar: Input Generation & Audio Upload -->
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
+      <!-- Synthesize spoken word -->
+      <div class="space-y-1">
+        <label class="text-xs font-semibold text-slate-300">1. Synthesize Spoken Word to Python:</label>
+        <div class="flex gap-2">
+          <input type="text" id="synthWordInput" value="hello" placeholder="Type a word..." class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white w-full focus:outline-none focus:ring-2 focus:ring-indigo-500">
+          <button onclick="triggerSynthesis()" id="btnSynth" class="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold transition-all whitespace-nowrap">
+            Synthesize & Infer
+          </button>
+        </div>
+      </div>
+
+      <!-- Presets -->
+      <div class="space-y-1">
+        <label class="text-xs font-semibold text-slate-300">Quick Word Presets:</label>
+        <div class="flex flex-wrap gap-1.5">
+          <button onclick="quickSynth('speech')" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded text-xs font-mono">speech</button>
+          <button onclick="quickSynth('one')" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded text-xs font-mono">one</button>
+          <button onclick="quickSynth('deep')" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded text-xs font-mono">deep</button>
+          <button onclick="quickSynth('learn')" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded text-xs font-mono">learn</button>
+        </div>
+      </div>
+
+      <!-- Audio Upload / Mic -->
+      <div class="space-y-1">
+        <label class="text-xs font-semibold text-slate-300">2. Or Upload Audio File (.wav/.flac):</label>
+        <input type="file" id="audioFileInput" accept=".wav,.flac,.ogg" class="text-xs text-slate-400 file:mr-2 file:py-1 file:px-3 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-slate-800 file:text-indigo-400 hover:file:bg-slate-700 cursor-pointer">
+      </div>
+    </div>
+
+    <!-- MAIN TWO-COLUMN DASHBOARD -->
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+      <!-- LEFT COLUMN: Live Signals & CTC Decoding (7 cols) -->
+      <div class="lg:col-span-7 space-y-6">
+
+        <!-- Waveform & Real Spectrogram -->
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+          <div class="flex justify-between items-center">
+            <div>
+              <h3 class="text-md font-bold text-white flex items-center gap-2">
+                <span class="w-2 h-2 rounded-full bg-sky-400"></span> Live Input Signal & Waveform
+              </h3>
+              <p class="text-xs text-slate-400" id="audioMetaText">Duration: 0.8s | 16,000 Hz</p>
+            </div>
+            <div id="inferSpinner" class="hidden text-xs text-indigo-400 flex items-center gap-1 font-mono">
+              <span class="animate-spin">🌀</span> Running PyTorch GPU Forward...
+            </div>
+          </div>
+
+          <!-- Waveform Canvas with Captum Attribution Overlay -->
+          <div class="space-y-1">
+            <div class="flex justify-between text-[11px] text-slate-400 font-mono">
+              <span>Waveform (Blue) & Captum Integrated Gradients (Crimson)</span>
+              <span id="attributionLegendText">Click a character below to highlight attribution</span>
+            </div>
+            <div class="relative bg-slate-950 border border-slate-800 rounded-xl overflow-hidden h-36">
+              <canvas id="liveWaveformCanvas" class="w-full h-full"></canvas>
+            </div>
+          </div>
+
+          <!-- Spectrogram Matrix -->
+          <div class="space-y-1">
+            <div class="flex justify-between text-[11px] text-slate-400 font-mono">
+              <span>Live Acoustic Spectrogram (FFT Frequency Energy across Time Frames)</span>
+              <span>16 Spectral Bins</span>
+            </div>
+            <div class="relative bg-slate-950 border border-slate-800 rounded-xl overflow-hidden h-28">
+              <canvas id="liveSpectrogramCanvas" class="w-full h-full"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <!-- Live CTC Decoding & Alignment -->
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+          <div class="flex justify-between items-center">
+            <h3 class="text-md font-bold text-white flex items-center gap-2">
+              <span class="w-2 h-2 rounded-full bg-emerald-400"></span> Live CTC Output & Token Emissions
+            </h3>
+            <span class="text-xs font-mono text-emerald-400" id="decodedTranscriptDisplay">Decoded: "..."</span>
+          </div>
+
+          <!-- Interactive Token Attribution Bar -->
+          <div class="space-y-2">
+            <div class="flex justify-between text-xs text-slate-400">
+              <span>Interactive Captum Token Picker (Click any character to run live attribution):</span>
+              <span class="text-[10px] text-slate-500 font-mono">POST /api/xai/attribute</span>
+            </div>
+            <div id="tokenButtonGroup" class="flex flex-wrap gap-1.5 p-2 bg-slate-950 rounded-xl border border-slate-800 min-h-[44px]">
+              <!-- Clickable tokens generated dynamically -->
+            </div>
+          </div>
+
+          <!-- Frame Emissions Breakdown -->
+          <div class="space-y-1 font-mono">
+            <div class="flex justify-between text-[11px] text-slate-400">
+              <span>Raw Frame Sequence (Hover frame to see top-4 token probabilities):</span>
+              <span id="totalFramesCount" class="text-sky-400">Frames: 0</span>
+            </div>
+            <div id="framePillList" class="flex flex-wrap gap-1 max-h-32 overflow-y-auto p-2 bg-slate-950 rounded-xl border border-slate-800 text-[11px]">
+              <!-- Frame pills populated dynamically -->
+            </div>
+          </div>
+
+          <div id="frameDetailBox" class="p-2.5 bg-slate-950/80 rounded-lg border border-slate-800 text-xs font-mono text-slate-400">
+            Hover over any frame pill above to inspect its real softmax probability distribution.
+          </div>
+        </div>
+
+      </div>
+
+      <!-- RIGHT COLUMN: Real Layer Representations & Causal Interventions (5 cols) -->
+      <div class="lg:col-span-5 space-y-6">
+
+        <!-- Live Layer Activations & Multi-Head Attention -->
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+          <div class="flex justify-between items-center">
+            <h3 class="text-md font-bold text-white">Live PyTorch Hidden States</h3>
+            <!-- Layer Selector Buttons -->
+            <div class="flex gap-1 bg-slate-950 p-1 rounded-lg border border-slate-800 text-xs" id="layerNavButtons">
+              <button onclick="selectStudioLayer(0)" id="studioLayer0" class="px-2 py-0.5 rounded bg-indigo-600 text-white font-semibold">CNN</button>
+              <button onclick="selectStudioLayer(1)" id="studioLayer1" class="px-2 py-0.5 rounded text-slate-400 hover:text-white">L1</button>
+              <button onclick="selectStudioLayer(2)" id="studioLayer2" class="px-2 py-0.5 rounded text-slate-400 hover:text-white">L2</button>
+              <button onclick="selectStudioLayer(3)" id="studioLayer3" class="px-2 py-0.5 rounded text-slate-400 hover:text-white">L3</button>
+              <button onclick="selectStudioLayer(4)" id="studioLayer4" class="px-2 py-0.5 rounded text-slate-400 hover:text-white">L4</button>
+            </div>
+          </div>
+
+          <!-- Feature Matrix Canvas -->
+          <div class="space-y-1">
+            <div class="flex justify-between text-[11px] text-slate-400 font-mono">
+              <span id="layerNameText">Layer Representations (32 channels x T frames)</span>
+              <span id="layerEnergyText">Norm: -</span>
+            </div>
+            <div class="relative bg-slate-950 border border-slate-800 rounded-xl overflow-hidden h-36">
+              <canvas id="liveLayerMatrixCanvas" class="w-full h-full"></canvas>
+            </div>
+          </div>
+
+          <!-- Multi-Head Attention Canvas -->
+          <div class="space-y-1">
+            <div class="flex justify-between text-[11px] text-slate-400 font-mono">
+              <span>PyTorch Attention Weights (T x T Frames)</span>
+              <span>Head Average</span>
+            </div>
+            <div class="relative bg-slate-950 border border-slate-800 rounded-xl overflow-hidden h-36">
+              <canvas id="liveAttentionCanvas" class="w-full h-full"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <!-- Live Causal Ablation Interventions (NAPS) -->
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+          <div>
+            <h3 class="text-md font-bold text-white flex items-center gap-2">
+              <span class="w-2 h-2 rounded-full bg-rose-400"></span> Live Causal Layer Intervention (NAPS)
+            </h3>
+            <p class="text-xs text-slate-400">
+              Zero out or bypass a Transformer layer in the active PyTorch model and measure real-time logit shift!
+            </p>
+          </div>
+
+          <div class="grid grid-cols-4 gap-2">
+            <button onclick="triggerAblation(0)" class="px-2 py-2 bg-slate-950 hover:bg-rose-950/60 border border-slate-800 rounded-lg text-xs font-mono text-slate-200">Ablate L1</button>
+            <button onclick="triggerAblation(1)" class="px-2 py-2 bg-slate-950 hover:bg-rose-950/60 border border-slate-800 rounded-lg text-xs font-mono text-slate-200">Ablate L2</button>
+            <button onclick="triggerAblation(2)" class="px-2 py-2 bg-slate-950 hover:bg-rose-950/60 border border-slate-800 rounded-lg text-xs font-mono text-slate-200">Ablate L3</button>
+            <button onclick="triggerAblation(3)" class="px-2 py-2 bg-slate-950 hover:bg-rose-950/60 border border-slate-800 rounded-lg text-xs font-mono text-slate-200">Ablate L4</button>
+          </div>
+
+          <div id="ablationResultBox" class="p-3 bg-slate-950 rounded-xl border border-slate-800 text-xs font-mono space-y-1 text-slate-300">
+            Click an ablation button above to observe causal damage to the model's output in real time.
+          </div>
+        </div>
+
+      </div>
+
+    </div>
+
+  </div>
+
+  <!-- LIVE TRAINING MODAL / DRAWER -->
+  <div id="trainingModal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl max-w-2xl w-full space-y-5">
+      <div class="flex justify-between items-center border-b border-slate-800 pb-3">
+        <h3 class="text-lg font-bold text-white flex items-center gap-2">
+          <span class="w-3 h-3 rounded-full bg-emerald-400 animate-pulse"></span> Live PyTorch Training Console
+        </h3>
+        <button onclick="toggleTrainingModal()" class="text-slate-400 hover:text-white font-bold">&times;</button>
+      </div>
+
+      <div class="grid grid-cols-3 gap-3">
+        <div>
+          <label class="text-xs text-slate-400 block mb-1">Epochs:</label>
+          <input type="number" id="trainEpochs" value="5" min="1" max="20" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white">
+        </div>
+        <div>
+          <label class="text-xs text-slate-400 block mb-1">Learning Rate:</label>
+          <input type="text" id="trainLr" value="0.0005" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white">
+        </div>
+        <div>
+          <label class="text-xs text-slate-400 block mb-1">Batch Size:</label>
+          <input type="number" id="trainBatchSize" value="16" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white">
+        </div>
+      </div>
+
+      <div class="flex gap-2">
+        <button onclick="startLiveTraining()" id="btnStartTrain" class="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl shadow transition-all">
+          Start Live Training
+        </button>
+        <button onclick="stopLiveTraining()" id="btnStopTrain" class="px-5 py-2 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-xl shadow transition-all hidden">
+          Stop Training
+        </button>
+      </div>
+
+      <!-- Training Status Cards -->
+      <div class="grid grid-cols-4 gap-3 text-center">
+        <div class="p-3 bg-slate-950 rounded-xl border border-slate-800">
+          <div class="text-[10px] text-slate-400 uppercase">Epoch</div>
+          <div id="metricEpoch" class="text-lg font-bold text-white font-mono">-</div>
+        </div>
+        <div class="p-3 bg-slate-950 rounded-xl border border-slate-800">
+          <div class="text-[10px] text-slate-400 uppercase">Train Loss</div>
+          <div id="metricTrainLoss" class="text-lg font-bold text-indigo-400 font-mono">-</div>
+        </div>
+        <div class="p-3 bg-slate-950 rounded-xl border border-slate-800">
+          <div class="text-[10px] text-slate-400 uppercase">Val CER</div>
+          <div id="metricValCER" class="text-lg font-bold text-emerald-400 font-mono">-</div>
+        </div>
+        <div class="p-3 bg-slate-950 rounded-xl border border-slate-800">
+          <div class="text-[10px] text-slate-400 uppercase">Val WER</div>
+          <div id="metricValWER" class="text-lg font-bold text-sky-400 font-mono">-</div>
+        </div>
+      </div>
+
+      <!-- Live Transcripts -->
+      <div class="p-3 bg-slate-950 rounded-xl border border-slate-800 space-y-1 text-xs font-mono">
+        <div class="text-slate-400">Sample Reference: <span id="metricRef" class="text-slate-200">-</span></div>
+        <div class="text-slate-400">Live Prediction:  <span id="metricPred" class="text-emerald-400 font-bold">-</span></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // App State
+    let currentInferenceData = null;
+    let selectedStudioLayer = 0;
+    let currentAttributionCurve = null;
+    let trainingPollInterval = null;
+
+    // Fetch initial backend status
+    async function initStudio() {
+      try {
+        const res = await fetch("/api/status");
+        const status = await res.json();
+        document.getElementById("deviceBadge").innerText = `PyTorch: ${status.device.toUpperCase()}`;
+        document.getElementById("modelInfoBadge").innerText = `HuBERT (${status.encoder_layers} Layers, ${status.embed_dim}d)`;
+      } catch (e) {
+        console.error("Backend offline or loading...", e);
+      }
+      // Run initial inference
+      triggerSynthesis();
+    }
+
+    // Trigger Synthesis & Inference
+    async function triggerSynthesis() {
+      const word = document.getElementById("synthWordInput").value || "hello";
+      showSpinner(true);
+      try {
+        const res = await fetch("/api/synthesize_and_infer", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ word: word, duration: 0.8, f0: 140.0 })
+        });
+        const data = await res.json();
+        renderInferenceData(data);
+      } catch (err) {
+        console.error("Inference failed:", err);
+      } finally {
+        showSpinner(false);
+      }
+    }
+
+    function quickSynth(word) {
+      document.getElementById("synthWordInput").value = word;
+      triggerSynthesis();
+    }
+
+    // File Upload Handler
+    document.getElementById("audioFileInput").addEventListener("change", async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      const formData = new FormData();
+      formData.append("file", file);
+
+      showSpinner(true);
+      try {
+        const res = await fetch("/api/upload_audio", {
+          method: "POST",
+          body: formData
+        });
+        const data = await res.json();
+        renderInferenceData(data);
+      } catch (err) {
+        console.error("Upload inference failed:", err);
+      } finally {
+        showSpinner(false);
+      }
+    });
+
+    function showSpinner(show) {
+      const sp = document.getElementById("inferSpinner");
+      if (show) sp.classList.remove("hidden");
+      else sp.classList.add("hidden");
+    }
+
+    // Render Inference Data across Canvases & Controls
+    function renderInferenceData(data) {
+      currentInferenceData = data;
+      currentAttributionCurve = null;
+
+      document.getElementById("audioMetaText").innerText = `Duration: ${data.duration_sec}s (${data.num_audio_samples.toLocaleString()} samples) | Transcript: '${data.transcript}'`;
+      document.getElementById("decodedTranscriptDisplay").innerText = `Decoded: "${data.decoded_text}"`;
+      document.getElementById("totalFramesCount").innerText = `Frames: ${data.num_frames}`;
+
+      // Populate Token Attribution Buttons
+      const btnGroup = document.getElementById("tokenButtonGroup");
+      btnGroup.innerHTML = "";
+      const emissions = data.frame_emissions;
+
+      // Extract unique characters for attribution
+      emissions.forEach((em) => {
+        if (!em.is_blank) {
+          const btn = document.createElement("button");
+          btn.className = "px-2.5 py-1 bg-slate-900 hover:bg-rose-900/60 border border-slate-700 hover:border-rose-500 rounded-lg text-xs font-mono font-bold text-slate-100 transition-all";
+          btn.innerHTML = `'${em.char}' <span class="text-[10px] text-slate-400">f:${em.frame}</span>`;
+          btn.onclick = () => runCaptumAttribution(em.frame, em.token_id, em.char);
+          btnGroup.appendChild(btn);
+        }
+      });
+
+      if (btnGroup.children.length === 0) {
+        btnGroup.innerHTML = "<span class='text-xs text-slate-500'>All frames are blank or silent.</span>";
+      }
+
+      // Populate Frame Pill List
+      const pillList = document.getElementById("framePillList");
+      pillList.innerHTML = "";
+      emissions.forEach(em => {
+        const pill = document.createElement("div");
+        pill.className = `px-2 py-0.5 rounded cursor-pointer border ${em.is_blank ? 'bg-slate-900/50 text-slate-600 border-slate-800' : 'bg-indigo-950/60 text-indigo-300 border-indigo-700 font-bold'}`;
+        pill.innerText = em.char;
+        pill.onmouseenter = () => showFrameDetail(em);
+        pillList.appendChild(pill);
+      });
+
+      drawWaveform();
+      drawSpectrogram();
+      selectStudioLayer(selectedStudioLayer);
+    }
+
+    function showFrameDetail(em) {
+      const box = document.getElementById("frameDetailBox");
+      const topStr = em.top_probs.map(p => `'${p.char}': ${(p.prob * 100).toFixed(1)}%`).join(" | ");
+      box.innerHTML = `
+        <span class="text-indigo-400 font-bold">Frame #${em.frame} (${em.time_sec}s):</span>
+        Argmax: <strong>'${em.char}'</strong> (Conf: ${(em.confidence * 100).toFixed(1)}%) |
+        Top Probabilities: <span class="text-slate-300">${topStr}</span>
+      `;
+    }
+
+    // Run Real Captum Attribution via Backend
+    async function runCaptumAttribution(frameIdx, tokenIdx, char) {
+      document.getElementById("attributionLegendText").innerText = `Calculating Captum Integrated Gradients for '${char}'...`;
+      try {
+        const res = await fetch("/api/xai/attribute", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            frame_idx: frameIdx,
+            token_idx: tokenIdx,
+            method: "integrated_gradients",
+            steps: 20
+          })
+        });
+        const attrData = await res.json();
+        currentAttributionCurve = attrData.attribution_curve;
+        document.getElementById("attributionLegendText").innerText = `Captum IG Overlay for '${char}' [Frame ${frameIdx}] (Max Attr: ${attrData.max_attr.toFixed(4)})`;
+        drawWaveform();
+      } catch (err) {
+        console.error("Attribution error:", err);
+      }
+    }
+
+    // Live Causal Ablation
+    async function triggerAblation(layerIdx) {
+      const box = document.getElementById("ablationResultBox");
+      box.innerHTML = `<span class="text-rose-400 font-bold">Intervening on Layer ${layerIdx+1}...</span>`;
+      try {
+        const res = await fetch("/api/xai/ablate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ layer_idx: layerIdx, ablation_type: "zero" })
+        });
+        const d = await res.json();
+        box.innerHTML = `
+          <span class="text-rose-400 font-bold">Causal Ablation Layer ${layerIdx+1} Result:</span><br>
+          • Mean Logit Shift: <span class="text-amber-300 font-bold">${d.logit_mean_diff}</span><br>
+          • Original Output:  <span class="text-emerald-400 font-bold">"${d.orig_text}"</span><br>
+          • Degraded Output:  <span class="text-rose-400 font-bold">"${d.ablated_text}"</span>
+        `;
+      } catch (err) {
+        console.error("Ablation error:", err);
+      }
+    }
+
+    // Layer Switcher in Studio
+    function selectStudioLayer(lIdx) {
+      selectedStudioLayer = lIdx;
+      for (let i = 0; i <= 4; i++) {
+        const b = document.getElementById(`studioLayer${i}`);
+        if (!b) continue;
+        if (i === lIdx) {
+          b.className = "px-2 py-0.5 rounded bg-indigo-600 text-white font-semibold";
+        } else {
+          b.className = "px-2 py-0.5 rounded text-slate-400 hover:text-white";
+        }
+      }
+
+      if (!currentInferenceData) return;
+      const lData = currentInferenceData.layer_representations[lIdx];
+      if (lData) {
+        document.getElementById("layerNameText").innerText = `${lData.name} (32 channels x ${currentInferenceData.num_frames} frames)`;
+        document.getElementById("layerEnergyText").innerText = `Energy: ${lData.mean_energy.toFixed(3)}`;
+      }
+
+      drawLayerMatrix();
+      drawAttentionMap();
+    }
+
+    // Canvas Drawing: Waveform + Attribution Overlay
+    function drawWaveform() {
+      const canvas = document.getElementById("liveWaveformCanvas");
+      if (!canvas || !currentInferenceData) return;
+      const ctx = canvas.getContext("2d");
+      canvas.width = canvas.parentElement.clientWidth * 2;
+      canvas.height = canvas.parentElement.clientHeight * 2;
+      const W = canvas.width;
+      const H = canvas.height;
+
+      ctx.clearRect(0, 0, W, H);
+
+      const wave = currentInferenceData.waveform;
+      const numPoints = wave.length;
+      const stepX = W / numPoints;
+
+      // Draw Waveform
+      ctx.strokeStyle = "#38bdf8";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      for (let i = 0; i < numPoints; i++) {
+        const val = wave[i];
+        const y = (H / 2) - (val * (H * 0.45));
+        const x = i * stepX;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+
+      // Zero line
+      ctx.strokeStyle = "rgba(148, 163, 184, 0.2)";
+      ctx.beginPath();
+      ctx.moveTo(0, H / 2);
+      ctx.lineTo(W, H / 2);
+      ctx.stroke();
+
+      // Draw Captum Attribution Overlay if available
+      if (currentAttributionCurve) {
+        const attr = currentAttributionCurve;
+        const attrStep = W / attr.length;
+        const maxAttr = Math.max(...attr.map(Math.abs)) || 1e-6;
+
+        ctx.fillStyle = "rgba(244, 63, 94, 0.35)";
+        ctx.strokeStyle = "#f43f5e";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(0, H);
+
+        for (let i = 0; i < attr.length; i++) {
+          const normA = Math.abs(attr[i]) / maxAttr;
+          const y = H - (normA * (H * 0.7));
+          const x = i * attrStep;
+          ctx.lineTo(x, y);
+        }
+        ctx.lineTo(W, H);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+      }
+    }
+
+    // Canvas Drawing: Real Spectrogram Matrix
+    function drawSpectrogram() {
+      const canvas = document.getElementById("liveSpectrogramCanvas");
+      if (!canvas || !currentInferenceData) return;
+      const ctx = canvas.getContext("2d");
+      canvas.width = canvas.parentElement.clientWidth * 2;
+      canvas.height = canvas.parentElement.clientHeight * 2;
+      const W = canvas.width;
+      const H = canvas.height;
+
+      ctx.clearRect(0, 0, W, H);
+      const spec = currentInferenceData.spectrogram; // (T_frames, 16 bins)
+      const numFrames = spec.length;
+      const numBins = spec[0]?.length || 16;
+
+      const cellW = W / numFrames;
+      const cellH = H / numBins;
+
+      for (let t = 0; t < numFrames; t++) {
+        for (let b = 0; b < numBins; b++) {
+          const val = Math.min(1, spec[t][b] / 2.0);
+          const r = Math.floor(val * 240);
+          const g = Math.floor(val * 140);
+          const blue = Math.floor(val * 255);
+          ctx.fillStyle = `rgb(${r}, ${g}, ${blue})`;
+          ctx.fillRect(t * cellW, H - (b + 1) * cellH, cellW - 0.5, cellH - 0.5);
+        }
+      }
+    }
+
+    // Canvas Drawing: True Layer Hidden States
+    function drawLayerMatrix() {
+      const canvas = document.getElementById("liveLayerMatrixCanvas");
+      if (!canvas || !currentInferenceData) return;
+      const ctx = canvas.getContext("2d");
+      canvas.width = canvas.parentElement.clientWidth * 2;
+      canvas.height = canvas.parentElement.clientHeight * 2;
+      const W = canvas.width;
+      const H = canvas.height;
+
+      ctx.clearRect(0, 0, W, H);
+      const layer = currentInferenceData.layer_representations[selectedStudioLayer];
+      if (!layer) return;
+
+      const matrix = layer.features_2d; // (32 dims, T_frames)
+      const numDims = matrix.length;
+      const numFrames = matrix[0].length;
+
+      const cellW = W / numFrames;
+      const cellH = H / numDims;
+
+      for (let d = 0; d < numDims; d++) {
+        for (let t = 0; t < numFrames; t++) {
+          const rawVal = matrix[d][t];
+          const val = Math.max(0, Math.min(1, (rawVal + 2) / 4));
+          const r = Math.floor(val * 99);
+          const g = Math.floor(val * 102);
+          const b = Math.floor(val * 241);
+          ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+          ctx.fillRect(t * cellW, d * cellH, cellW - 0.5, cellH - 0.5);
+        }
+      }
+    }
+
+    // Canvas Drawing: True Multi-Head Attention Map
+    function drawAttentionMap() {
+      const canvas = document.getElementById("liveAttentionCanvas");
+      if (!canvas || !currentInferenceData) return;
+      const ctx = canvas.getContext("2d");
+      canvas.width = canvas.parentElement.clientWidth * 2;
+      canvas.height = canvas.parentElement.clientHeight * 2;
+      const W = canvas.width;
+      const H = canvas.height;
+
+      ctx.clearRect(0, 0, W, H);
+      // Attention layer index (0 to 3)
+      const attnIdx = Math.min(selectedStudioLayer, currentInferenceData.attentions.length - 1);
+      const attn = currentInferenceData.attentions[attnIdx]?.attention_matrix;
+      if (!attn) return;
+
+      const T = attn.length;
+      const stepX = W / T;
+      const stepY = H / T;
+
+      for (let i = 0; i < T; i++) {
+        for (let j = 0; j < T; j++) {
+          const val = Math.min(1, attn[i][j] * 4); // Boost contrast
+          ctx.fillStyle = `rgba(244, 63, 94, ${val})`;
+          ctx.fillRect(i * stepX, j * stepY, stepX - 0.5, stepY - 0.5);
+        }
+      }
+    }
+
+    // Live Training Controls
+    function toggleTrainingModal() {
+      const m = document.getElementById("trainingModal");
+      m.classList.toggle("hidden");
+    }
+
+    async function startLiveTraining() {
+      const epochs = parseInt(document.getElementById("trainEpochs").value) || 5;
+      const lr = parseFloat(document.getElementById("trainLr").value) || 0.0005;
+      const batchSize = parseInt(document.getElementById("trainBatchSize").value) || 16;
+
+      document.getElementById("btnStartTrain").classList.add("hidden");
+      document.getElementById("btnStopTrain").classList.remove("hidden");
+
+      await fetch("/api/train/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ epochs, lr, batch_size: batchSize })
+      });
+
+      if (trainingPollInterval) clearInterval(trainingPollInterval);
+      trainingPollInterval = setInterval(pollTrainingStatus, 800);
+    }
+
+    async function stopLiveTraining() {
+      await fetch("/api/train/stop", { method: "POST" });
+      document.getElementById("btnStartTrain").classList.remove("hidden");
+      document.getElementById("btnStopTrain").classList.add("hidden");
+    }
+
+    async function pollTrainingStatus() {
+      try {
+        const res = await fetch("/api/train/status");
+        const st = await res.json();
+
+        document.getElementById("metricEpoch").innerText = `${st.epoch}/${st.total_epochs}`;
+        document.getElementById("metricTrainLoss").innerText = st.train_loss.toFixed(3);
+        document.getElementById("metricValCER").innerText = `${st.val_cer.toFixed(1)}%`;
+        document.getElementById("metricValWER").innerText = `${st.val_wer.toFixed(1)}%`;
+
+        document.getElementById("metricRef").innerText = st.sample_reference || "-";
+        document.getElementById("metricPred").innerText = st.sample_prediction || "-";
+
+        if (!st.is_training) {
+          clearInterval(trainingPollInterval);
+          document.getElementById("btnStartTrain").classList.remove("hidden");
+          document.getElementById("btnStopTrain").classList.add("hidden");
+        }
+      } catch (e) {
+        console.error("Poll training failed", e);
+      }
+    }
+
+    window.addEventListener("DOMContentLoaded", initStudio);
+    window.addEventListener("resize", () => {
+      drawWaveform();
+      drawSpectrogram();
+      drawLayerMatrix();
+      drawAttentionMap();
+    });
+  </script>
+</body>
+</html>
