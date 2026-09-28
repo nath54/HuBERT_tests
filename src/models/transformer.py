@@ -200,6 +200,7 @@ class HuBERTEncoder(nn.Module):
                 for _ in range(num_layers)
             ]
         )
+        self.final_layer_norm = nn.LayerNorm(embed_dim)
 
     def forward(
         self,
@@ -240,6 +241,13 @@ class HuBERTEncoder(nn.Module):
             if output_attentions:
                 attentions.append(attn_weights)
             neuron_activations.append(ffn_intermediate)
+
+        # Apply final LayerNorm in Pre-LN architecture to bound residual magnitude
+        if hasattr(self, "final_layer_norm"):
+            normed_x = self.final_layer_norm(x)
+            if output_hidden_states and hidden_states:
+                hidden_states[-1] = normed_x
+            x = normed_x
 
         return {
             "last_hidden_state": x,

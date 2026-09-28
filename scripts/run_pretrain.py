@@ -22,6 +22,8 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
+import math
+
 # Add project root to sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -29,6 +31,7 @@ from src.models.config import HuBERTConfig
 from src.models.hubert_asr import HuBERTForCTC
 from src.models.registry import ModelRegistry, STANDARD_TIERS
 from src.data.tokenizer import CharacterTokenizer
+from src.data.phoneme_tokenizer import PhonemeTokenizer
 from src.data.streaming_piper import (
     PiperVoiceManager,
     ProceduralTextSampler,
@@ -39,6 +42,7 @@ from data.sample_dataset import load_manifest
 from src.data.dataset import AudioASRDataset, AudioCollateFn
 from src.benchmark.sota_evaluator import SOTABenchmarkRunner
 from src.data.threaded_dataset import StepProfiler, BufferedSpeechBatchGenerator
+from src.training.run_manager import RunManager
 
 
 class ModularStreamingDataset(torch.utils.data.IterableDataset):
@@ -265,6 +269,165 @@ def evaluate_on_benchmark(ctc_model: HuBERTForCTC, tokenizer: CharacterTokenizer
     return {"wer": avg_wer, "cer": avg_cer, "per": avg_per, "sample_pred": sample_pred}
 
 
+# Global cache for LexiconDecoder to avoid rebuilding 206k trie every evaluation step
+_GLOBAL_LEX_DECODER = None
+
+def evaluate_direct_phonemes(
+    model: nn.Module,
+    phoneme_tokenizer: PhonemeTokenizer,
+    device: torch.device,
+    num_samples: int = 20,
+    blank_penalty: float = 0.0,
+) -> Dict[str, Any]:
+    """Evaluate direct phoneme prediction model directly on LibriSpeech test-clean benchmark."""
+    global _GLOBAL_LEX_DECODER
+    test_manifest = Path("data/librispeech/librispeech_test_clean.json")
+    if not test_manifest.exists():
+        return {"wer": 100.0, "cer": 100.0, "per": 100.0, "sample_pred": ""}
+
+    with open(test_manifest, "r", encoding="utf-8") as f:
+        samples = json.load(f)[:num_samples]
+
+    runner = SOTABenchmarkRunner(device=str(device))
+    pers, cers = [], []
+    sample_pred = ""
+    model.eval()
+
+    import soundfile as sf
+    import torchaudio.transforms as T
+    import jiwer
+    import inspect
+
+    # Optional Lexicon Decoder support
+    lex_decoder = None
+    lex_pers = []
+    lex_wers = []
+    sample_lex_pred = ""
+    try:
+        if _GLOBAL_LEX_DECODER is None:
+            from src.decoder.lexicon_decoder import LexiconDecoder
+            lex_file = Path("data/librispeech-lexicon.txt")
+            if lex_file.exists():
+                _GLOBAL_LEX_DECODER = LexiconDecoder(lexicon_path=str(lex_file), tokenizer=phoneme_tokenizer)
+        lex_decoder = _GLOBAL_LEX_DECODER
+    except Exception:
+        lex_decoder = None
+
+    sig = inspect.signature(model.decode_greedy) if hasattr(model, "decode_greedy") else None
+    has_penalty_param = sig is not None and "blank_penalty" in sig.parameters
+
+    resamplers = {}
+    for idx, s in enumerate(samples):
+        speech_np, sr = sf.read(s["audio_path"])
+        if sr != 16000:
+            if sr not in resamplers:
+                resamplers[sr] = T.Resample(sr, 16000)
+            t_audio = torch.tensor(speech_np, dtype=torch.float32).unsqueeze(0)
+            speech_tensor = resamplers[sr](t_audio).squeeze(0).to(device)
+        else:
+            speech_tensor = torch.tensor(speech_np, dtype=torch.float32).to(device)
+
+        if speech_tensor.ndim == 1:
+            speech_tensor = speech_tensor.unsqueeze(0)
+
+        ref_text = s.get("transcript") or s.get("text", "")
+        # Ground truth phonemes via eSpeak (standard LibriSpeech phonemization)
+        ref_phonemes = runner.phonemize_text(ref_text)
+
+        with torch.no_grad():
+            if hasattr(model, "decode_beam") and getattr(getattr(model, "config", None), "beam_width", 0) > 0:
+                decoded_ids = model.decode_beam(speech_tensor)[0]
+            elif hasattr(model, "decode_greedy"):
+                if has_penalty_param:
+                    decoded_ids = model.decode_greedy(speech_tensor, blank_penalty=blank_penalty)[0]
+                else:
+                    decoded_ids = model.decode_greedy(speech_tensor)[0]
+            else:
+                out = model(audio=speech_tensor)
+                decoded_ids = out["logits"].argmax(dim=-1)[0].tolist()
+            pred_phonemes = phoneme_tokenizer.decode(decoded_ids, skip_special=True)
+            if idx == 0:
+                sample_pred = pred_phonemes
+
+        # Acoustic phoneme evaluation: ignore non-acoustic diacritics, blanks, and whitespace
+        filter_ids = {
+            phoneme_tokenizer.pad_id,
+            phoneme_tokenizer.blank_id,
+            phoneme_tokenizer.silence_id,
+            phoneme_tokenizer.noise_id,
+            phoneme_tokenizer.eos_id,
+            phoneme_tokenizer.unk_id,
+        }
+        for ch in ("ˈ", "ˌ", "ː", "ˑ", " ", "-", "\n", "\t"):
+            if ch in phoneme_tokenizer.token_to_id:
+                filter_ids.add(phoneme_tokenizer.token_to_id[ch])
+
+        clean_ref_ids = [tid for tid in phoneme_tokenizer.encode(ref_phonemes) if tid not in filter_ids]
+        clean_pred_ids = [tid for tid in decoded_ids if tid not in filter_ids]
+
+        import editdistance
+        if len(clean_ref_ids) > 0:
+            dist = editdistance.eval(clean_ref_ids, clean_pred_ids)
+            p = round(float(dist / len(clean_ref_ids)), 4)
+        else:
+            p = 1.0 if len(clean_pred_ids) > 0 else 0.0
+
+        ref_str_clean = phoneme_tokenizer.decode(clean_ref_ids)
+        pred_str_clean = phoneme_tokenizer.decode(clean_pred_ids)
+        c = round(float(jiwer.cer(ref_str_clean, pred_str_clean)), 4) if ref_str_clean else (1.0 if pred_str_clean else 0.0)
+        pers.append(p)
+        cers.append(c)
+
+        # Lexicon-constrained evaluation on first 10 samples
+        if lex_decoder is not None and idx < 10:
+            try:
+                with torch.no_grad():
+                    out_lex = model(audio=speech_tensor)
+                    lp_single = out_lex["logits"][0]
+                    lex_res = lex_decoder.decode_utterance(lp_single, beam_width=16, word_bonus=-3.0)
+                    clean_lex_ids = [tid for tid in lex_res["phoneme_ids"] if tid not in filter_ids]
+                    if len(clean_ref_ids) > 0:
+                        dist_lex = editdistance.eval(clean_ref_ids, clean_lex_ids)
+                        lex_pers.append(round(float(dist_lex / len(clean_ref_ids)), 4))
+                    w_err = jiwer.wer(ref_text.lower(), lex_res["text"].lower())
+                    lex_wers.append(w_err)
+                    if idx == 0:
+                        sample_lex_pred = lex_res["text"]
+            except Exception:
+                pass
+
+    avg_per = round(float(sum(pers) / max(1, len(pers))) * 100.0, 2)
+    avg_cer = round(float(sum(cers) / max(1, len(cers))) * 100.0, 2)
+    avg_lex_per = round(float(sum(lex_pers) / max(1, len(lex_pers))) * 100.0, 2) if lex_pers else None
+    avg_lex_wer = round(float(sum(lex_wers) / max(1, len(lex_wers))) * 100.0, 2) if lex_wers else None
+
+    return {
+        "wer": avg_per,
+        "cer": avg_cer,
+        "per": avg_per,
+        "sample_pred": sample_pred,
+        "lexicon_per": avg_lex_per,
+        "lexicon_wer": avg_lex_wer,
+        "sample_lex_pred": sample_lex_pred,
+    }
+
+def set_feature_extractor_grad(model: nn.Module, enabled: bool):
+    """Enable or disable gradients for the temporal 1D CNN feature encoder."""
+    if hasattr(model, "feature_extractor"):
+        for p in model.feature_extractor.parameters():
+            p.requires_grad = enabled
+
+
+def get_scheduled_lr(step: int, total_steps: int, base_lr: float, warmup_steps: int, min_lr: float = 1e-5) -> float:
+    """Compute learning rate with linear warmup and cosine decay bounded by min_lr."""
+    if warmup_steps > 0 and step <= warmup_steps:
+        return max(min_lr, base_lr * (step / float(warmup_steps)))
+    if warmup_steps > 0:
+        progress = (step - warmup_steps) / float(max(1, total_steps - warmup_steps))
+        return min_lr + (base_lr - min_lr) * 0.5 * (1.0 + math.cos(math.pi * progress))
+    return base_lr
+
+
 def main():
     parser = argparse.ArgumentParser(description="Unified Modular Training for Speech Models.")
     parser.add_argument("--arch", type=str, default="phono_hubert", help="Model architecture ID")
@@ -281,18 +444,45 @@ def main():
     parser.add_argument("--eval_interval", type=int, default=125, help="Benchmark evaluation interval")
     parser.add_argument("--probe_steps", type=int, default=25, help="Downstream CTC probe steps")
     parser.add_argument("--lr", type=float, default=0.0003, help="Learning rate")
+    parser.add_argument("--min_lr", type=float, default=1e-5, help="Minimum learning rate floor for cosine schedule")
+    parser.add_argument("--blank_penalty", type=float, default=0.0, help="Evaluation blank logit penalty subtraction")
+    parser.add_argument("--warmup_steps", type=int, default=100, help="Linear learning rate warmup steps")
+    parser.add_argument("--freeze_cnn_steps", type=int, default=200, help="Steps to freeze temporal CNN feature extractor")
+    parser.add_argument("--masking_mode", type=str, default=None, choices=["none", "span", "specaugment", "dual"], help="Acoustic masking strategy (none, span, specaugment, dual)")
+    parser.add_argument("--mask_prob", type=float, default=None, help="Probability of acoustic masking")
+    parser.add_argument("--mask_length", type=int, default=None, help="Span mask length in 20ms frames")
     parser.add_argument("--save_interval", type=int, default=25, help="Checkpoint interval")
+    parser.add_argument("--real_speech_manifest", type=str, default=None, help="Path to real speech JSON manifest for hybrid pre-training")
+    parser.add_argument("--real_ratio", type=float, default=0.5, help="Ratio of real human speech in hybrid streaming (0.0=all synthetic, 1.0=all real)")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument("--run_name", type=str, default=None, help="Name of this training run (default: auto-incremented run_1, run_2, ...)")
     parser.add_argument("--resume", nargs="?", const="auto", default=None, help="Resume training")
+    parser.add_argument("--warm_start", type=str, default=None, help="Path to checkpoint from which to initialize model weights (starts from step 1)")
     args = parser.parse_args()
 
     device = torch.device(args.device)
     overrides = parse_overrides(args.override)
 
+    if args.masking_mode is not None:
+        overrides["masking_mode"] = args.masking_mode
+    if args.mask_prob is not None:
+        overrides["mask_prob"] = args.mask_prob
+    if args.mask_length is not None:
+        overrides["mask_length"] = args.mask_length
+
     # 1. Build Config & Model via Registry
     config = ModelRegistry.build_config(args.arch, tier=args.tier, **overrides)
     target_extractor = ModelRegistry.build_target_extractor(args.arch)
     model = ModelRegistry.build_model(args.arch, tier=args.tier, config=config).to(device)
+
+    if args.warm_start is not None:
+        p = Path(args.warm_start)
+        if p.exists():
+            payload = torch.load(p, map_location=device, weights_only=False)
+            model.load_state_dict(payload["model_state_dict"], strict=False)
+            print(f"🔥 [Warm-Start] Loaded model weights from: {p} (starting fresh from Step 1)")
+        else:
+            print(f"⚠️ [Warm-Start] Checkpoint not found at: {p}")
 
     num_params = sum(p.numel() for p in model.parameters())
 
@@ -307,22 +497,46 @@ def main():
         print(f"Variable Parameter Overrides: {overrides}")
     print("-" * 75)
 
-    # Output paths
-    ckpt_dir = Path("checkpoints") / args.arch / args.tier
-    ckpt_dir.mkdir(parents=True, exist_ok=True)
-    latest_ckpt_file = ckpt_dir / "latest_checkpoint.pt"
-    status_file = Path("logs") / f"{args.arch}_status_live.json"
-    tier_status_file = Path("logs") / f"{args.arch}_{args.tier}_status_live.json"
-    history_file = Path("logs") / f"{args.arch}_{args.tier}_history.json"
-    step_history_file = Path("logs") / f"{args.arch}_{args.tier}_step_history.json"
+    # 2. Setup RunManager, Isolated Run Dirs, and Save Full Training Configuration
+    run_mgr = RunManager(
+        arch=args.arch,
+        tier=args.tier,
+        run_name=args.run_name,
+        is_resume=(args.resume is not None),
+    )
+
+    full_config = RunManager.assemble_full_config(
+        arch=args.arch,
+        tier=args.tier,
+        run_name=run_mgr.run_name,
+        model=model,
+        model_config=config,
+        target_extractor=target_extractor,
+        args=args,
+    )
+    saved_config_path = run_mgr.init_run(full_config)
+
+    print(f"🏷️  Run Identifier: {run_mgr.run_name}")
+    print(f"📄 Full Config Saved: {saved_config_path}")
+    print(f"💾 Checkpoints Dir: {run_mgr.run_ckpt_dir}")
+    print(f"📊 Telemetry Dir: {run_mgr.run_log_dir}")
+    print("-" * 75)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-2)
     scaler = torch.amp.GradScaler(enabled=(device.type == "cuda"))
 
-    # 2. Setup Threaded Data Pipeline & Microsecond Profiler
+    # 3. Setup Threaded Data Pipeline & Microsecond Profiler
     profiler = StepProfiler(window_size=20)
     voice_manager = PiperVoiceManager()
     text_sampler = ProceduralTextSampler()
+
+    # Resolve hybrid real speech dataset if enabled or requested
+    real_manifest = args.real_speech_manifest
+    if not real_manifest and (
+        getattr(config, "hybrid_training", False)
+        or args.arch in ("phono_v3_hybrid", "phono_v4_scaled", "phono_v5_beam")
+    ):
+        real_manifest = getattr(config, "librispeech_manifest", "data/librispeech/librispeech_train.json")
 
     batch_generator = BufferedSpeechBatchGenerator(
         voice_manager=voice_manager,
@@ -334,34 +548,20 @@ def main():
         num_workers=args.num_workers,
         use_rolling_pool=args.use_rolling_pool,
         pool_capacity=args.pool_size,
+        real_speech_manifest=real_manifest,
+        real_ratio=args.real_ratio,
         profiler=profiler,
     )
 
     tokenizer = CharacterTokenizer()
+    phoneme_tokenizer = PhonemeTokenizer()
     history = []
     start_step = 1
     total_audio_sec = 0.0
 
-    # 3. Checkpoint Resumption (Auto-detect or Fresh Start)
+    # 4. Checkpoint Resumption (Run-Aware Auto-detect or Fresh Start)
     if args.resume is not None:
-        ckpt_to_load = None
-        if args.resume in ("auto", "latest", "", True):
-            candidates = [
-                ckpt_dir / "checkpoint_latest.pt",
-                ckpt_dir / "latest_checkpoint.pt",
-            ]
-            for cand in candidates:
-                if cand.exists():
-                    ckpt_to_load = cand
-                    break
-            if not ckpt_to_load:
-                step_ckpts = sorted(list(ckpt_dir.glob("checkpoint_step_*.pt")), key=os.path.getmtime)
-                if step_ckpts:
-                    ckpt_to_load = step_ckpts[-1]
-        else:
-            custom_path = Path(args.resume)
-            if custom_path.exists():
-                ckpt_to_load = custom_path
+        ckpt_to_load = run_mgr.find_resume_checkpoint(args.resume)
 
         if ckpt_to_load and ckpt_to_load.exists():
             print(f"🔄 [Resume] Loading existing checkpoint from: {ckpt_to_load}")
@@ -382,22 +582,44 @@ def main():
             history = payload.get("history", [])
             print(f"✅ [Resume] Resumed successfully! Starting at Step {start_step} (Cumulative Audio: {total_audio_sec/3600.0:.3f}h)")
         else:
-            print(f"ℹ️ [Resume] No previous checkpoint found in '{ckpt_dir}'. Starting fresh from Step 1.")
+            print(f"ℹ️ [Resume] No previous checkpoint found for run '{run_mgr.run_name}'. Starting fresh from Step 1.")
 
-    if not history and history_file.exists():
-        try:
-            with open(history_file, "r", encoding="utf-8") as f:
-                history = json.load(f).get("history", [])
-        except Exception:
-            pass
+    if not history:
+        run_history_file = run_mgr.run_log_dir / "history.json"
+        if run_history_file.exists():
+            try:
+                with open(run_history_file, "r", encoding="utf-8") as f:
+                    history = json.load(f).get("history", [])
+            except Exception:
+                pass
+        elif run_mgr.tier_history_file.exists():
+            try:
+                with open(run_mgr.tier_history_file, "r", encoding="utf-8") as f:
+                    history = json.load(f).get("history", [])
+            except Exception:
+                pass
 
     step_history = []
-    if step_history_file.exists():
+    run_step_history_file = run_mgr.run_log_dir / "step_history.json"
+    if run_step_history_file.exists():
         try:
-            with open(step_history_file, "r", encoding="utf-8") as f:
+            with open(run_step_history_file, "r", encoding="utf-8") as f:
                 step_history = json.load(f)
         except Exception:
             pass
+    elif run_mgr.tier_step_history_file.exists():
+        try:
+            with open(run_mgr.tier_step_history_file, "r", encoding="utf-8") as f:
+                step_history = json.load(f)
+        except Exception:
+            pass
+
+    if args.freeze_cnn_steps > 0:
+        if start_step <= args.freeze_cnn_steps:
+            set_feature_extractor_grad(model, False)
+            print(f"❄️  [CNN Frozen] Temporal 1D feature encoder frozen for steps {start_step}..{args.freeze_cnn_steps}")
+        else:
+            set_feature_extractor_grad(model, True)
 
     recent_step_durations = collections.deque(maxlen=20)
     print(f"\n[Ready] Starting decoupled threaded streaming loop (Step {start_step} -> {args.steps})...\n")
@@ -405,6 +627,17 @@ def main():
     try:
         for step in range(start_step, args.steps + 1):
             t_step_start = time.perf_counter()
+
+            # Dynamic LR schedule: linear warmup + cosine decay
+            lr_current = get_scheduled_lr(step, args.steps, args.lr, args.warmup_steps, min_lr=args.min_lr)
+            for param_group in optimizer.param_groups:
+                param_group["lr"] = lr_current
+
+            # Unfreeze CNN feature encoder when freeze threshold is reached
+            if args.freeze_cnn_steps > 0 and step == args.freeze_cnn_steps + 1:
+                set_feature_extractor_grad(model, True)
+                print(f"\n🔥 [CNN Unfrozen] Temporal 1D feature encoder unfrozen at step {step}!\n")
+
             batch = batch_generator.get_batch(timeout=60.0)
 
             t_train_start = time.perf_counter()
@@ -414,6 +647,8 @@ def main():
                 targets = batch["targets"].to(device)
                 target_lengths = batch["target_lengths"].to(device)
                 audio_lengths = batch["audio_lengths"].to(device)
+                frame_targets = batch["frame_targets"].to(device) if "frame_targets" in batch and batch["frame_targets"] is not None else None
+                frame_lengths = batch["frame_lengths"].to(device) if "frame_lengths" in batch and batch["frame_lengths"] is not None else None
 
             batch_dur = sum(batch["durations"])
             total_audio_sec += batch_dur
@@ -421,8 +656,15 @@ def main():
             optimizer.zero_grad()
             with profiler.time_block("time_forward"):
                 with torch.amp.autocast(device_type="cuda" if device.type == "cuda" else "cpu", enabled=(device.type == "cuda")):
-                    if args.arch == "phono_hubert":
-                        out = model(audio=audio, targets=targets, target_lengths=target_lengths, audio_lengths=audio_lengths)
+                    if args.arch.startswith("phono_"):
+                        out = model(
+                            audio=audio,
+                            targets=targets,
+                            target_lengths=target_lengths,
+                            audio_lengths=audio_lengths,
+                            frame_targets=frame_targets,
+                            frame_lengths=frame_lengths,
+                        )
                     else:
                         out = model(audio=audio, target_clusters=targets)
 
@@ -463,6 +705,7 @@ def main():
                 "step": step,
                 "total_steps": args.steps,
                 "progress_pct": round((step / args.steps) * 100.0, 1),
+                "learning_rate": lr_current,
                 "loss": loss_val,
                 "masked_accuracy_pct": acc_val,
                 "cumulative_audio_sec": round(total_audio_sec, 1),
@@ -480,16 +723,11 @@ def main():
                 "disk_bytes_used": 0,
                 "last_heartbeat": time.time(),
             }
-            try:
-                with open(status_file, "w", encoding="utf-8") as f:
-                    json.dump(live_status, f, indent=2)
-                with open(tier_status_file, "w", encoding="utf-8") as f:
-                    json.dump(live_status, f, indent=2)
-            except Exception:
-                pass
+            run_mgr.update_status(live_status)
 
             step_record = {
                 "step": step,
+                "learning_rate": lr_current,
                 "loss": loss_val,
                 "accuracy": acc_val,
                 "masked_accuracy_pct": acc_val,
@@ -501,14 +739,10 @@ def main():
             }
             step_history.append(step_record)
             if step % 5 == 0 or step == args.steps:
-                try:
-                    with open(step_history_file, "w", encoding="utf-8") as f:
-                        json.dump(step_history, f)
-                except Exception:
-                    pass
+                run_mgr.update_step_history(step_history)
 
             if step % 5 == 0 or step == start_step:
-                print(f"[{args.arch.upper()}] Step {step:4d}/{args.steps} | Loss: {loss_val:.4f} | Acc: {acc_val:5.1f}% | "
+                print(f"[{args.arch.upper()}] Step {step:4d}/{args.steps} | LR: {lr_current:.2e} | Loss: {loss_val:.4f} | Acc: {acc_val:5.1f}% | "
                       f"Step: {step_elapsed:.3f}s (GPU: {t_train_total:.3f}s) | Buffer: {batch_generator.buffer_occupancy}/{args.buffer_size} | "
                       f"Audio: {total_audio_sec:6.1f}s ({hours:.3f}h) | ETA: {live_status['eta_formatted']}")
 
@@ -518,9 +752,15 @@ def main():
             # Milestone Benchmark Evaluation (Inside Loop)
             if step % args.eval_interval == 0 or step == args.steps:
                 print(f"\n--- [Milestone Step {step}] Downstream LibriSpeech Evaluation ---")
-                calibrated_ctc = run_quick_ctc_calibration(model, config, tokenizer, device, probe_steps=args.probe_steps)
-                bench_res = evaluate_on_benchmark(calibrated_ctc, tokenizer, device, num_samples=20)
+                if target_extractor.target_type == "phoneme_tokens":
+                    print("🎯 [Direct Phoneme Architecture] Evaluating PER directly on LibriSpeech via PhonemeTokenizer...")
+                    bench_res = evaluate_direct_phonemes(model, phoneme_tokenizer, device, num_samples=20, blank_penalty=args.blank_penalty)
+                else:
+                    calibrated_ctc = run_quick_ctc_calibration(model, config, tokenizer, device, probe_steps=args.probe_steps)
+                    bench_res = evaluate_on_benchmark(calibrated_ctc, tokenizer, device, num_samples=20)
                 print(f"🏆 Milestone Step {step} -> WER: {bench_res['wer']}% | CER: {bench_res['cer']}% | PER: {bench_res['per']}%")
+                if bench_res.get("lexicon_per") is not None:
+                    print(f"📖 [Lexicon Decoder] -> PER: {bench_res['lexicon_per']}% | WER: {bench_res.get('lexicon_wer', 0.0)}% | Sample: {bench_res.get('sample_lex_pred', '')[:65]}...")
 
                 entry = {
                     "step": step,
@@ -531,22 +771,21 @@ def main():
                     "librispeech_cer": bench_res["cer"],
                     "librispeech_per": bench_res["per"],
                     "sample_prediction": bench_res["sample_pred"],
+                    "lexicon_per": bench_res.get("lexicon_per"),
+                    "lexicon_wer": bench_res.get("lexicon_wer"),
+                    "sample_lex_prediction": bench_res.get("sample_lex_pred"),
                 }
                 history.append(entry)
-                try:
-                    with open(history_file, "w", encoding="utf-8") as f:
-                        json.dump({"arch": args.arch, "tier": args.tier, "history": history}, f, indent=2)
-                except Exception:
-                    pass
+                run_mgr.update_history(history)
 
             # Save model checkpoint (Inside Loop)
             if step % args.save_interval == 0 or step == args.steps:
-                ckpt_path = ckpt_dir / f"checkpoint_step_{step}.pt"
-                latest_path = ckpt_dir / "checkpoint_latest.pt"
+                ckpt_path, latest_path = run_mgr.get_checkpoint_paths(step)
                 save_payload = {
                     "step": step,
                     "arch": args.arch,
                     "tier": args.tier,
+                    "run_name": run_mgr.run_name,
                     "config": config,
                     "model_state_dict": model.state_dict(),
                     "optimizer_state_dict": optimizer.state_dict(),
@@ -558,21 +797,47 @@ def main():
                 try:
                     torch.save(save_payload, ckpt_path)
                     torch.save(save_payload, latest_path)
+                    run_mgr.on_checkpoint_saved(
+                        step=step,
+                        loss=loss_val,
+                        acc=acc_val,
+                        per=history[-1].get("librispeech_per") if history else None,
+                        audio_hours=round(hours, 4),
+                    )
                 except Exception as e:
                     print(f"[Warning] Failed to save pretrain checkpoint: {e}")
 
+    except KeyboardInterrupt:
+        print(f"\n⚠️  [Interrupt] Run '{run_mgr.run_name}' interrupted by user.")
+        run_mgr.finish_run(
+            status="interrupted",
+            final_metrics={
+                "step": step if "step" in locals() else 0,
+                "loss": loss_val if "loss_val" in locals() else None,
+                "accuracy": acc_val if "acc_val" in locals() else None,
+                "cumulative_audio_hours": round(total_audio_sec / 3600.0, 4),
+            },
+        )
+        raise
     finally:
         batch_generator.stop()
 
     # Mark run as finished
     live_status["is_running"] = False
     live_status["status"] = "completed"
-    try:
-        with open(status_file, "w", encoding="utf-8") as f:
-            json.dump(live_status, f, indent=2)
-    except Exception:
-        pass
-    print(f"\n[Completed] Pre-training finished for {args.arch} [{args.tier}] at step {args.steps}!")
+    run_mgr.update_status(live_status)
+    best_per = min([h.get("librispeech_per", 100.0) for h in history], default=None) if history else None
+    run_mgr.finish_run(
+        status="completed",
+        final_metrics={
+            "step": args.steps,
+            "loss": loss_val,
+            "accuracy": acc_val,
+            "cumulative_audio_hours": round(hours, 4),
+            "best_per": best_per,
+        },
+    )
+    print(f"\n[Completed] Pre-training run '{run_mgr.run_name}' finished for {args.arch} [{args.tier}] at step {args.steps}!")
 
 
 if __name__ == "__main__":

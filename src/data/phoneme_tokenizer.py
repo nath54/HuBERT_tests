@@ -110,18 +110,31 @@ class PhonemeTokenizer:
         return len(self.token_to_id)
 
     def encode(self, phonemes: Union[str, List[str]], add_eos: bool = False) -> List[int]:
-        """Convert a phoneme sequence into token IDs with unicode NFKD normalization."""
+        """Convert a phoneme sequence into token IDs with unicode NFKD normalization and allophone folding."""
         import unicodedata
+
+        # Standard canonical IPA allophone mapping (eSpeak / Piper -> base IPA inventory)
+        allophone_map = {
+            "ɚ": "əɹ",
+            "ɾ": "t",
+            "ɐ": "ə",
+            "ʲ": "j",
+            "̩": "",
+            "ᵻ": "ɪ",
+        }
 
         ids: List[int] = []
         if isinstance(phonemes, str):
-            # NFKD normalization to cleanly separate base characters from combining diacritics
+            for k, v in allophone_map.items():
+                phonemes = phonemes.replace(k, v)
             norm_str = unicodedata.normalize("NFKD", phonemes)
             chars = list(norm_str)
         else:
-            chars = []
-            for item in phonemes:
-                chars.extend(list(unicodedata.normalize("NFKD", str(item))))
+            flat_str = "".join(str(item) for item in phonemes)
+            for k, v in allophone_map.items():
+                flat_str = flat_str.replace(k, v)
+            norm_str = unicodedata.normalize("NFKD", flat_str)
+            chars = list(norm_str)
 
         for ch in chars:
             token_id = self.token_to_id.get(ch, self.unk_id)

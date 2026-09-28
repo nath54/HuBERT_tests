@@ -85,6 +85,16 @@
           </select>
         </div>
 
+        <!-- Training Run Dropdown -->
+        <div class="space-y-1">
+          <label class="text-[10px] uppercase font-mono tracking-wider text-purple-400 font-bold flex items-center gap-1.5">
+            <span>🏷️</span> Training Run:
+          </label>
+          <select id="globalRunSelect" onchange="onModelConfigChange()" class="bg-slate-950 border border-purple-500/50 rounded-xl px-3 py-1.5 text-xs font-bold text-purple-300 focus:outline-none focus:ring-2 focus:ring-purple-500 cursor-pointer">
+            <option value="latest">⭐ Latest Checkpoint</option>
+          </select>
+        </div>
+
         <!-- Checkpoint Selector Badge -->
         <div class="space-y-1 hidden sm:block">
           <label class="text-[10px] uppercase font-mono tracking-wider text-slate-400 font-bold flex items-center gap-1.5">
@@ -791,11 +801,116 @@
 
           <div class="p-3 bg-slate-950 rounded-xl border border-slate-800 text-[11px] text-slate-300 space-y-1">
             <strong class="text-amber-400 block">The Scaling Takeaway:</strong>
-            • <strong>For short audio (< 10s):</strong> The 7-layer 1D CNN accounts for <strong>>92%</strong> of compute (convolutional filterbanks).<br>
+            • <strong>For short audio (&lt; 10s):</strong> The 7-layer 1D CNN accounts for <strong>&gt;92%</strong> of compute (convolutional filterbanks).<br>
             • <strong>For long audio (1–10 minutes):</strong> The 320x downsampling keeps attention manageable, but the $O(T^2)$ self-attention stage expands rapidly, increasing its share from 6% to over 16%!
           </div>
         </div>
 
+      </div>
+
+      <!-- Weight Matrix & SVD Eigenspectrum Inspector -->
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+        <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-3 border-b border-slate-800/80 pb-3">
+          <div>
+            <div class="flex items-center gap-2">
+              <span class="text-xl">🔬</span>
+              <h3 class="text-lg font-bold text-white">Weight Matrix & SVD Eigenspectrum Inspector</h3>
+              <span id="weightLayerCountBadge" class="badge-pill bg-purple-500/20 text-purple-300 border border-purple-500/30 text-[10px]">Loading layers...</span>
+            </div>
+            <p class="text-xs text-slate-400 mt-0.5">
+              Inspect weight matrices across Transformer attention heads, CNN feature extractors, and projection heads. Evaluates SVD singular values spectrum, effective rank, and weight value histograms in real-time.
+            </p>
+          </div>
+
+          <div class="flex items-center gap-2">
+            <select id="weightLayerSelect" onchange="inspectSelectedWeight()" class="bg-slate-950 border border-indigo-500/50 rounded-xl px-3 py-1.5 text-xs font-mono text-indigo-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer max-w-xs md:max-w-md truncate">
+              <option value="">Select a layer tensor...</option>
+            </select>
+            <button onclick="loadWeightsSummary()" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold border border-slate-700 transition-all flex items-center gap-1">
+              <span>🔄</span> Reload
+            </button>
+          </div>
+        </div>
+
+        <!-- Selected Tensor KPI Cards -->
+        <div id="weightKpiRow" class="grid grid-cols-2 md:grid-cols-5 gap-3">
+          <div class="bg-slate-950/70 border border-slate-800/80 rounded-xl p-3">
+            <div class="text-[10px] text-slate-400 uppercase font-mono">Tensor Shape</div>
+            <div id="kpiWeightShape" class="text-sm font-bold text-white font-mono mt-0.5">--</div>
+            <div id="kpiWeightParams" class="text-[10px] text-indigo-400 font-mono mt-0.5">-- parameters</div>
+          </div>
+          <div class="bg-slate-950/70 border border-slate-800/80 rounded-xl p-3">
+            <div class="text-[10px] text-slate-400 uppercase font-mono">L2 Norm / Mean / Std</div>
+            <div id="kpiWeightNorm" class="text-sm font-bold text-sky-400 font-mono mt-0.5">--</div>
+            <div id="kpiWeightMeanStd" class="text-[10px] text-slate-400 font-mono mt-0.5">--</div>
+          </div>
+          <div class="bg-slate-950/70 border border-slate-800/80 rounded-xl p-3">
+            <div class="text-[10px] text-slate-400 uppercase font-mono">Effective Rank</div>
+            <div id="kpiWeightRank" class="text-sm font-bold text-emerald-400 font-mono mt-0.5">--</div>
+            <div id="kpiWeightRankHealth" class="text-[10px] text-slate-400 font-mono mt-0.5">Entropy-based</div>
+          </div>
+          <div class="bg-slate-950/70 border border-slate-800/80 rounded-xl p-3">
+            <div class="text-[10px] text-slate-400 uppercase font-mono">Condition Number</div>
+            <div id="kpiWeightCond" class="text-sm font-bold text-amber-400 font-mono mt-0.5">--</div>
+            <div id="kpiWeightCondDesc" class="text-[10px] text-slate-400 font-mono mt-0.5">&sigma;<sub>max</sub> / &sigma;<sub>min</sub></div>
+          </div>
+          <div class="bg-slate-950/70 border border-slate-800/80 rounded-xl p-3 col-span-2 md:col-span-1">
+            <div class="text-[10px] text-slate-400 uppercase font-mono">Value Range & Sparsity</div>
+            <div id="kpiWeightRange" class="text-sm font-bold text-purple-300 font-mono mt-0.5">--</div>
+            <div id="kpiWeightSparsity" class="text-[10px] text-slate-400 font-mono mt-0.5">Sparsity: --</div>
+          </div>
+        </div>
+
+        <!-- Visual Plots: Histogram, SVD Spectrum, Heatmap Slice -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          <!-- Weight Value Histogram -->
+          <div class="bg-slate-950/70 border border-slate-800/80 rounded-xl p-4 flex flex-col justify-between">
+            <div>
+              <div class="flex justify-between items-center mb-2">
+                <span class="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                  <span>📊</span> Weight Value Distribution
+                </span>
+                <span class="text-[10px] text-slate-400 font-mono">25 Bins</span>
+              </div>
+              <p class="text-[11px] text-slate-400 mb-2">
+                Visualizes whether weights follow stable zero-centered Gaussian initialization or indicate gradient explosion / saturation.
+              </p>
+            </div>
+            <canvas id="weightHistCanvas" class="w-full h-44 rounded-lg bg-slate-900 border border-slate-800"></canvas>
+          </div>
+
+          <!-- SVD Singular Values Spectrum -->
+          <div class="bg-slate-950/70 border border-slate-800/80 rounded-xl p-4 flex flex-col justify-between">
+            <div>
+              <div class="flex justify-between items-center mb-2">
+                <span class="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                  <span>📉</span> SVD Singular Values Spectrum
+                </span>
+                <span class="text-[10px] text-purple-400 font-mono">Top 20 &sigma;<sub>i</sub></span>
+              </div>
+              <p class="text-[11px] text-slate-400 mb-2">
+                Evaluates matrix rank expressiveness. A steep drop to 0 indicates rank collapse; a gradual descent indicates rich representation.
+              </p>
+            </div>
+            <canvas id="weightSvdCanvas" class="w-full h-44 rounded-lg bg-slate-900 border border-slate-800"></canvas>
+          </div>
+
+          <!-- 2D Matrix Slice Preview -->
+          <div class="bg-slate-950/70 border border-slate-800/80 rounded-xl p-4 flex flex-col justify-between">
+            <div>
+              <div class="flex justify-between items-center mb-2">
+                <span class="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                  <span>🔲</span> 2D Matrix Slice Heatmap
+                </span>
+                <span id="weightSliceDimBadge" class="text-[10px] text-emerald-400 font-mono">24 &times; 24</span>
+              </div>
+              <p class="text-[11px] text-slate-400 mb-2">
+                Heatmap view of matrix weights. Blue represents negative, dark slate represents zero, and amber/red represents positive weights.
+              </p>
+            </div>
+            <canvas id="weightHeatmapCanvas" class="w-full h-44 rounded-lg bg-slate-900 border border-slate-800"></canvas>
+          </div>
+        </div>
       </div>
 
     </div>
@@ -1429,7 +1544,10 @@
           trainingPollInterval = null;
         }
       }
-      if (tabKey === "benchmarks") loadBenchmarks();
+      if (tabKey === "benchmarks") {
+        loadBenchmarks();
+        loadWeightsSummary();
+      }
       if (tabKey === "sota") loadSOTABenchmark();
       if (tabKey === "pretrain") {
         loadPretrainStatus();
@@ -1989,16 +2107,31 @@
           if (line.includes("Milestone Results")) {
             div.className = "text-emerald-400 font-bold py-1 bg-emerald-950/40 px-2 rounded border border-emerald-800/50";
             div.innerText = line;
-          } else if (line.includes("Loss:")) {
-            div.className = "text-slate-300 py-0.5 flex flex-wrap justify-between font-mono text-[11px] border-b border-slate-900/60";
+          } else if (line.includes("Loss:") || line.includes("Step")) {
+            div.className = "text-slate-300 py-0.5 flex flex-wrap items-center gap-3 font-mono text-[11px] border-b border-slate-900/60";
             const parts = line.split("|");
-            div.innerHTML = `
-              <span class="text-indigo-400 font-bold">${parts[0] ? parts[0].trim() : ""}</span>
-              <span class="text-amber-400">${parts[1] ? parts[1].trim() : ""}</span>
-              <span class="text-sky-400">${parts[2] ? parts[2].trim() : ""}</span>
-              <span class="text-emerald-400">${parts[3] ? parts[3].trim() : ""}</span>
-              <span class="text-slate-400 truncate max-w-[220px] text-[10px]">${parts[5] ? parts[5].trim() : ""}</span>
-            `;
+            let html = "";
+            parts.forEach((p, idx) => {
+              const trimmed = p.trim();
+              if (idx === 0) {
+                html += `<span class="text-indigo-400 font-bold">${trimmed}</span>`;
+              } else if (trimmed.startsWith("LR:")) {
+                html += `<span class="text-purple-400">${trimmed}</span>`;
+              } else if (trimmed.startsWith("Loss:")) {
+                html += `<span class="text-amber-400 font-semibold">${trimmed}</span>`;
+              } else if (trimmed.startsWith("Acc:") || trimmed.startsWith("Masked Acc:")) {
+                html += `<span class="text-sky-400 font-semibold">${trimmed}</span>`;
+              } else if (trimmed.startsWith("Audio:") || trimmed.startsWith("Step:")) {
+                html += `<span class="text-emerald-400">${trimmed}</span>`;
+              } else if (trimmed.startsWith("Buffer:")) {
+                html += `<span class="text-cyan-400">${trimmed}</span>`;
+              } else if (trimmed.startsWith("ETA:")) {
+                html += `<span class="text-slate-300">${trimmed}</span>`;
+              } else {
+                html += `<span class="text-slate-400 text-[10px]">${trimmed}</span>`;
+              }
+            });
+            div.innerHTML = html;
           } else {
             div.className = "text-slate-400 py-0.5";
             div.innerText = line;
@@ -2651,9 +2784,16 @@
       try {
         const archSelect = document.getElementById("globalArchSelect");
         const tierSelect = document.getElementById("globalTierSelect");
+        const runSelect = document.getElementById("globalRunSelect");
         const arch = archSelect ? archSelect.value : "hubert_kmeans";
         const tier = tierSelect ? tierSelect.value : "mini";
-        const res = await fetch(`/api/pretrain/status?arch=${encodeURIComponent(arch)}&tier=${encodeURIComponent(tier)}`);
+        const runName = runSelect ? runSelect.value : "latest";
+
+        let url = `/api/pretrain/status?arch=${encodeURIComponent(arch)}&tier=${encodeURIComponent(tier)}`;
+        if (runName && runName !== "latest") {
+          url += `&run_name=${encodeURIComponent(runName)}`;
+        }
+        const res = await fetch(url);
         if (!res.ok) return;
         const data = await res.json();
 
@@ -2733,23 +2873,33 @@
         if (data.is_running) {
           if (tierSelect && data.tier && tierSelect.value !== data.tier) tierSelect.value = data.tier;
           if (archSelect && data.arch && archSelect.value !== data.arch) archSelect.value = data.arch;
+          if (runSelect && data.run_name && runSelect.value !== data.run_name) {
+            if ([...runSelect.options].some(o => o.value === data.run_name)) {
+              runSelect.value = data.run_name;
+            }
+          }
         }
 
         if (data.parameters_m) {
           const modelBadge = document.getElementById("modelInfoBadge");
-          if (modelBadge) modelBadge.innerText = `${data.parameters_m}M Parameters (${data.arch || arch})`;
+          if (modelBadge) {
+            const runLabel = data.run_name ? ` · ${data.run_name}` : "";
+            modelBadge.innerText = `${data.parameters_m}M Parameters (${data.arch || arch} [${data.tier || tier}]${runLabel})`;
+          }
         }
 
         if (data.is_running) {
           badge.className = "badge-pill bg-purple-500/20 text-purple-300 border border-purple-500/40 animate-pulse";
-          badge.innerText = `⚡ Pre-training Live (${data.arch || arch} [${data.tier || tier}] · Step ${data.step}/${data.total_steps || '?'})`;
+          const runLabel = data.run_name ? ` · ${data.run_name}` : "";
+          badge.innerText = `⚡ Pre-training Live (${data.arch || arch} [${data.tier || tier}]${runLabel} · Step ${data.step}/${data.total_steps || '?'})`;
           btnStart.disabled = true;
           btnStart.classList.add("opacity-50", "cursor-not-allowed");
           btnStop.disabled = false;
           btnStop.classList.remove("opacity-50", "cursor-not-allowed");
         } else {
           badge.className = "badge-pill bg-slate-800 text-slate-300 border border-slate-700";
-          badge.innerText = data.step > 0 ? `Completed ${data.step} Steps (${data.arch || arch} [${data.tier || tier}])` : "Idle";
+          const runLabel = data.run_name ? ` · ${data.run_name}` : "";
+          badge.innerText = data.step > 0 ? `Completed ${data.step} Steps (${data.arch || arch} [${data.tier || tier}]${runLabel})` : "Idle";
           btnStart.disabled = false;
           btnStart.classList.remove("opacity-50", "cursor-not-allowed");
           btnStop.disabled = true;
@@ -2909,13 +3059,47 @@
     }
 
     // -------------------------------------------------------------
-    // MODEL CATALOG & DYNAMIC ARCHITECTURE/TIER SWITCHING
+    // MODEL CATALOG & DYNAMIC ARCHITECTURE/TIER/RUN SWITCHING
     // -------------------------------------------------------------
+    let lastCatalogData = null;
+
+    function populateRunsDropdown(arch, tier, selectedRunName = null) {
+      const runSelect = document.getElementById("globalRunSelect");
+      if (!runSelect) return;
+      const prevVal = selectedRunName || runSelect.value || "latest";
+      runSelect.innerHTML = "";
+
+      const defaultOpt = document.createElement("option");
+      defaultOpt.value = "latest";
+      defaultOpt.innerText = "⭐ Latest Checkpoint (Auto)";
+      runSelect.appendChild(defaultOpt);
+
+      if (lastCatalogData && lastCatalogData.models) {
+        const model = lastCatalogData.models.find(m => m.id === arch);
+        const runs = (model && model.runs && model.runs[tier]) ? model.runs[tier] : [];
+        runs.forEach(r => {
+          const opt = document.createElement("option");
+          opt.value = r.run_name;
+          const statusIcon = r.status === "completed" ? "✅" : (r.status === "running" ? "⚡" : "📦");
+          const stepStr = r.summary && r.summary.step ? `step ${r.summary.step}` : (r.status || "ready");
+          opt.innerText = `${statusIcon} ${r.run_name} (${stepStr})`;
+          runSelect.appendChild(opt);
+        });
+      }
+
+      if (prevVal && [...runSelect.options].some(o => o.value === prevVal)) {
+        runSelect.value = prevVal;
+      } else {
+        runSelect.value = "latest";
+      }
+    }
+
     async function loadModelCatalog() {
       try {
         const res = await fetch("/api/models/catalog");
         if (!res.ok) return;
         const data = await res.json();
+        lastCatalogData = data;
 
         // Populate Architecture dropdown
         const archSelect = document.getElementById("globalArchSelect");
@@ -2940,6 +3124,12 @@
           tierSelect.value = data.current.tier;
         }
 
+        // Populate Run dropdown
+        const curArch = archSelect ? archSelect.value : "phono_hubert";
+        const curTier = tierSelect ? tierSelect.value : "medium";
+        const curRun = (data.current && data.current.run_name) ? data.current.run_name : "latest";
+        populateRunsDropdown(curArch, curTier, curRun);
+
         updateModelBadges(data.current);
       } catch (err) {
         console.error("Error loading model catalog:", err);
@@ -2950,7 +3140,8 @@
       if (!currentInfo) return;
       const modelBadge = document.getElementById("modelInfoBadge");
       if (modelBadge && currentInfo.parameters_m) {
-        modelBadge.innerText = `${currentInfo.parameters_m}M Parameters (${currentInfo.arch || 'Model'})`;
+        const runPart = (currentInfo.run_name && currentInfo.run_name !== "latest") ? ` · ${currentInfo.run_name}` : "";
+        modelBadge.innerText = `${currentInfo.parameters_m}M Params (${currentInfo.arch || 'Model'} [${currentInfo.tier || ''}]${runPart})`;
       }
       const ckptBadge = document.getElementById("activeCheckpointBadge");
       if (ckptBadge) {
@@ -2963,12 +3154,18 @@
     async function onModelConfigChange(force = false) {
       const archSelect = document.getElementById("globalArchSelect");
       const tierSelect = document.getElementById("globalTierSelect");
+      const runSelect = document.getElementById("globalRunSelect");
       const btn = document.getElementById("btnApplyModel");
       const statusSpan = document.getElementById("modelSwitchStatus");
       if (!archSelect || !tierSelect) return;
 
       const arch = archSelect.value;
       const tier = tierSelect.value;
+
+      // Update runs options for the current arch & tier
+      const currentRun = runSelect ? runSelect.value : "latest";
+      populateRunsDropdown(arch, tier, currentRun);
+      const run_name = runSelect ? runSelect.value : "latest";
 
       if (btn) {
         btn.disabled = true;
@@ -2979,14 +3176,15 @@
         const res = await fetch("/api/models/select", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ arch: arch, tier: tier })
+          body: JSON.stringify({ arch: arch, tier: tier, run_name: run_name })
         });
         const result = await res.json();
         if (result.status === "ok") {
           updateModelBadges(result);
           if (statusSpan) {
             statusSpan.classList.remove("hidden");
-            statusSpan.innerText = `✓ Loaded ${arch} [${tier}]`;
+            const runInfo = (result.run_name && result.run_name !== "latest") ? ` (${result.run_name})` : "";
+            statusSpan.innerText = `✓ Loaded ${arch} [${tier}]${runInfo}`;
             setTimeout(() => statusSpan.classList.add("hidden"), 3500);
           }
 
@@ -2998,6 +3196,7 @@
             triggerSynthesis();
           } else if (activeTabId === "benchmarks") {
             loadBenchmarks();
+            loadWeightsSummary();
           } else if (activeTabId === "pretrain") {
             loadPretrainStatus();
           }
@@ -3009,6 +3208,300 @@
         if (btn) {
           btn.disabled = false;
           btn.innerHTML = `<span>🔄</span> Switch / Reload Model`;
+        }
+      }
+    }
+
+    // -------------------------------------------------------------
+    // WEIGHT MATRIX & SVD EIGENSPECTRUM INSPECTOR
+    // -------------------------------------------------------------
+    let currentModelWeights = [];
+
+    async function loadWeightsSummary() {
+      try {
+        const res = await fetch("/api/model/weights/summary");
+        if (!res.ok) return;
+        const data = await res.json();
+        currentModelWeights = data.layers || [];
+
+        const badge = document.getElementById("weightLayerCountBadge");
+        if (badge) {
+          badge.innerText = `${data.matrices_count} Matrices (${(data.total_parameters || 0).toLocaleString()} weights)`;
+        }
+
+        const select = document.getElementById("weightLayerSelect");
+        if (select && currentModelWeights.length > 0) {
+          const prevVal = select.value;
+          select.innerHTML = "";
+
+          currentModelWeights.forEach(l => {
+            const opt = document.createElement("option");
+            opt.value = l.name;
+            const shapeStr = `[${l.shape.join(", ")}]`;
+            opt.innerText = `${l.name} ${shapeStr}`;
+            select.appendChild(opt);
+          });
+
+          // Restore previous selection if exists, else pick first 2D matrix
+          if (prevVal && currentModelWeights.some(l => l.name === prevVal)) {
+            select.value = prevVal;
+          } else {
+            const firstMatrix = currentModelWeights.find(l => l.is_matrix);
+            if (firstMatrix) select.value = firstMatrix.name;
+            else select.value = currentModelWeights[0].name;
+          }
+
+          inspectSelectedWeight();
+        }
+      } catch (err) {
+        console.error("Error loading weights summary:", err);
+      }
+    }
+
+    async function inspectSelectedWeight() {
+      const select = document.getElementById("weightLayerSelect");
+      if (!select || !select.value) return;
+      const tensorName = select.value;
+
+      try {
+        const res = await fetch(`/api/model/weights/inspect?tensor_name=${encodeURIComponent(tensorName)}`);
+        if (!res.ok) return;
+        const data = await res.json();
+
+        // Update KPI cards
+        const elShape = document.getElementById("kpiWeightShape");
+        if (elShape) elShape.innerText = `[${data.shape.join(", ")}]`;
+        const elParams = document.getElementById("kpiWeightParams");
+        if (elParams) elParams.innerText = `${data.numel.toLocaleString()} params · ${data.requires_grad ? "Trainable" : "Frozen"}`;
+
+        const elNorm = document.getElementById("kpiWeightNorm");
+        if (elNorm) elNorm.innerText = `Norm: ${data.norm.toFixed(2)}`;
+        const elMeanStd = document.getElementById("kpiWeightMeanStd");
+        if (elMeanStd) elMeanStd.innerText = `μ: ${data.mean.toFixed(4)} | σ: ${data.std.toFixed(4)}`;
+
+        const elRank = document.getElementById("kpiWeightRank");
+        if (elRank) {
+          if (data.has_svd) {
+            const maxPossible = Math.min(...data.matrix_shape);
+            elRank.innerText = `${data.effective_rank.toFixed(1)} / ${maxPossible}`;
+          } else {
+            elRank.innerText = "N/A (1D vector)";
+          }
+        }
+        const elRankHealth = document.getElementById("kpiWeightRankHealth");
+        if (elRankHealth) {
+          if (data.has_svd) {
+            const maxPossible = Math.min(...data.matrix_shape);
+            const ratio = data.effective_rank / Math.max(1, maxPossible);
+            if (ratio > 0.8) {
+              elRankHealth.innerText = "🟢 Full rank & healthy";
+              elRankHealth.className = "text-[10px] text-emerald-400 font-mono mt-0.5";
+            } else if (ratio > 0.4) {
+              elRankHealth.innerText = "🟡 Moderate rank";
+              elRankHealth.className = "text-[10px] text-amber-400 font-mono mt-0.5";
+            } else {
+              elRankHealth.innerText = "🔴 Low rank / collapsed";
+              elRankHealth.className = "text-[10px] text-rose-400 font-mono mt-0.5";
+            }
+          } else {
+            elRankHealth.innerText = "1D parameter vector";
+            elRankHealth.className = "text-[10px] text-slate-400 font-mono mt-0.5";
+          }
+        }
+
+        const elCond = document.getElementById("kpiWeightCond");
+        if (elCond) elCond.innerText = data.has_svd ? data.condition_number.toFixed(1) : "--";
+
+        const elRange = document.getElementById("kpiWeightRange");
+        if (elRange) elRange.innerText = `[${data.min.toFixed(3)}, ${data.max.toFixed(3)}]`;
+        const elSparsity = document.getElementById("kpiWeightSparsity");
+        if (elSparsity) elSparsity.innerText = `Sparsity: ${data.sparsity_pct.toFixed(1)}%`;
+
+        // Render Canvas Visualizations
+        drawWeightHistogram("weightHistCanvas", data.histogram, data.mean, data.std);
+        drawWeightSvd("weightSvdCanvas", data.top_singular_values);
+        drawWeightHeatmap("weightHeatmapCanvas", data.slice_matrix);
+      } catch (err) {
+        console.error("Error inspecting weight:", err);
+      }
+    }
+
+    function drawWeightHistogram(canvasId, hist, mean, std) {
+      const canvas = document.getElementById(canvasId);
+      if (!canvas) return;
+      const ctx = canvas.getContext("2d");
+      const rect = canvas.getBoundingClientRect();
+      const W = (rect.width > 0 ? rect.width : 280);
+      const H = (rect.height > 0 ? rect.height : 176);
+      canvas.width = W * (window.devicePixelRatio || 1);
+      canvas.height = H * (window.devicePixelRatio || 1);
+      ctx.scale(window.devicePixelRatio || 1, window.devicePixelRatio || 1);
+
+      ctx.clearRect(0, 0, W, H);
+      if (!hist || !hist.counts || hist.counts.length === 0) return;
+
+      const counts = hist.counts;
+      const edges = hist.bin_edges;
+      const maxCount = Math.max(...counts, 1);
+      const padBottom = 20;
+      const padTop = 15;
+      const padX = 10;
+      const chartW = W - 2 * padX;
+      const chartH = H - padTop - padBottom;
+      const barW = chartW / counts.length;
+
+      counts.forEach((c, idx) => {
+        const h = (c / maxCount) * chartH;
+        const x = padX + idx * barW;
+        const y = H - padBottom - h;
+
+        const grad = ctx.createLinearGradient(0, y, 0, H - padBottom);
+        grad.addColorStop(0, "rgba(99, 102, 241, 0.9)");
+        grad.addColorStop(1, "rgba(79, 70, 229, 0.4)");
+        ctx.fillStyle = grad;
+        ctx.fillRect(x + 1, y, Math.max(1, barW - 2), h);
+      });
+
+      const minVal = edges[0];
+      const maxVal = edges[edges.length - 1];
+      if (minVal < 0 && maxVal > 0) {
+        const zeroX = padX + ((0 - minVal) / (maxVal - minVal)) * chartW;
+        ctx.strokeStyle = "rgba(244, 63, 94, 0.7)";
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.moveTo(zeroX, padTop);
+        ctx.lineTo(zeroX, H - padBottom);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+
+      ctx.fillStyle = "#94a3b8";
+      ctx.font = "9px monospace";
+      ctx.textAlign = "left";
+      ctx.fillText(minVal.toFixed(2), padX, H - 5);
+      ctx.textAlign = "right";
+      ctx.fillText(maxVal.toFixed(2), W - padX, H - 5);
+      ctx.textAlign = "center";
+      ctx.fillText(`μ = ${mean.toFixed(3)}`, W / 2, H - 5);
+    }
+
+    function drawWeightSvd(canvasId, singularValues) {
+      const canvas = document.getElementById(canvasId);
+      if (!canvas) return;
+      const ctx = canvas.getContext("2d");
+      const rect = canvas.getBoundingClientRect();
+      const W = (rect.width > 0 ? rect.width : 280);
+      const H = (rect.height > 0 ? rect.height : 176);
+      canvas.width = W * (window.devicePixelRatio || 1);
+      canvas.height = H * (window.devicePixelRatio || 1);
+      ctx.scale(window.devicePixelRatio || 1, window.devicePixelRatio || 1);
+
+      ctx.clearRect(0, 0, W, H);
+      if (!singularValues || singularValues.length === 0) {
+        ctx.fillStyle = "#64748b";
+        ctx.font = "11px monospace";
+        ctx.textAlign = "center";
+        ctx.fillText("No SVD for 1D parameter", W / 2, H / 2);
+        return;
+      }
+
+      const s = singularValues;
+      const maxS = Math.max(...s, 0.001);
+      const padBottom = 20;
+      const padTop = 15;
+      const padX = 12;
+      const chartW = W - 2 * padX;
+      const chartH = H - padTop - padBottom;
+      const barW = chartW / s.length;
+
+      s.forEach((val, idx) => {
+        const h = (val / maxS) * chartH;
+        const x = padX + idx * barW;
+        const y = H - padBottom - h;
+
+        const grad = ctx.createLinearGradient(0, y, 0, H - padBottom);
+        grad.addColorStop(0, "rgba(168, 85, 247, 0.9)");
+        grad.addColorStop(1, "rgba(126, 34, 206, 0.3)");
+        ctx.fillStyle = grad;
+        ctx.fillRect(x + 1, y, Math.max(1, barW - 2), h);
+      });
+
+      ctx.strokeStyle = "#38bdf8";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      s.forEach((val, idx) => {
+        const x = padX + idx * barW + barW / 2;
+        const y = H - padBottom - (val / maxS) * chartH;
+        if (idx === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+
+      ctx.fillStyle = "#94a3b8";
+      ctx.font = "9px monospace";
+      ctx.textAlign = "left";
+      ctx.fillText(`σ₁: ${s[0].toFixed(2)}`, padX, H - 5);
+      ctx.textAlign = "right";
+      ctx.fillText(`σ${s.length}: ${s[s.length - 1].toFixed(2)}`, W - padX, H - 5);
+    }
+
+    function drawWeightHeatmap(canvasId, slice) {
+      const canvas = document.getElementById(canvasId);
+      if (!canvas) return;
+      const ctx = canvas.getContext("2d");
+      const rect = canvas.getBoundingClientRect();
+      const W = (rect.width > 0 ? rect.width : 280);
+      const H = (rect.height > 0 ? rect.height : 176);
+      canvas.width = W * (window.devicePixelRatio || 1);
+      canvas.height = H * (window.devicePixelRatio || 1);
+      ctx.scale(window.devicePixelRatio || 1, window.devicePixelRatio || 1);
+
+      ctx.clearRect(0, 0, W, H);
+      if (!slice || slice.length === 0 || !slice[0] || slice[0].length === 0) {
+        ctx.fillStyle = "#64748b";
+        ctx.font = "11px monospace";
+        ctx.textAlign = "center";
+        ctx.fillText("No 2D slice available", W / 2, H / 2);
+        return;
+      }
+
+      const rows = slice.length;
+      const cols = slice[0].length;
+      const badge = document.getElementById("weightSliceDimBadge");
+      if (badge) badge.innerText = `${rows} × ${cols}`;
+
+      let maxAbs = 0.0001;
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          const a = Math.abs(slice[r][c]);
+          if (a > maxAbs) maxAbs = a;
+        }
+      }
+
+      const cellW = (W - 10) / cols;
+      const cellH = (H - 10) / rows;
+      const offX = 5;
+      const offY = 5;
+
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          const val = slice[r][c];
+          const norm = val / maxAbs;
+          let rC = 15, gC = 23, bC = 42;
+          if (norm > 0) {
+            const t = Math.min(1, norm);
+            rC = Math.round(15 + t * (245 - 15));
+            gC = Math.round(23 + t * (158 - 23));
+            bC = Math.round(42 + t * (11 - 42));
+          } else {
+            const t = Math.min(1, -norm);
+            rC = Math.round(15 + t * (14 - 15));
+            gC = Math.round(23 + t * (165 - 23));
+            bC = Math.round(42 + t * (233 - 42));
+          }
+          ctx.fillStyle = `rgb(${rC}, ${gC}, ${bC})`;
+          ctx.fillRect(offX + c * cellW, offY + r * cellH, cellW - 0.5, cellH - 0.5);
         }
       }
     }

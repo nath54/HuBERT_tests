@@ -9,13 +9,16 @@ Enables decoupled procedural speech synthesis and GPU training:
 
 import collections
 import contextlib
+import json
 import logging
+from pathlib import Path
 import queue
 import random
 import threading
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
+import soundfile as sf
 import torch
 from torch.utils.data import DataLoader
 
@@ -123,10 +126,25 @@ def collate_modular_batch(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
     for i, t in enumerate(target_list):
         padded_targets[i, : len(t)] = t
 
+    # Frame targets handling for frame-synchronous architectures
+    has_frame_targets = all("frame_targets" in item and item["frame_targets"] is not None for item in batch)
+    if has_frame_targets:
+        frame_lengths = torch.tensor([len(item["frame_targets"]) for item in batch], dtype=torch.long)
+        max_frame_len = int(frame_lengths.max().item())
+        padded_frame_targets = torch.full((len(batch), max_frame_len), -100, dtype=torch.long)
+        for i, item in enumerate(batch):
+            ft = item["frame_targets"]
+            padded_frame_targets[i, : len(ft)] = ft
+    else:
+        padded_frame_targets = padded_targets
+        frame_lengths = target_lengths
+
     return {
         "audio": padded_audio,
         "targets": padded_targets,
         "target_lengths": target_lengths,
+        "frame_targets": padded_frame_targets,
+        "frame_lengths": frame_lengths,
         "audio_lengths": audio_lengths,
         "durations": durations,
         "texts": texts,
@@ -155,7 +173,9 @@ class BufferedSpeechBatchGenerator:
         use_rolling_pool: bool = True,
         pool_capacity: int = 250,
         min_duration_sec: float = 1.0,
-        max_duration_sec: float = 12.0,
+        max_duration_sec: float = 7.0,
+        real_speech_manifest: Optional[Union[str, Path, List[Dict[str, Any]]]] = None,
+        real_ratio: float = 0.5,
         profiler: Optional[StepProfiler] = None,
     ):
         self.voice_manager = voice_manager
@@ -170,6 +190,22 @@ class BufferedSpeechBatchGenerator:
         self.min_duration_sec = min_duration_sec
         self.max_duration_sec = max_duration_sec
         self.profiler = profiler or StepProfiler()
+
+        # Hybrid real human speech dataset support
+        self.real_samples: List[Dict[str, Any]] = []
+        if real_speech_manifest:
+            if isinstance(real_speech_manifest, (str, Path)):
+                p = Path(real_speech_manifest)
+                if p.exists():
+                    try:
+                        with open(p, "r", encoding="utf-8") as f:
+                            self.real_samples = json.load(f)
+                        logger.info(f"Loaded {len(self.real_samples)} real speech samples from {p}")
+                    except Exception as e:
+                        logger.warning(f"Failed to load real speech manifest from {p}: {e}")
+            elif isinstance(real_speech_manifest, list):
+                self.real_samples = real_speech_manifest
+        self.real_ratio = real_ratio
 
         # Thread synchronization
         self.batch_queue: queue.Queue = queue.Queue(maxsize=self.max_buffer_size)
@@ -211,8 +247,60 @@ class BufferedSpeechBatchGenerator:
         self.collation_thread.start()
 
     def _generate_one_sample(self) -> Optional[Dict[str, Any]]:
-        """Procedurally generate 1 clean speech sample with fine-grained timing."""
+        """Procedurally generate 1 clean speech sample or draw from real human speech with fine-grained timing."""
         t_sample_start = time.perf_counter()
+
+        # Hybrid Real Speech Sampling (Real Human LibriSpeech)
+        if self.real_samples and random.random() < self.real_ratio:
+            sample = random.choice(self.real_samples)
+            audio_path = sample.get("audio_path")
+            transcript = sample.get("transcript") or sample.get("text", "")
+            try:
+                t0 = time.perf_counter()
+                speech_np, sr = sf.read(audio_path)
+                t_load = time.perf_counter() - t0
+                self.profiler.record("time_real_speech_load", t_load)
+
+                waveform = torch.from_numpy(speech_np).float()
+                if waveform.ndim > 1:
+                    waveform = waveform.mean(dim=-1)
+                if sr != 16000:
+                    import torchaudio.transforms as T
+                    resampler = T.Resample(sr, 16000)
+                    waveform = resampler(waveform.unsqueeze(0)).squeeze(0)
+                dur = waveform.shape[-1] / 16000.0
+
+                if dur < self.min_duration_sec or dur > self.max_duration_sec:
+                    return None
+
+                t0 = time.perf_counter()
+                with self.voice_lock:
+                    voice_inst, vname = self.voice_manager.get_random_voice(lang="en")
+
+                target_dict = self.target_extractor.extract_targets(
+                    waveform=waveform,
+                    text=transcript,
+                    voice=voice_inst,
+                    lang="en",
+                )
+                t_target = time.perf_counter() - t0
+                self.profiler.record("time_target_extract", t_target)
+                total_sample_sec = time.perf_counter() - t_sample_start
+                self.profiler.record("total_sample_gen_sec", total_sample_sec)
+
+                return {
+                    "audio": waveform,
+                    "targets": target_dict["targets"],
+                    "target_length": target_dict["target_lengths"],
+                    "frame_targets": target_dict.get("frame_targets", target_dict["targets"]),
+                    "frame_length": target_dict.get("frame_lengths", target_dict["target_lengths"]),
+                    "duration": dur,
+                    "text": transcript,
+                    "voice_name": f"human_{sample.get('speaker_id', 'librispeech')}",
+                }
+            except Exception as e:
+                logger.debug(f"Failed to load real sample {audio_path}: {e}")
+                # Fall through to synthetic generation below
 
         # 1. Sample Text
         t0 = time.perf_counter()
@@ -273,6 +361,8 @@ class BufferedSpeechBatchGenerator:
             "audio": waveform,
             "targets": target_dict["targets"],
             "target_length": target_dict["target_lengths"],
+            "frame_targets": target_dict.get("frame_targets", target_dict["targets"]),
+            "frame_length": target_dict.get("frame_lengths", target_dict["target_lengths"]),
             "duration": dur,
             "text": text,
             "voice_name": voice_name,
@@ -281,8 +371,8 @@ class BufferedSpeechBatchGenerator:
     def _synthesis_worker_loop(self):
         """Worker loop continuously generating speech samples."""
         while not self.stop_event.is_set():
-            # If buffer is full, pause generation to conserve CPU
-            if self.producer_paused.is_set():
+            # In direct queue mode, pause if sample_queue/batch_queue is full
+            if not self.use_rolling_pool and self.producer_paused.is_set():
                 time.sleep(0.05)
                 continue
 
@@ -299,6 +389,9 @@ class BufferedSpeechBatchGenerator:
                             # Rolling replacement: replace random item to keep pool perpetually fresh
                             replace_idx = random.randint(0, len(self.utterance_pool) - 1)
                             self.utterance_pool[replace_idx] = sample
+                    # Gentle throttle if pool is completely full to avoid excessive CPU churn
+                    if len(self.utterance_pool) >= self.pool_capacity:
+                        time.sleep(0.02)
                 else:
                     self.sample_queue.put(sample, timeout=1.0)
 
@@ -315,7 +408,7 @@ class BufferedSpeechBatchGenerator:
         while not self.stop_event.is_set():
             q_size = self.batch_queue.qsize()
 
-            # Watermark Management
+            # Watermark Management (applies to batch queue)
             if q_size >= self.max_buffer_size:
                 if not self.producer_paused.is_set():
                     self.producer_paused.set()
@@ -330,9 +423,10 @@ class BufferedSpeechBatchGenerator:
             t_collate_start = time.perf_counter()
 
             if self.use_rolling_pool:
-                # Wait until pool has at least batch_size samples
-                while len(self.utterance_pool) < self.batch_size and not self.stop_event.is_set():
-                    time.sleep(0.02)
+                # Wait until pool has at least batch_size samples before feeding GPU
+                min_pool_start = max(self.batch_size, 8)
+                while len(self.utterance_pool) < min_pool_start and not self.stop_event.is_set():
+                    time.sleep(0.05)
 
                 if self.stop_event.is_set():
                     break
@@ -349,6 +443,8 @@ class BufferedSpeechBatchGenerator:
                                 "audio": base_item["audio"].clone(),
                                 "targets": base_item["targets"].clone() if isinstance(base_item["targets"], torch.Tensor) else base_item["targets"],
                                 "target_length": base_item["target_length"],
+                                "frame_targets": base_item["frame_targets"].clone() if isinstance(base_item.get("frame_targets"), torch.Tensor) else base_item.get("frame_targets"),
+                                "frame_length": base_item.get("frame_length"),
                                 "duration": base_item["duration"],
                                 "text": base_item["text"],
                                 "voice_name": base_item["voice_name"],

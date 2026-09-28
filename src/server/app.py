@@ -13,12 +13,13 @@ import numpy as np
 import soundfile as sf
 import torch
 import torch.nn.functional as F
-from fastapi import FastAPI, File, Form, UploadFile, BackgroundTasks, Query
+from fastapi import FastAPI, File, Form, UploadFile, BackgroundTasks, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from src.training.run_manager import RunManager
 from src.models.config import HuBERTConfig
 from src.models.hubert_asr import HuBERTForCTC
 from src.models.phono_hubert import PhonoHuBERTConfig, PhonoHuBERTForPreTraining
@@ -72,6 +73,7 @@ class StudioState:
             self.tokenizer = self.phono_tokenizer
             self.checkpoint_path = Path("checkpoints/phono_hubert/medium/checkpoint_latest.pt")
 
+        self.current_run_name: str = "latest"
         self.model: Optional[Any] = None
         self.explainer: Optional[AudioGradientExplainer] = None
         self.patcher: Optional[ActivationPatcher] = None
@@ -212,22 +214,41 @@ class StudioState:
         self.explainer = AudioGradientExplainer(self.model, self.device)
         self.patcher = ActivationPatcher(self.model, self.device)
 
-    def select_model(self, arch: str, tier: str = "mini", checkpoint_path: Optional[str] = None, overrides: Optional[Dict] = None):
+    def select_model(
+        self,
+        arch: str,
+        tier: str = "mini",
+        run_name: Optional[str] = None,
+        checkpoint_path: Optional[str] = None,
+        overrides: Optional[Dict] = None,
+    ):
         overrides = overrides or {}
-        print(f"[Studio] Switching to model architecture: {arch} | tier: {tier} | overrides: {overrides}")
+        run_name = run_name or "latest"
+        print(f"[Studio] Switching to model architecture: {arch} | tier: {tier} | run: {run_name} | overrides: {overrides}")
 
-        if arch == "phono_hubert":
+        if arch.startswith("phono_hubert"):
             self.tokenizer = self.phono_tokenizer
         else:
             self.tokenizer = self.char_tokenizer
 
         ckpt_to_load = None
+        loaded_cfg = None
+
         if checkpoint_path and Path(checkpoint_path).exists():
             ckpt_to_load = Path(checkpoint_path)
-        else:
-            if arch == "phono_hubert":
-                cand1 = Path(f"checkpoints/phono_hubert/{tier}/checkpoint_latest.pt")
-                cand2 = Path(f"checkpoints/phono_hubert/{tier}/ctc_downstream_latest.pt")
+        elif run_name and run_name not in ("latest", "auto", "default", "", None):
+            run_details = RunManager.get_run_details(arch, tier, run_name)
+            if run_details and run_details.get("latest_checkpoint"):
+                c_cand = Path(run_details["latest_checkpoint"])
+                if c_cand.exists():
+                    ckpt_to_load = c_cand
+            if run_details and run_details.get("config"):
+                loaded_cfg = run_details["config"].get("model", {}).get("config")
+
+        if not ckpt_to_load:
+            if arch.startswith("phono_hubert"):
+                cand1 = Path(f"checkpoints/{arch}/{tier}/checkpoint_latest.pt")
+                cand2 = Path(f"checkpoints/{arch}/{tier}/ctc_downstream_latest.pt")
                 if cand1.exists():
                     ckpt_to_load = cand1
                 elif cand2.exists():
@@ -246,16 +267,16 @@ class StudioState:
                         ckpt_to_load = cand
 
         if ckpt_to_load and ckpt_to_load.exists():
-            print(f"[Studio] Loading checkpoint for {arch} [{tier}]: {ckpt_to_load}")
+            print(f"[Studio] Loading checkpoint for {arch} [{tier}] (run: {run_name}): {ckpt_to_load}")
             ckpt = torch.load(ckpt_to_load, map_location=self.device, weights_only=False)
             cfg = ckpt.get("config")
-            if cfg is None:
+            if cfg is None and loaded_cfg:
+                cfg = ModelRegistry.build_config(arch, tier=tier, **loaded_cfg)
+            elif cfg is None:
                 cfg = ModelRegistry.build_config(arch, tier=tier, **overrides)
 
-            if arch == "phono_hubert":
-                self.model = PhonoHuBERTForPreTraining(cfg).to(self.device)
-            else:
-                self.model = HuBERTForCTC(cfg).to(self.device)
+            # Build model dynamically via ModelRegistry
+            self.model = ModelRegistry.build_model(arch, tier=tier, config=cfg).to(self.device)
 
             try:
                 self.model.load_state_dict(ckpt["model_state_dict"], strict=False)
@@ -270,6 +291,7 @@ class StudioState:
         self.model.eval()
         self.current_arch = arch
         self.current_tier = tier
+        self.current_run_name = run_name
         self.explainer = AudioGradientExplainer(self.model, self.device)
         self.patcher = ActivationPatcher(self.model, self.device)
 
@@ -277,6 +299,7 @@ class StudioState:
         return {
             "arch": self.current_arch,
             "tier": self.current_tier,
+            "run_name": self.current_run_name,
             "checkpoint_path": str(self.checkpoint_path),
             "parameters": num_params,
             "parameters_m": round(num_params / 1e6, 2),
@@ -323,18 +346,23 @@ class InferSampleRequest(BaseModel):
 class ModelSelectRequest(BaseModel):
     arch: str = "hubert_kmeans"
     tier: str = "mini"
+    run_name: Optional[str] = "latest"
     checkpoint_path: Optional[str] = None
     overrides: Optional[Dict] = None
 
 
 @app.get("/api/models/catalog")
 def get_models_catalog():
-    """Returns all available architectures, sizes/tiers, active selection, and available checkpoints."""
+    """Returns all available architectures, sizes/tiers, active selection, and available checkpoints and runs."""
     catalog = ModelRegistry.list_models()
 
     for m in catalog:
         m["available_checkpoints"] = {}
+        m["runs"] = {}
         for tier in m["supported_tiers"]:
+            tier_runs = RunManager.list_runs(arch=m["id"], tier=tier)
+            m["runs"][tier] = tier_runs
+
             ckpts = []
             if m["id"] == "hubert_kmeans":
                 if tier == "mini":
@@ -347,7 +375,10 @@ def get_models_catalog():
                 if tier_dir.exists():
                     for f in tier_dir.glob("*.pt"):
                         ckpts.append(str(f))
-            m["available_checkpoints"][tier] = ckpts
+            for r in tier_runs:
+                if r.get("latest_checkpoint"):
+                    ckpts.append(r["latest_checkpoint"])
+            m["available_checkpoints"][tier] = list(dict.fromkeys(ckpts))
 
     num_params = sum(p.numel() for p in state.model.parameters()) if state.model else 0
     return {
@@ -356,6 +387,7 @@ def get_models_catalog():
         "current": {
             "arch": state.current_arch,
             "tier": state.current_tier,
+            "run_name": getattr(state, "current_run_name", "latest"),
             "checkpoint_path": str(state.checkpoint_path) if state.checkpoint_path else None,
             "parameters": num_params,
             "parameters_m": round(num_params / 1e6, 2),
@@ -367,11 +399,12 @@ def get_models_catalog():
 
 @app.post("/api/models/select")
 def select_model_endpoint(req: ModelSelectRequest):
-    """Switch active model architecture and size tier dynamically."""
+    """Switch active model architecture, size tier, and run selection dynamically."""
     try:
         res = state.select_model(
             arch=req.arch,
             tier=req.tier,
+            run_name=req.run_name,
             checkpoint_path=req.checkpoint_path,
             overrides=req.overrides,
         )
@@ -395,8 +428,157 @@ def get_status():
         "real_dataset_samples": len(state.librispeech_samples),
         "current_arch": state.current_arch,
         "current_tier": state.current_tier,
+        "current_run_name": getattr(state, "current_run_name", "latest"),
         "parameters": num_params,
         "parameters_m": round(num_params / 1e6, 2),
+    }
+
+
+# -------------------------------------------------------------
+# WEIGHT & SVD RANK INSPECTOR ENDPOINTS
+# -------------------------------------------------------------
+@app.get("/api/model/weights/summary")
+def get_model_weights_summary():
+    """Return all parameter matrices/tensors with summary stats for the active model."""
+    if not hasattr(state, "model") or state.model is None:
+        raise HTTPException(status_code=400, detail="No model is currently loaded.")
+
+    layers_info = []
+    total_params = 0
+    trainable_params = 0
+
+    for name, param in state.model.named_parameters():
+        numel = param.numel()
+        total_params += numel
+        if param.requires_grad:
+            trainable_params += numel
+
+        with torch.no_grad():
+            p_flat = param.detach().float().cpu().flatten()
+            mean_val = float(p_flat.mean().item()) if numel > 0 else 0.0
+            std_val = float(p_flat.std().item()) if numel > 1 else 0.0
+            norm_val = float(torch.norm(p_flat).item()) if numel > 0 else 0.0
+            min_val = float(p_flat.min().item()) if numel > 0 else 0.0
+            max_val = float(p_flat.max().item()) if numel > 0 else 0.0
+
+        layers_info.append({
+            "name": name,
+            "shape": list(param.shape),
+            "ndim": param.ndim,
+            "numel": numel,
+            "requires_grad": bool(param.requires_grad),
+            "mean": round(mean_val, 6),
+            "std": round(std_val, 6),
+            "norm": round(norm_val, 4),
+            "min": round(min_val, 6),
+            "max": round(max_val, 6),
+            "is_matrix": param.ndim >= 2,
+        })
+
+    return {
+        "arch": state.current_arch,
+        "tier": state.current_tier,
+        "run_name": getattr(state, "current_run_name", "latest"),
+        "checkpoint_path": str(state.checkpoint_path) if state.checkpoint_path else None,
+        "total_parameters": total_params,
+        "trainable_parameters": trainable_params,
+        "layers_count": len(layers_info),
+        "matrices_count": sum(1 for l in layers_info if l["is_matrix"]),
+        "layers": layers_info,
+    }
+
+
+@app.get("/api/model/weights/inspect")
+def inspect_model_weight(tensor_name: str):
+    """Compute SVD singular values, effective rank, condition number, histogram, and matrix slice preview."""
+    if not hasattr(state, "model") or state.model is None:
+        raise HTTPException(status_code=400, detail="No model is currently loaded.")
+
+    named_params = dict(state.model.named_parameters())
+    if tensor_name not in named_params:
+        raise HTTPException(status_code=404, detail=f"Parameter '{tensor_name}' not found.")
+
+    param = named_params[tensor_name]
+    with torch.no_grad():
+        w = param.detach().float().cpu()
+        numel = w.numel()
+        w_flat = w.flatten()
+        mean_val = float(w_flat.mean().item()) if numel > 0 else 0.0
+        std_val = float(w_flat.std().item()) if numel > 1 else 0.0
+        norm_val = float(torch.norm(w_flat).item()) if numel > 0 else 0.0
+        min_val = float(w_flat.min().item()) if numel > 0 else 0.0
+        max_val = float(w_flat.max().item()) if numel > 0 else 0.0
+        sparsity_pct = float((w_flat.abs() < 1e-6).float().mean().item() * 100.0) if numel > 0 else 0.0
+
+        # Histogram of weight distribution (25 bins)
+        if numel > 0 and min_val != max_val:
+            hist_counts, bin_edges = np.histogram(w_flat.numpy(), bins=25)
+            histogram = {
+                "counts": hist_counts.tolist(),
+                "bin_edges": [round(float(b), 5) for b in bin_edges.tolist()],
+            }
+        else:
+            histogram = {"counts": [numel], "bin_edges": [round(min_val, 4), round(max_val, 4)]}
+
+        # SVD singular values spectrum and rank analysis
+        has_svd = False
+        top_singular_values = []
+        effective_rank = 1.0
+        condition_number = 1.0
+        matrix_shape = list(w.shape)
+        slice_matrix = []
+
+        if w.ndim >= 2:
+            if w.ndim > 2:
+                w_2d = w.reshape(w.shape[0], -1)
+            else:
+                w_2d = w
+
+            has_svd = True
+            matrix_shape = list(w_2d.shape)
+
+            try:
+                # Subsample if dimension is unusually large for instant response
+                w_sub = w_2d[:512, :512] if (w_2d.shape[0] > 512 and w_2d.shape[1] > 512) else w_2d
+                s_vals = torch.linalg.svdvals(w_sub)
+                top_singular_values = [round(float(s), 4) for s in s_vals[:20].tolist()]
+                s_sum = float(s_vals.sum().item())
+                if s_sum > 0:
+                    p_s = (s_vals / s_sum).clamp(min=1e-12)
+                    entropy = -float((p_s * torch.log(p_s)).sum().item())
+                    effective_rank = round(float(np.exp(entropy)), 2)
+                else:
+                    effective_rank = 1.0
+
+                condition_number = round(float((s_vals[0] / (s_vals[-1] + 1e-12)).item()), 2)
+            except Exception as e:
+                print(f"[Studio SVD Warning] {e}")
+                has_svd = False
+
+            # 24x24 preview slice for matrix heatmap
+            r_lim = min(24, w_2d.shape[0])
+            c_lim = min(24, w_2d.shape[1])
+            slice_matrix = [[round(float(val), 4) for val in row] for row in w_2d[:r_lim, :c_lim].numpy()]
+
+    return {
+        "tensor_name": tensor_name,
+        "shape": list(param.shape),
+        "matrix_shape": matrix_shape,
+        "ndim": param.ndim,
+        "numel": numel,
+        "requires_grad": bool(param.requires_grad),
+        "mean": round(mean_val, 6),
+        "std": round(std_val, 6),
+        "norm": round(norm_val, 4),
+        "min": round(min_val, 6),
+        "max": round(max_val, 6),
+        "sparsity_pct": round(sparsity_pct, 2),
+        "histogram": histogram,
+        "has_svd": has_svd,
+        "top_singular_values": top_singular_values,
+        "effective_rank": effective_rank,
+        "condition_number": condition_number,
+        "slice_matrix": slice_matrix,
     }
 
 
@@ -702,7 +884,11 @@ def run_ablation(req: AblationRequest):
     }
 
 
-def get_live_scaling_status(arch: Optional[str] = None, tier: Optional[str] = None) -> Optional[Dict]:
+def get_live_scaling_status(
+    arch: Optional[str] = None,
+    tier: Optional[str] = None,
+    run_name: Optional[str] = None,
+) -> Optional[Dict]:
     """Dynamically discover and parse active or recent large-scale pre-training status."""
     import subprocess
     import glob
@@ -712,6 +898,103 @@ def get_live_scaling_status(arch: Optional[str] = None, tier: Optional[str] = No
 
     arch = arch or state.current_arch
     tier = tier or state.current_tier
+    run_name = run_name or getattr(state, "current_run_name", "latest")
+
+    # 1. If a specific run was requested (and not 'latest' or 'all')
+    if run_name and run_name not in ("latest", "all", "auto", "default", "", None):
+        run_details = RunManager.get_run_details(arch, tier, run_name)
+        if run_details:
+            cfg = run_details.get("config", {})
+            live_data = run_details.get("status_live", {})
+            history = run_details.get("step_history", [])
+            raw_milestones = run_details.get("history", [])
+            milestones = []
+            for h in raw_milestones:
+                milestones.append({
+                    "step": h.get("step", 0),
+                    "hours": h.get("cumulative_audio_hours", 0.0),
+                    "loss": h.get("pretrain_loss", h.get("loss", 0.0)),
+                    "wer": h.get("librispeech_wer", 100.0),
+                    "cer": h.get("librispeech_cer", 100.0),
+                    "per": h.get("librispeech_per", 100.0),
+                    "sample_pred": h.get("sample_prediction", ""),
+                })
+
+            p = subprocess.run(["pgrep", "-f", f"run_pretrain.py.*{run_name}"], capture_output=True, text=True)
+            is_running = (p.returncode == 0 and len(p.stdout.strip()) > 0)
+            if not is_running and live_data.get("is_running"):
+                heartbeat = live_data.get("last_heartbeat", 0)
+                if time.time() - heartbeat < 90:
+                    is_running = True
+
+            tier_params_map = {"mini": 8.04, "small": 24.2, "medium": 31.82, "base": 94.7}
+            params_m = cfg.get("model", {}).get("total_parameters", 0) / 1e6 or tier_params_map.get(tier, 8.04)
+
+            total_steps = cfg.get("training_hyperparameters", {}).get("steps", live_data.get("total_steps", 625))
+            step = live_data.get("step", history[-1]["step"] if history else 0)
+            loss = live_data.get("loss", history[-1]["loss"] if history else 0.0)
+            acc = live_data.get("masked_accuracy_pct", history[-1].get("masked_accuracy_pct", 0.0) if history else 0.0)
+            audio_sec = live_data.get("cumulative_audio_sec", history[-1].get("cumulative_audio_sec", 0.0) if history else 0.0)
+            audio_hours = live_data.get("cumulative_audio_hours", history[-1].get("cumulative_audio_hours", 0.0) if history else 0.0)
+            active_voice = live_data.get("active_voice", "piper")
+            active_voices = live_data.get("active_voices", ["piper"])
+            avg_step_sec = live_data.get("avg_step_sec", 0.6)
+            eta_formatted = live_data.get("eta_formatted", "--")
+            estimated_finish_time = live_data.get("estimated_finish_time", "--")
+
+            # Fallback if no step_history but milestones exist
+            if not history and milestones:
+                for m in milestones:
+                    history.append({
+                        "step": m["step"],
+                        "loss": m["loss"],
+                        "accuracy": 20.0,
+                        "masked_accuracy_pct": 20.0,
+                        "cumulative_audio_sec": m["hours"] * 3600.0,
+                        "cumulative_audio_hours": m["hours"],
+                        "disk_bytes_used": 0,
+                        "active_voices": ["piper_neural"],
+                        "active_voice": "piper_neural",
+                    })
+
+            clean_recent_logs = []
+            if history:
+                for h in history[-35:]:
+                    lr_part = f" | LR: {h['learning_rate']:.2e}" if "learning_rate" in h else ""
+                    clean_recent_logs.append(
+                        f"[{arch.upper()}] Step {h['step']:4d}/{total_steps}{lr_part} | Loss: {h['loss']:.4f} | Masked Acc: {h.get('masked_accuracy_pct', h.get('accuracy', 0.0)):.1f}% | Audio: {h['cumulative_audio_hours']:.3f}h"
+                    )
+
+            return {
+                "is_running": is_running,
+                "source": arch,
+                "arch": arch,
+                "tier": tier,
+                "run_name": run_name,
+                "parameters_m": params_m,
+                "step": step,
+                "total_steps": total_steps,
+                "loss": loss,
+                "accuracy": acc,
+                "masked_accuracy_pct": acc,
+                "cumulative_audio_sec": audio_sec,
+                "cumulative_audio_hours": audio_hours,
+                "disk_space_saved_mb": round((audio_sec * 32000) / 1024 / 1024, 2),
+                "disk_bytes_used": 0,
+                "active_voice": active_voice,
+                "active_voices": active_voices,
+                "eta_formatted": eta_formatted or "--",
+                "estimated_finish_time": estimated_finish_time or "--",
+                "avg_step_sec": round(avg_step_sec, 2),
+                "history": history,
+                "milestones": milestones,
+                "recent_logs": clean_recent_logs[-35:],
+                "buffer_occupancy": live_data.get("buffer_occupancy", 0),
+                "buffer_capacity": live_data.get("buffer_capacity", 20),
+                "buffer_watermark": live_data.get("buffer_watermark", 10),
+                "pool_size": live_data.get("pool_size", 0),
+                "profiler": live_data.get("profiler", {}),
+            }
 
     if arch == "phono_hubert":
         p = subprocess.run(["pgrep", "-f", "run_pretrain.py.*phono_hubert"], capture_output=True, text=True)
@@ -822,6 +1105,7 @@ def get_live_scaling_status(arch: Optional[str] = None, tier: Optional[str] = No
             "source": "phono_hubert",
             "arch": "phono_hubert",
             "tier": tier,
+            "run_name": live_data.get("run_name", getattr(state, "current_run_name", "run_1")),
             "parameters_m": params_m,
             "step": step,
             "total_steps": total_steps,
@@ -1017,6 +1301,7 @@ def get_live_scaling_status(arch: Optional[str] = None, tier: Optional[str] = No
         "is_running": is_running,
         "source": "scaling_benchmark",
         "tier": tier,
+        "run_name": live_data.get("run_name", getattr(state, "current_run_name", "run_1")),
         "parameters_m": params_m,
         "step": step,
         "total_steps": total_steps,
@@ -1347,11 +1632,31 @@ def background_pretrain_worker(steps: int = 50, batch_size: int = 4, lr: float =
     state.pretrain_status["is_running"] = False
 
 
+@app.get("/api/training/runs")
+def list_training_runs(arch: Optional[str] = None, tier: Optional[str] = None):
+    """List all training runs across architectures and tiers."""
+    return {"runs": RunManager.list_runs(arch=arch, tier=tier)}
+
+
+@app.get("/api/training/runs/{arch}/{tier}/{run_name}")
+def get_training_run_details(arch: str, tier: str, run_name: str):
+    """Retrieve full configuration, history, and status for a specific training run."""
+    details = RunManager.get_run_details(arch=arch, tier=tier, run_name=run_name)
+    if details is None:
+        raise HTTPException(status_code=404, detail=f"Run '{run_name}' not found for {arch}/{tier}")
+    return details
+
+
 @app.get("/api/pretrain/status")
-def get_pretrain_status(arch: Optional[str] = None, tier: Optional[str] = None):
+def get_pretrain_status(
+    arch: Optional[str] = None,
+    tier: Optional[str] = None,
+    run_name: Optional[str] = None,
+):
     arch = arch or state.current_arch
     tier = tier or state.current_tier
-    live = get_live_scaling_status(arch=arch, tier=tier)
+    run_name = run_name or getattr(state, "current_run_name", None)
+    live = get_live_scaling_status(arch=arch, tier=tier, run_name=run_name)
     if live is not None:
         return live
     return state.pretrain_status

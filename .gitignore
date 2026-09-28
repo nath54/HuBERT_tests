@@ -19,3 +19,5 @@ outputs/probes/*.png
 *.pt
 logs/
 *history*.json
+checkpoints/
+data/

@@ -48,6 +48,11 @@ class HuBERTConfig:
     blank_index: int = 0
     pad_index: int = 0
 
+    # Masking settings
+    masking_mode: str = "none"        # 'none', 'span', 'specaugment', 'dual'
+    mask_prob: float = 0.0
+    mask_length: int = 10
+
     def compute_output_length(self, input_length: int) -> int:
         """Compute the sequence length after CNN downsampling."""
         length = input_length

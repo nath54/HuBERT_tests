@@ -100,9 +100,12 @@ class KMeansUnitExtractor(BaseTargetExtractor):
                 self.is_fitted = True
         labels_np = self.kmeans.predict(feats_np)
         labels = torch.from_numpy(labels_np).long()
+        t_len = torch.tensor(len(labels), dtype=torch.long)
         return {
             "targets": labels,
-            "target_lengths": torch.tensor(len(labels), dtype=torch.long),
+            "target_lengths": t_len,
+            "frame_targets": labels,
+            "frame_lengths": t_len,
         }
 
 
@@ -113,6 +116,7 @@ class PhonemeTargetExtractor(BaseTargetExtractor):
     - <silence> for leading/trailing silence
     - <same_phoneme_than_last_one> for sustained frame modeling
     - <eos> for sequence termination
+    - Frame-level interpolated targets for frame-synchronous SSL models
     """
 
     def __init__(self, tokenizer: Optional[PhonemeTokenizer] = None):
@@ -152,8 +156,40 @@ class PhonemeTargetExtractor(BaseTargetExtractor):
         # 2. Encode to token IDs
         token_ids = self.tokenizer.encode(flat_phonemes, add_eos=True)
 
+        # 3. Build frame-synchronous phoneme targets (16kHz / 320 hop = 50Hz frames)
+        # Filter non-acoustic diacritics from CTC sequence targets (preserve eos token at end)
+        diacritic_ids = {self.tokenizer.token_to_id.get(ch) for ch in ("ˈ", "ˌ", "ː", "ˑ") if ch in self.tokenizer.token_to_id}
+        ctc_token_ids = [t for t in token_ids if t not in diacritic_ids]
+        if not ctc_token_ids:
+            ctc_token_ids = [self.tokenizer.silence_token_id, self.tokenizer.eos_token_id]
+
+        # 3. Build frame-synchronous phoneme targets (16kHz / 320 hop = 50Hz frames)
+        num_samples = waveform.shape[-1] if waveform.ndim > 0 else 1
+        num_frames = max(1, num_samples // 320)
+
+        # For frame targets: also filter spaces/whitespace (spaces are orthographic, not acoustic temporal frames)
+        non_frame_tokens = {"ˈ", "ˌ", "ː", "ˑ", " ", "-", "\n", "\t"}
+        non_frame_ids = {self.tokenizer.token_to_id.get(ch) for ch in non_frame_tokens if ch in self.tokenizer.token_to_id}
+        speech_token_ids = [t for t in token_ids if t != self.tokenizer.eos_token_id and t not in non_frame_ids]
+        if not speech_token_ids:
+            speech_token_ids = [self.tokenizer.silence_token_id]
+
+        silence_pad = min(2, max(0, num_frames // 10))
+        speech_frames = max(1, num_frames - 2 * silence_pad)
+
+        frame_targets = torch.full((num_frames,), self.tokenizer.silence_token_id, dtype=torch.long)
+        L = len(speech_token_ids)
+        for j in range(speech_frames):
+            idx = min(L - 1, (j * L) // speech_frames)
+            frame_targets[silence_pad + j] = speech_token_ids[idx]
+
+        if num_frames > 2 and silence_pad > 0:
+            frame_targets[-1] = self.tokenizer.silence_token_id
+
         return {
-            "targets": torch.tensor(token_ids, dtype=torch.long),
-            "target_lengths": torch.tensor(len(token_ids), dtype=torch.long),
-            "phoneme_str": self.tokenizer.decode(token_ids, skip_special=True),
+            "targets": torch.tensor(ctc_token_ids, dtype=torch.long),
+            "target_lengths": torch.tensor(len(ctc_token_ids), dtype=torch.long),
+            "frame_targets": frame_targets,
+            "frame_lengths": torch.tensor(num_frames, dtype=torch.long),
+            "phoneme_str": self.tokenizer.decode(ctc_token_ids, skip_special=True),
         }

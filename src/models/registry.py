@@ -13,6 +13,33 @@ import torch.nn as nn
 from src.models.config import HuBERTConfig
 from src.models.hubert_pretrain import HuBERTForPreTraining
 from src.models.phono_hubert import PhonoHuBERTConfig, PhonoHuBERTForPreTraining
+from src.models.phono_hubert_dual import PhonoHuBERTDualConfig, PhonoHuBERTDualForPreTraining
+from src.models.phono_hubert_hierarchical import (
+    PhonoHuBERTHierarchicalConfig,
+    PhonoHuBERTHierarchicalForPreTraining,
+)
+from src.models.phono_hubert_recursive import (
+    PhonoHuBERTRecursiveConfig,
+    PhonoHuBERTRecursiveForPreTraining,
+)
+from src.models.phono_variants import (
+    PhonoV1FrontendConfig,
+    PhonoV1FrontendForPreTraining,
+    PhonoV2SpecAugmentConfig,
+    PhonoV2SpecAugmentForPreTraining,
+    PhonoV3HybridConfig,
+    PhonoV3HybridForPreTraining,
+    PhonoV4ScaledConfig,
+    PhonoV4ScaledForPreTraining,
+    PhonoV5BeamConfig,
+    PhonoV5BeamForPreTraining,
+    PhonoV61MoEConfig,
+    PhonoV61MoEForPreTraining,
+    PhonoV62SparseConfig,
+    PhonoV62SparseForPreTraining,
+    PhonoV63DiffusionConfig,
+    PhonoV63DiffusionForPreTraining,
+)
 from src.data.target_extractors import (
     BaseTargetExtractor,
     KMeansUnitExtractor,
@@ -132,7 +159,18 @@ class ModelRegistry:
         # Apply any variable parameter overrides passed by caller
         tier_params.update(kwargs)
 
-        return config_cls(**tier_params)
+        # Filter parameters to only fields accepted by config_cls
+        import dataclasses
+        import inspect
+        if dataclasses.is_dataclass(config_cls):
+            valid_fields = {f.name for f in dataclasses.fields(config_cls)}
+            filtered_params = {k: v for k, v in tier_params.items() if k in valid_fields}
+        else:
+            sig = inspect.signature(config_cls.__init__)
+            valid_fields = set(sig.parameters.keys()) - {"self"}
+            filtered_params = {k: v for k, v in tier_params.items() if k in valid_fields}
+
+        return config_cls(**filtered_params)
 
     @classmethod
     def build_model(
@@ -211,10 +249,125 @@ ModelRegistry.register(
 
 ModelRegistry.register(
     model_id="phono_hubert",
-    display_name="PhonoHuBERT (Direct Phoneme Prediction)",
-    description="Direct acoustic-to-phoneme prediction with specialized tokens (<same_as_last>, <silence>, <mask>, <blank>).",
+    display_name="PhonoHuBERT (Anti-Blank Regularized CTC)",
+    description="Direct acoustic-to-phoneme prediction with quadratic anti-blank margin regularization & calibrated decoding.",
     model_cls=PhonoHuBERTForPreTraining,
     config_cls=PhonoHuBERTConfig,
     target_extractor_cls=PhonemeTargetExtractor,
     target_type="phoneme_tokens",
 )(PhonoHuBERTForPreTraining)
+
+ModelRegistry.register(
+    model_id="phono_hubert_dual",
+    display_name="PhonoHuBERT-Dual (Masked Frame SSL + CTC)",
+    description="Dual-loss speech Transformer pairing frame-synchronous masked phoneme Cross-Entropy with auxiliary sequence CTC.",
+    model_cls=PhonoHuBERTDualForPreTraining,
+    config_cls=PhonoHuBERTDualConfig,
+    target_extractor_cls=PhonemeTargetExtractor,
+    target_type="phoneme_tokens",
+)(PhonoHuBERTDualForPreTraining)
+
+ModelRegistry.register(
+    model_id="phono_hubert_hierarchical",
+    display_name="PhonoHuBERT-Hierarchical (2-Stage Gated Head)",
+    description="Two-stage gated architecture decomposing decoding into an Acoustic State Router and a pure Phoneme Head.",
+    model_cls=PhonoHuBERTHierarchicalForPreTraining,
+    config_cls=PhonoHuBERTHierarchicalConfig,
+    target_extractor_cls=PhonemeTargetExtractor,
+    target_type="phoneme_tokens",
+)(PhonoHuBERTHierarchicalForPreTraining)
+
+ModelRegistry.register(
+    model_id="phono_hubert_recursive",
+    display_name="PhonoHuBERT-Recursive (Recurrent Temporal Feedback)",
+    description="Autoregressive recurrent frame-memory feedback head eliminating the conditional independence assumption of CTC.",
+    model_cls=PhonoHuBERTRecursiveForPreTraining,
+    config_cls=PhonoHuBERTRecursiveConfig,
+    target_extractor_cls=PhonemeTargetExtractor,
+    target_type="phoneme_tokens",
+)(PhonoHuBERTRecursiveForPreTraining)
+
+# -------------------------------------------------------------
+# Progressive Levers for SOTA Phoneme Recognition (< 10% PER)
+# -------------------------------------------------------------
+
+ModelRegistry.register(
+    model_id="phono_v1_frontend",
+    display_name="Phono-V1 (Pretrained Front-End)",
+    description="Variant 1: Hierarchical router with Meta HuBERT 960h formant-tuned 7-layer CNN feature extractor.",
+    model_cls=PhonoV1FrontendForPreTraining,
+    config_cls=PhonoV1FrontendConfig,
+    target_extractor_cls=PhonemeTargetExtractor,
+    target_type="phoneme_tokens",
+)(PhonoV1FrontendForPreTraining)
+
+ModelRegistry.register(
+    model_id="phono_v2_specaugment",
+    display_name="Phono-V2 (SpecAugment)",
+    description="Variant 2: Variant 1 + dynamic acoustic time-span and frequency-channel SpecAugment.",
+    model_cls=PhonoV2SpecAugmentForPreTraining,
+    config_cls=PhonoV2SpecAugmentConfig,
+    target_extractor_cls=PhonemeTargetExtractor,
+    target_type="phoneme_tokens",
+)(PhonoV2SpecAugmentForPreTraining)
+
+ModelRegistry.register(
+    model_id="phono_v3_hybrid",
+    display_name="Phono-V3 (Hybrid Real Data)",
+    description="Variant 3: Variant 2 + hybrid streaming of real human speech (LibriSpeech) and synthetic TTS.",
+    model_cls=PhonoV3HybridForPreTraining,
+    config_cls=PhonoV3HybridConfig,
+    target_extractor_cls=PhonemeTargetExtractor,
+    target_type="phoneme_tokens",
+)(PhonoV3HybridForPreTraining)
+
+ModelRegistry.register(
+    model_id="phono_v4_scaled",
+    display_name="Phono-V4 (Deep Scaled)",
+    description="Variant 4: Variant 3 + deep scaled transformer capacity and extended schedule.",
+    model_cls=PhonoV4ScaledForPreTraining,
+    config_cls=PhonoV4ScaledConfig,
+    target_extractor_cls=PhonemeTargetExtractor,
+    target_type="phoneme_tokens",
+)(PhonoV4ScaledForPreTraining)
+
+ModelRegistry.register(
+    model_id="phono_v5_beam",
+    display_name="Phono-V5 (Phonotactic Beam)",
+    description="Variant 5: Variant 4 + CTC Prefix Beam Search decoding with phonotactic transition constraints.",
+    model_cls=PhonoV5BeamForPreTraining,
+    config_cls=PhonoV5BeamConfig,
+    target_extractor_cls=PhonemeTargetExtractor,
+    target_type="phoneme_tokens",
+)(PhonoV5BeamForPreTraining)
+
+ModelRegistry.register(
+    model_id="phono_v6_1_moe",
+    display_name="Phono-V6.1 (Mixture of Experts)",
+    description="Variant 6.1: Variant 5 + Top-2 Gated Mixture of Experts FFN with Switch auxiliary load balancing.",
+    model_cls=PhonoV61MoEForPreTraining,
+    config_cls=PhonoV61MoEConfig,
+    target_extractor_cls=PhonemeTargetExtractor,
+    target_type="phoneme_tokens",
+)(PhonoV61MoEForPreTraining)
+
+ModelRegistry.register(
+    model_id="phono_v6_2_sparse",
+    display_name="Phono-V6.2 (Sparse Syllabic Attention)",
+    description="Variant 6.2: Variant 6.1 + Sparse Local Syllabic Attention (+-320ms window) preventing attention diffusion.",
+    model_cls=PhonoV62SparseForPreTraining,
+    config_cls=PhonoV62SparseConfig,
+    target_extractor_cls=PhonemeTargetExtractor,
+    target_type="phoneme_tokens",
+)(PhonoV62SparseForPreTraining)
+
+ModelRegistry.register(
+    model_id="phono_v6_3_diffusion",
+    display_name="Phono-V6.3 (Diffusion Decoding)",
+    description="Variant 6.3: Variant 6.2 + Iterative Sliding Window Denoising / Diffusion Decoding over acoustic representations.",
+    model_cls=PhonoV63DiffusionForPreTraining,
+    config_cls=PhonoV63DiffusionConfig,
+    target_extractor_cls=PhonemeTargetExtractor,
+    target_type="phoneme_tokens",
+)(PhonoV63DiffusionForPreTraining)
+

@@ -203,46 +203,133 @@ Navigate to **http://localhost:8000** to access the 6 tabs:
 
 ## Pre-Training Speech Models (0-Disk Streaming)
 
-Run self-supervised pre-training using multi-speaker neural speech synthesized entirely in RAM:
+Run self-supervised pre-training using multi-speaker neural speech synthesized entirely in RAM across 5 registered speech architectures:
 
-### Pre-Train PhonoHuBERT (Direct Phonemes)
+### 1. PhonoHuBERT (Anti-Blank Regularized CTC)
+Direct acoustic-to-phoneme prediction with quadratic anti-blank margin regularization and calibrated decoding:
 ```bash
-# PhonoHuBERT Medium (31.8M params) with 6 worker threads and bounded buffer
 .venv/bin/python scripts/run_pretrain.py \
     --arch phono_hubert \
-    --tier medium \
+    --tier mini \
     --batch_size 8 \
-    --num_workers 6 \
-    --buffer_size 50 \
-    --watermark 25 \
-    --steps 625 \
-    --lr 0.0001 \
-    --resume
+    --num_workers 4 \
+    --steps 1000 \
+    --lr 0.0003 \
+    --min_lr 0.00003 \
+    --warmup_steps 100 \
+    --run_name phono_reg_run1
 ```
 
-### Pre-Train HuBERT (Acoustic K-Means SSL)
+### 2. PhonoHuBERT-Dual (Masked Frame SSL + Sequence CTC)
+Dual-loss speech Transformer pairing frame-synchronous masked phoneme Cross-Entropy (cannot collapse to blank) with auxiliary CTC sequence alignment:
 ```bash
-# HuBERT Mini (8.0M params) with 100 acoustic clusters
+.venv/bin/python scripts/run_pretrain.py \
+    --arch phono_hubert_dual \
+    --tier mini \
+    --batch_size 8 \
+    --num_workers 4 \
+    --steps 1000 \
+    --lr 0.0003 \
+    --min_lr 0.00003 \
+    --warmup_steps 100 \
+    --masking_mode span \
+    --mask_prob 0.4 \
+    --run_name dual_loss_run1
+```
+
+### 3. PhonoHuBERT-Hierarchical (2-Stage Gated Head)
+Two-stage gated architecture decomposing decoding into an Acoustic State Router (`blank`, `silence`, `noise`, `speech`) and a pure Linguistic Phoneme Head:
+```bash
+.venv/bin/python scripts/run_pretrain.py \
+    --arch phono_hubert_hierarchical \
+    --tier mini \
+    --batch_size 8 \
+    --num_workers 4 \
+    --steps 1000 \
+    --lr 0.0003 \
+    --min_lr 0.00003 \
+    --warmup_steps 100 \
+    --run_name hierarchical_run1
+```
+
+### 4. PhonoHuBERT-Recursive (Recurrent Temporal Frame Feedback)
+Autoregressive recurrent frame-memory feedback head breaking CTC conditional independence and explicitly modeling sustained-phoneme durations:
+```bash
+.venv/bin/python scripts/run_pretrain.py \
+    --arch phono_hubert_recursive \
+    --tier mini \
+    --batch_size 8 \
+    --num_workers 4 \
+    --steps 1000 \
+    --lr 0.0003 \
+    --min_lr 0.00003 \
+    --warmup_steps 100 \
+    --run_name recursive_run1
+```
+
+### 5. HuBERT (Acoustic K-Means SSL Baseline)
+```bash
 .venv/bin/python scripts/run_pretrain.py \
     --arch hubert_kmeans \
     --tier mini \
     --batch_size 8 \
     --num_workers 4 \
-    --buffer_size 20 \
-    --watermark 10 \
-    --steps 500
+    --steps 500 \
+    --masking_mode span \
+    --mask_prob 0.5 \
+    --run_name hubert_kmeans_run1
 ```
 
 ### Key Pre-Training CLI Options
-- `--arch`: `phono_hubert` (direct phonemes) or `hubert_kmeans` (acoustic cluster units).
+- `--arch`: `phono_hubert`, `phono_hubert_dual`, `phono_hubert_hierarchical`, `phono_hubert_recursive`, or `hubert_kmeans`.
 - `--tier`: `mini`, `small`, `medium`, or `base`.
-- `--override`: Custom parameter overrides (e.g. `--override "mask_prob=0.5,encoder_layers=10"`).
+- `--min_lr`: Minimum learning rate floor for cosine decay (default: `1e-5`, ensures optimizer never stalls at 0).
+- `--blank_penalty`: Calibrated blank logit deduction for greedy decoding (e.g. `1.5 - 2.5`).
+- `--masking_mode`: Configurable masking scheme (`none`, `specaugment`, `span`, `dual`).
+- `--mask_prob` / `--mask_length`: Masking probability and span length in 20ms frames (default: `0.65`, `10`).
+- `--warmup_steps`: Linear learning rate warmup steps before cosine decay (e.g. `50`).
+- `--freeze_cnn_steps`: Freeze the 7-layer temporal 1D CNN feature encoder for initial steps to stabilize the Transformer backbone.
+- `--override`: Custom parameter overrides (e.g. `--override "encoder_layers=10,hidden_dropout=0.1"`).
 - `--num_workers`: Number of parallel Piper synthesis threads on CPU.
 - `--buffer_size`: Max batches in the bounded queue (default: `20` or `50`).
 - `--watermark`: Low watermark batch count to resume worker synthesis (default: `10` or `25`).
 - `--use_rolling_pool` / `--no_rolling_pool`: Toggle the dynamic in-RAM utterance pool.
 - `--pool_size`: Number of synthesized utterances maintained in RAM (default: `250`).
-- `--resume`: Auto-resume from `checkpoint_latest.pt`.
+- `--run_name`: Name for the training run (e.g. `--run_name exp_clean_ctc`). If omitted, automatically assigns the next sequential run number (`run_1`, `run_2`, etc.).
+- `--resume`: Auto-resume from the latest checkpoint for the active run (or specify a custom checkpoint path).
+
+---
+
+## Multi-Run Management & Full Configuration Persistence
+
+Every training run is completely isolated with its own frozen configuration, checkpoints, and telemetry:
+- **Automatic / Custom Run Naming**: Multiple runs of the same model and tier (e.g., `phono_hubert` / `medium`) are saved into isolated subdirectories: `checkpoints/<arch>/<tier>/<run_name>/` and `logs/<arch>/<tier>/<run_name>/`.
+- **Full Configuration Saved at Start**: Upon launch, `train_config.json` is generated capturing:
+  - Model architecture parameters (`layers`, `heads`, `embed_dim`, `ffn_dim`, `conv_layers`, `vocab_size`, trainable parameter count).
+  - Training hyperparameters (`lr`, `warmup_steps`, `freeze_cnn_steps`, `batch_size`, `steps`, `weight_decay`, `clip_grad_norm`, AMP).
+  - Masking mode and parameters (`none`, `specaugment`, `span`, `dual`).
+  - Streaming data generator settings (`num_workers`, `buffer_size`, `watermark`, `pool_size`).
+  - Environment metadata (PyTorch version, CUDA version, GPU model, Git commit, CLI command).
+
+### Managing Runs via CLI (`manage_runs.py`)
+
+```bash
+# 1. List all training runs across models and tiers
+python scripts/manage_runs.py list
+
+# 2. Show complete frozen configuration, checkpoints, and milestones of a run
+python scripts/manage_runs.py show run_1 --arch phono_hubert --tier medium
+
+# 3. Compare multiple runs side-by-side
+python scripts/manage_runs.py compare run_1 run_2 --arch phono_hubert --tier medium
+
+# 4. Safely delete a run from disk and the registry
+python scripts/manage_runs.py delete run_1 --arch phono_hubert --tier medium -y
+```
+
+### REST API Endpoints
+- `GET /api/training/runs`: Returns a catalog of all runs with configurations, steps, loss, PER, and status.
+- `GET /api/training/runs/{arch}/{tier}/{run_name}`: Returns the complete frozen configuration and checkpoint history for a specific run.
 
 ---
 

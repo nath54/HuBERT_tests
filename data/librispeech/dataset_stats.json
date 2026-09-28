@@ -1,11 +1,10 @@
 {
-  "dataset_name": "LibriSpeech (dev-clean)",
-  "total_utterances": 2703,
-  "train_utterances": 2298,
-  "val_utterances": 405,
-  "total_audio_seconds": 19396.1,
-  "total_audio_hours": 5.39,
-  "min_duration": 1.45,
-  "max_duration": 32.65,
-  "avg_duration": 7.18
+  "dataset_name": "LibriSpeech (train-clean-100)",
+  "total_utterances": 28539,
+  "total_speakers": 251,
+  "total_audio_seconds": 362127.2,
+  "total_audio_hours": 100.59,
+  "min_duration": 1.41,
+  "max_duration": 24.52,
+  "avg_duration": 12.69
 }
