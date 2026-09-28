@@ -335,15 +335,13 @@ def evaluate_direct_phonemes(
         ref_phonemes = runner.phonemize_text(ref_text)
 
         with torch.no_grad():
-            if hasattr(model, "decode_sliding_diffusion"):
-                decoded_ids = model.decode_sliding_diffusion(speech_tensor)[0]
-            elif hasattr(model, "decode_beam") and getattr(getattr(model, "config", None), "beam_width", 0) > 0:
-                decoded_ids = model.decode_beam(speech_tensor)[0]
-            elif hasattr(model, "decode_greedy"):
+            if hasattr(model, "decode_greedy"):
                 if has_penalty_param:
                     decoded_ids = model.decode_greedy(speech_tensor, blank_penalty=blank_penalty)[0]
                 else:
                     decoded_ids = model.decode_greedy(speech_tensor)[0]
+            elif hasattr(model, "decode_beam") and getattr(getattr(model, "config", None), "beam_width", 0) > 0:
+                decoded_ids = model.decode_beam(speech_tensor)[0]
             else:
                 out = model(audio=speech_tensor)
                 decoded_ids = out["logits"].argmax(dim=-1)[0].tolist()
