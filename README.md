@@ -334,7 +334,7 @@ Evaluated on genuine downstream LibriSpeech test utterances:
 | **Phono-V6.0 (Procedural)** | 7.0s | 100% Synthetic Procedural TTS | 1,000 steps (~2.5h) | Procedural Clean Speech | **58.0%** | ~65% |
 | **Phono-V6.1 (MoE 4-Experts)** | 7.0s | 50% Synthetic / 50% LibriSpeech | 2,000 steps (~15h) | Hierarchical Mixture-of-Experts | **45.92%** | 50.1% |
 | **Phono-V6.2 (Sparse Attention)** | 30.0s | 100% Genuine LibriSpeech Clean | 4,000 steps (52.1h) | Sparse Local Attention + InterCTC | **15.10%** | **22.18%** |
-| **Phono-V6.3 (Latent Diffusion)** | 30.0s | 100% Genuine LibriSpeech Clean | 4,000 steps (56.2h) | Latent Diffusion Multi-Task Regularization | **13.70%** *(Record!)* | **20.74%** |
+| **Phono-V6.3 (Latent Diffusion)** | 30.0s | 100% Genuine LibriSpeech Clean | 4,000 steps (56.2h) | Latent Diffusion Multi-Task Regularization | **13.70%** *(Project Record)* | **20.74%** |
 
 ```
 PER Progression Across Model Generations:
@@ -342,7 +342,7 @@ PER Progression Across Model Generations:
   Phono-V6.0 (Procedural):     ███████████████████████ 58.0%
   Phono-V6.1 (MoE 4-Experts):  ██████████████████ 45.92%
   Phono-V6.2 (Sparse + 30s):   ██████ 15.10%
-  Phono-V6.3 (Diffusion):      █████ 13.70% (New All-Time Record!)
+  Phono-V6.3 (Diffusion):      █████ 13.70% (Project Record)
 ```
 
 ### Key Pre-Training CLI Options
