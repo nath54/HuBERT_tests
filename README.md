@@ -334,15 +334,15 @@ Evaluated on genuine downstream LibriSpeech test utterances:
 | **Phono-V6.0 (Procedural)** | 7.0s | 100% Synthetic Procedural TTS | 1,000 steps (~2.5h) | Procedural Clean Speech | **58.0%** | ~65% |
 | **Phono-V6.1 (MoE 4-Experts)** | 7.0s | 50% Synthetic / 50% LibriSpeech | 2,000 steps (~15h) | Hierarchical Mixture-of-Experts | **45.92%** | 50.1% |
 | **Phono-V6.2 (Sparse Attention)** | 30.0s | 100% Genuine LibriSpeech Clean | 4,000 steps (52.1h) | Sparse Local Attention + InterCTC | **15.10%** | **22.18%** |
-| **Phono-V6.3 (Latent Diffusion)** | 30.0s | 100% Genuine LibriSpeech Clean | *4,000 steps (Step 2000: 29.3h)* | Sliding Gaussian Diffusion Refiner | **23.15%** *(Step 2000)* | **18.58%** |
+| **Phono-V6.3 (Latent Diffusion)** | 30.0s | 100% Genuine LibriSpeech Clean | 4,000 steps (56.2h) | Sliding Gaussian Diffusion Refiner | **20.63%** *(Step 3400)* | **18.05%** |
 
 ```
 PER Progression Across Model Generations:
   Phono-V5 (Dense Baseline):   ██████████████████████████████ 75.0%
   Phono-V6.0 (Procedural):     ███████████████████████ 58.0%
   Phono-V6.1 (MoE 4-Experts):  ██████████████████ 45.92%
-  Phono-V6.2 (Sparse + 30s):   ██████ 15.10% (Record)
-  Phono-V6.3 (Diffusion):      █████ 23.15% (Raw PER @ Step 2000; Lexicon: 18.58%)
+  Phono-V6.3 (Diffusion):      ████ 20.63% (Best PER; Lexicon: 18.05%)
+  Phono-V6.2 (Sparse + 30s):   ███ 15.10% (Record)
 ```
 
 ### Key Pre-Training CLI Options
