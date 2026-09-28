@@ -335,7 +335,9 @@ def evaluate_direct_phonemes(
         ref_phonemes = runner.phonemize_text(ref_text)
 
         with torch.no_grad():
-            if hasattr(model, "decode_beam") and getattr(getattr(model, "config", None), "beam_width", 0) > 0:
+            if hasattr(model, "decode_sliding_diffusion"):
+                decoded_ids = model.decode_sliding_diffusion(speech_tensor)[0]
+            elif hasattr(model, "decode_beam") and getattr(getattr(model, "config", None), "beam_width", 0) > 0:
                 decoded_ids = model.decode_beam(speech_tensor)[0]
             elif hasattr(model, "decode_greedy"):
                 if has_penalty_param:
@@ -451,9 +453,11 @@ def main():
     parser.add_argument("--masking_mode", type=str, default=None, choices=["none", "span", "specaugment", "dual"], help="Acoustic masking strategy (none, span, specaugment, dual)")
     parser.add_argument("--mask_prob", type=float, default=None, help="Probability of acoustic masking")
     parser.add_argument("--mask_length", type=int, default=None, help="Span mask length in 20ms frames")
-    parser.add_argument("--save_interval", type=int, default=25, help="Checkpoint interval")
+    parser.add_argument("--save_interval", type=int, default=4000, help="Checkpoint interval (default 4000 to minimize SSD writes)")
     parser.add_argument("--real_speech_manifest", type=str, default=None, help="Path to real speech JSON manifest for hybrid pre-training")
     parser.add_argument("--real_ratio", type=float, default=0.5, help="Ratio of real human speech in hybrid streaming (0.0=all synthetic, 1.0=all real)")
+    parser.add_argument("--min_duration_sec", type=float, default=1.0, help="Minimum utterance duration in seconds")
+    parser.add_argument("--max_duration_sec", type=float, default=30.0, help="Maximum utterance duration in seconds")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--run_name", type=str, default=None, help="Name of this training run (default: auto-incremented run_1, run_2, ...)")
     parser.add_argument("--resume", nargs="?", const="auto", default=None, help="Resume training")
@@ -535,8 +539,16 @@ def main():
     if not real_manifest and (
         getattr(config, "hybrid_training", False)
         or args.arch in ("phono_v3_hybrid", "phono_v4_scaled", "phono_v5_beam")
+        or args.arch.startswith("phono_v6")
     ):
         real_manifest = getattr(config, "librispeech_manifest", "data/librispeech/librispeech_train.json")
+
+    # For v6.2+ variants, default to 100% human speech if real_ratio wasn't explicitly changed
+    if args.arch in ("phono_v6_2_sparse", "phono_v6_3_diffusion") and args.real_ratio == 0.5:
+        args.real_ratio = 1.0
+
+    # For 100% human speech datasets, disable rolling pool replacement to eliminate worker CPU/GIL churn
+    use_pool = args.use_rolling_pool if args.real_ratio < 1.0 else False
 
     batch_generator = BufferedSpeechBatchGenerator(
         voice_manager=voice_manager,
@@ -546,8 +558,10 @@ def main():
         max_buffer_size=args.buffer_size,
         low_watermark=args.watermark,
         num_workers=args.num_workers,
-        use_rolling_pool=args.use_rolling_pool,
+        use_rolling_pool=use_pool,
         pool_capacity=args.pool_size,
+        min_duration_sec=args.min_duration_sec,
+        max_duration_sec=args.max_duration_sec,
         real_speech_manifest=real_manifest,
         real_ratio=args.real_ratio,
         profiler=profiler,
@@ -643,12 +657,12 @@ def main():
             t_train_start = time.perf_counter()
 
             with profiler.time_block("time_device_transfer"):
-                audio = batch["audio"].to(device)
-                targets = batch["targets"].to(device)
-                target_lengths = batch["target_lengths"].to(device)
-                audio_lengths = batch["audio_lengths"].to(device)
-                frame_targets = batch["frame_targets"].to(device) if "frame_targets" in batch and batch["frame_targets"] is not None else None
-                frame_lengths = batch["frame_lengths"].to(device) if "frame_lengths" in batch and batch["frame_lengths"] is not None else None
+                audio = batch["audio"].to(device, non_blocking=True)
+                targets = batch["targets"].to(device, non_blocking=True)
+                target_lengths = batch["target_lengths"].to(device, non_blocking=True)
+                audio_lengths = batch["audio_lengths"].to(device, non_blocking=True)
+                frame_targets = batch["frame_targets"].to(device, non_blocking=True) if "frame_targets" in batch and batch["frame_targets"] is not None else None
+                frame_lengths = batch["frame_lengths"].to(device, non_blocking=True) if "frame_lengths" in batch and batch["frame_lengths"] is not None else None
 
             batch_dur = sum(batch["durations"])
             total_audio_sec += batch_dur
@@ -690,6 +704,9 @@ def main():
 
             loss_val = round(float(loss.item()), 4)
             acc_val = round(float(acc.item()), 2) if acc is not None else 0.0
+            inter_loss_val = round(float(out.get("inter_ctc_loss", 0.0)), 4)
+            diff_loss_val = round(float(out.get("diff_loss", 0.0)), 4)
+            ref_ctc_loss_val = round(float(out.get("refined_ctc_loss", 0.0)), 4)
 
             avg_step_sec = sum(recent_step_durations) / len(recent_step_durations)
             rem_steps = max(0, args.steps - step)
@@ -707,6 +724,9 @@ def main():
                 "progress_pct": round((step / args.steps) * 100.0, 1),
                 "learning_rate": lr_current,
                 "loss": loss_val,
+                "inter_ctc_loss": inter_loss_val,
+                "diff_loss": diff_loss_val,
+                "refined_ctc_loss": ref_ctc_loss_val,
                 "masked_accuracy_pct": acc_val,
                 "cumulative_audio_sec": round(total_audio_sec, 1),
                 "cumulative_audio_hours": round(hours, 4),
@@ -729,6 +749,9 @@ def main():
                 "step": step,
                 "learning_rate": lr_current,
                 "loss": loss_val,
+                "inter_ctc_loss": inter_loss_val,
+                "diff_loss": diff_loss_val,
+                "refined_ctc_loss": ref_ctc_loss_val,
                 "accuracy": acc_val,
                 "masked_accuracy_pct": acc_val,
                 "cumulative_audio_sec": round(total_audio_sec, 1),
@@ -738,15 +761,18 @@ def main():
                 "active_voice": ", ".join(batch["voices"][:2]),
             }
             step_history.append(step_record)
-            if step % 5 == 0 or step == args.steps:
+            if step % 50 == 0 or step == args.steps:
                 run_mgr.update_step_history(step_history)
 
             if step % 5 == 0 or step == start_step:
-                print(f"[{args.arch.upper()}] Step {step:4d}/{args.steps} | LR: {lr_current:.2e} | Loss: {loss_val:.4f} | Acc: {acc_val:5.1f}% | "
+                inter_str = f" | InterCTC: {inter_loss_val:.3f}" if inter_loss_val > 0 else ""
+                diff_str = f" | Diff: {diff_loss_val:.3f}" if diff_loss_val > 0 else ""
+                ref_str = f" | RefCTC: {ref_ctc_loss_val:.3f}" if ref_ctc_loss_val > 0 else ""
+                print(f"[{args.arch.upper()}] Step {step:4d}/{args.steps} | LR: {lr_current:.2e} | Loss: {loss_val:.4f}{inter_str}{diff_str}{ref_str} | Acc: {acc_val:5.1f}% | "
                       f"Step: {step_elapsed:.3f}s (GPU: {t_train_total:.3f}s) | Buffer: {batch_generator.buffer_occupancy}/{args.buffer_size} | "
                       f"Audio: {total_audio_sec:6.1f}s ({hours:.3f}h) | ETA: {live_status['eta_formatted']}")
 
-            if step % 25 == 0 or step == 5:
+            if step % 50 == 0 or step == 5:
                 print("\n" + profiler.format_console_breakdown(batch_generator.buffer_occupancy, args.buffer_size) + "\n")
 
             # Milestone Benchmark Evaluation (Inside Loop)
@@ -778,7 +804,7 @@ def main():
                 history.append(entry)
                 run_mgr.update_history(history)
 
-            # Save model checkpoint (Inside Loop)
+            # Save model checkpoint: only on milestone (args.steps or step % args.save_interval == 0) to protect SSD
             if step % args.save_interval == 0 or step == args.steps:
                 ckpt_path, latest_path = run_mgr.get_checkpoint_paths(step)
                 save_payload = {
@@ -795,8 +821,9 @@ def main():
                     "saved_at": time.time(),
                 }
                 try:
-                    torch.save(save_payload, ckpt_path)
                     torch.save(save_payload, latest_path)
+                    if step == args.steps or step % 4000 == 0:
+                        torch.save(save_payload, ckpt_path)
                     run_mgr.on_checkpoint_saved(
                         step=step,
                         loss=loss_val,
@@ -808,7 +835,35 @@ def main():
                     print(f"[Warning] Failed to save pretrain checkpoint: {e}")
 
     except KeyboardInterrupt:
-        print(f"\n⚠️  [Interrupt] Run '{run_mgr.run_name}' interrupted by user.")
+        print(f"\n⚠️  [Interrupt] Run '{run_mgr.run_name}' interrupted by user (Ctrl+C).")
+        if "step" in locals() and "model" in locals() and step > 0:
+            try:
+                ckpt_path, latest_path = run_mgr.get_checkpoint_paths(step)
+                save_payload = {
+                    "step": step,
+                    "arch": args.arch,
+                    "tier": args.tier,
+                    "run_name": run_mgr.run_name,
+                    "config": config,
+                    "model_state_dict": model.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "scaler_state_dict": scaler.state_dict(),
+                    "total_audio_sec": total_audio_sec,
+                    "history": history,
+                    "saved_at": time.time(),
+                }
+                print(f"💾 [Ctrl+C Save] Saving emergency checkpoint at step {step} to: {latest_path} ...")
+                torch.save(save_payload, latest_path)
+                print(f"✅ [Ctrl+C Save] Emergency resume checkpoint saved successfully ({latest_path})!")
+                run_mgr.on_checkpoint_saved(
+                    step=step,
+                    loss=loss_val if "loss_val" in locals() else None,
+                    acc=acc_val if "acc_val" in locals() else None,
+                    per=history[-1].get("librispeech_per") if history else None,
+                    audio_hours=round(total_audio_sec / 3600.0, 4),
+                )
+            except Exception as e:
+                print(f"⚠️ [Interrupt Save Error] Failed to save checkpoint on interrupt: {e}")
         run_mgr.finish_run(
             status="interrupted",
             final_metrics={

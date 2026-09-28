@@ -183,17 +183,127 @@ def test_v6_2_sparse_attention_window():
                 assert weights[:, :, i, j].max().item() == 0.0, f"Attention leaked outside window at ({i}, {j})"
 
 
+def test_v6_2_sparse_forward_backward_with_intermediate_ctc():
+    """Verify PhonoV62Sparse forward, backward, and intermediate CTC multi-task loss."""
+    config = ModelRegistry.build_config("phono_v6_2_sparse", tier="mini")
+    # Mini tier has 4 layers, set inter_ctc_layers=(2,) for mini
+    config.inter_ctc_layers = (2,)
+    model = ModelRegistry.build_model("phono_v6_2_sparse", tier="mini", config=config)
+    model.train()
+
+    dummy_audio = torch.randn(2, 16000)
+    audio_lengths = torch.tensor([16000, 14000], dtype=torch.long)
+    targets = torch.tensor([[8, 9, 10, 6], [11, 12, 13, 6]], dtype=torch.long)
+    target_lengths = torch.tensor([4, 4], dtype=torch.long)
+
+    out = model(
+        audio=dummy_audio,
+        audio_lengths=audio_lengths,
+        targets=targets,
+        target_lengths=target_lengths,
+    )
+
+    assert "loss" in out
+    assert out["loss"] is not None
+    assert out["loss"].item() > 0
+    assert "inter_ctc_loss" in out
+    assert out["inter_ctc_loss"] > 0, "Intermediate CTC loss should be strictly positive"
+
+    out["loss"].backward()
+    # Check that layer 1 received gradients
+    has_layer1_grad = any(
+        "layers.0" in name and p.grad is not None and p.grad.abs().sum() > 0
+        for name, p in model.named_parameters()
+    )
+    assert has_layer1_grad, "Layer 1 should receive backward gradients"
+
+
+def test_v6_2_sparse_early_exit():
+    """Verify adaptive layer-skipping inference on PhonoV62Sparse."""
+    config = ModelRegistry.build_config("phono_v6_2_sparse", tier="mini")
+    config.inter_ctc_layers = (2,)
+    model = ModelRegistry.build_model("phono_v6_2_sparse", tier="mini", config=config)
+    model.eval()
+
+    dummy_audio = torch.randn(2, 16000)
+    with torch.no_grad():
+        exit_res = model.decode_early_exit(dummy_audio, confidence_threshold=0.50)
+        assert "tokens" in exit_res
+        assert len(exit_res["tokens"]) == 2
+        assert "avg_exit_layer" in exit_res
+        assert "compute_saved_pct" in exit_res
+        assert 0.0 <= exit_res["compute_saved_pct"] <= 100.0
+
+
+def test_v6_3_diffusion_components():
+    """Verify GaussianNoiseScheduler and LatentDiffusionRefiner modules."""
+    from src.models.phono_variants import GaussianNoiseScheduler, LatentDiffusionRefiner
+
+    scheduler = GaussianNoiseScheduler(default_window_width=16, default_noise_max=0.8)
+    B, T, D = 2, 64, 256
+    device = torch.device("cpu")
+
+    centers = torch.tensor([16.0, 32.0])
+    noise_scales = torch.tensor([0.5, 0.8])
+    noise_map, c_out, s_out = scheduler.compute_noise_map(
+        batch_size=B, seq_len=T, device=device, centers=centers, noise_scales=noise_scales, window_width=16
+    )
+
+    assert noise_map.shape == (B, T, 1)
+    # Peak should occur at the center frame
+    assert torch.isclose(noise_map[0, 16, 0], torch.tensor(0.5), atol=1e-3)
+    assert torch.isclose(noise_map[1, 32, 0], torch.tensor(0.8), atol=1e-3)
+    # Beyond 2 sigma (32 frames), value should decay to < 14% of peak
+    assert noise_map[0, 16 + 32, 0] < 0.15
+
+    refiner = LatentDiffusionRefiner(embed_dim=D, dropout=0.0)
+    refiner.eval()
+    z = torch.randn(B, T, D)
+    # At zero initialization, refiner out_proj is zero, so z_hat == z
+    z_hat = refiner(z, noise_map)
+    assert z_hat.shape == (B, T, D)
+    assert torch.allclose(z_hat, z, atol=1e-5)
+
+
+def test_v6_3_diffusion_training_forward():
+    """Verify V6.3 training forward pass with multi-task diffusion and refined CTC loss."""
+    config = ModelRegistry.build_config("phono_v6_3_diffusion", tier="mini")
+    model = ModelRegistry.build_model("phono_v6_3_diffusion", tier="mini", config=config)
+    model.train()
+
+    dummy_audio = torch.randn(2, 16000)
+    dummy_targets = torch.randint(1, 40, (2, 10))
+    target_lengths = torch.tensor([10, 8])
+
+    out = model(audio=dummy_audio, targets=dummy_targets, target_lengths=target_lengths)
+    assert "loss" in out
+    assert "diff_loss" in out
+    assert "refined_ctc_loss" in out
+    assert "refined_logits" in out
+    assert out["loss"].requires_grad
+
+    # Test backward pass to confirm gradient flow through both backbone and refiner
+    out["loss"].backward()
+    assert model.latent_refiner.out_proj.weight.grad is not None
+    assert model.state_router.weight.grad is not None
+
+
 def test_v6_3_diffusion_decoding():
-    """Verify sliding window diffusion decoding on PhonoV63Diffusion."""
+    """Verify sliding window diffusion decoding and backward compatibility on PhonoV63Diffusion."""
     config = ModelRegistry.build_config("phono_v6_3_diffusion", tier="mini")
     model = ModelRegistry.build_model("phono_v6_3_diffusion", tier="mini", config=config)
     model.eval()
 
     dummy_audio = torch.randn(2, 16000)
     with torch.no_grad():
+        preds_sliding = model.decode_sliding_diffusion(dummy_audio, num_steps=2, window_width=8, window_stride=8)
         preds_diffusion = model.decode_diffusion(dummy_audio, num_steps=2)
         preds_beam = model.decode_beam(dummy_audio)
+
+        assert len(preds_sliding) == 2
         assert len(preds_diffusion) == 2
         assert len(preds_beam) == 2
+        assert isinstance(preds_sliding[0], list)
         assert isinstance(preds_diffusion[0], list)
+
 

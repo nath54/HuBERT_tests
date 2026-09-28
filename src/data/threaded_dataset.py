@@ -205,6 +205,16 @@ class BufferedSpeechBatchGenerator:
                         logger.warning(f"Failed to load real speech manifest from {p}: {e}")
             elif isinstance(real_speech_manifest, list):
                 self.real_samples = real_speech_manifest
+
+        # Filter valid duration samples upfront to eliminate 88% runtime rejection and disk I/O thrashing
+        if self.real_samples:
+            filtered = [
+                s for s in self.real_samples
+                if self.min_duration_sec <= float(s.get("duration", 0)) <= self.max_duration_sec
+            ]
+            if filtered:
+                self.real_samples = filtered
+                logger.info(f"Filtered {len(self.real_samples)} real speech samples within [{self.min_duration_sec}s, {self.max_duration_sec}s]")
         self.real_ratio = real_ratio
 
         # Thread synchronization
@@ -212,6 +222,8 @@ class BufferedSpeechBatchGenerator:
         self.sample_queue: queue.Queue = queue.Queue(maxsize=self.max_buffer_size * self.batch_size * 2)
         self.stop_event = threading.Event()
         self.producer_paused = threading.Event()
+        self.producer_resume_event = threading.Event()
+        self.producer_resume_event.set()
         self.voice_lock = threading.Lock()
 
         # In-RAM Dynamic Utterance Pool
@@ -228,23 +240,34 @@ class BufferedSpeechBatchGenerator:
         self.stop_event.clear()
         self.producer_paused.clear()
 
-        # 1. Synthesis Workers
-        for i in range(self.num_workers):
-            t = threading.Thread(
-                target=self._synthesis_worker_loop,
-                name=f"PiperSynthesisWorker-{i+1}",
+        if not self.use_rolling_pool:
+            # Direct Batch Mode: Parallel workers directly collate and push to batch_queue with zero intermediate thread contention
+            for i in range(self.num_workers):
+                t = threading.Thread(
+                    target=self._direct_batch_worker_loop,
+                    name=f"DirectBatchWorker-{i+1}",
+                    daemon=True,
+                )
+                t.start()
+                self.worker_threads.append(t)
+        else:
+            # 1. Synthesis Workers
+            for i in range(self.num_workers):
+                t = threading.Thread(
+                    target=self._synthesis_worker_loop,
+                    name=f"PiperSynthesisWorker-{i+1}",
+                    daemon=True,
+                )
+                t.start()
+                self.worker_threads.append(t)
+
+            # 2. Batch Collation & Watermark Manager Thread
+            self.collation_thread = threading.Thread(
+                target=self._collation_and_watermark_loop,
+                name="BatchCollationWorker",
                 daemon=True,
             )
-            t.start()
-            self.worker_threads.append(t)
-
-        # 2. Batch Collation & Watermark Manager Thread
-        self.collation_thread = threading.Thread(
-            target=self._collation_and_watermark_loop,
-            name="BatchCollationWorker",
-            daemon=True,
-        )
-        self.collation_thread.start()
+            self.collation_thread.start()
 
     def _generate_one_sample(self) -> Optional[Dict[str, Any]]:
         """Procedurally generate 1 clean speech sample or draw from real human speech with fine-grained timing."""
@@ -274,13 +297,10 @@ class BufferedSpeechBatchGenerator:
                     return None
 
                 t0 = time.perf_counter()
-                with self.voice_lock:
-                    voice_inst, vname = self.voice_manager.get_random_voice(lang="en")
-
                 target_dict = self.target_extractor.extract_targets(
                     waveform=waveform,
                     text=transcript,
-                    voice=voice_inst,
+                    voice=None,
                     lang="en",
                 )
                 t_target = time.perf_counter() - t0
@@ -368,12 +388,39 @@ class BufferedSpeechBatchGenerator:
             "voice_name": voice_name,
         }
 
+    def _direct_batch_worker_loop(self):
+        """Worker loop directly assembling and pushing complete collated batches with zero lock contention."""
+        while not self.stop_event.is_set():
+            batch_items = []
+            t_collate_start = time.perf_counter()
+            while len(batch_items) < self.batch_size and not self.stop_event.is_set():
+                sample = self._generate_one_sample()
+                if sample is not None:
+                    batch_items.append(sample)
+
+            if len(batch_items) == self.batch_size:
+                t0 = time.perf_counter()
+                collated = collate_modular_batch(batch_items)
+                t_collate = time.perf_counter() - t0
+                self.profiler.record("time_batch_collate", t_collate)
+
+                total_batch_sec = time.perf_counter() - t_collate_start
+                self.profiler.record("total_batch_gen_sec", total_batch_sec)
+
+                # Push to batch queue; blocks cleanly on condition variable when buffer is full (releases GIL!)
+                while not self.stop_event.is_set():
+                    try:
+                        self.batch_queue.put(collated, timeout=0.5)
+                        break
+                    except queue.Full:
+                        continue
+
     def _synthesis_worker_loop(self):
         """Worker loop continuously generating speech samples."""
         while not self.stop_event.is_set():
-            # In direct queue mode, pause if sample_queue/batch_queue is full
-            if not self.use_rolling_pool and self.producer_paused.is_set():
-                time.sleep(0.05)
+            # If buffer is full, wait on Event (0 CPU, 0 GIL!)
+            if self.producer_paused.is_set():
+                self.producer_resume_event.wait(timeout=0.2)
                 continue
 
             try:
@@ -389,9 +436,9 @@ class BufferedSpeechBatchGenerator:
                             # Rolling replacement: replace random item to keep pool perpetually fresh
                             replace_idx = random.randint(0, len(self.utterance_pool) - 1)
                             self.utterance_pool[replace_idx] = sample
-                    # Gentle throttle if pool is completely full to avoid excessive CPU churn
+                    # Sleep when pool is full to prevent GIL starvation of GPU training thread
                     if len(self.utterance_pool) >= self.pool_capacity:
-                        time.sleep(0.02)
+                        time.sleep(0.5)
                 else:
                     self.sample_queue.put(sample, timeout=1.0)
 
@@ -412,11 +459,13 @@ class BufferedSpeechBatchGenerator:
             if q_size >= self.max_buffer_size:
                 if not self.producer_paused.is_set():
                     self.producer_paused.set()
+                    self.producer_resume_event.clear()
                 time.sleep(0.02)
                 continue
             elif q_size <= self.low_watermark:
                 if self.producer_paused.is_set():
                     self.producer_paused.clear()
+                    self.producer_resume_event.set()
 
             # Form a batch
             batch_items = []
@@ -503,6 +552,7 @@ class BufferedSpeechBatchGenerator:
         """Terminate all background threads cleanly."""
         self.stop_event.set()
         self.producer_paused.set()
+        self.producer_resume_event.set()
 
         # Clear queues to unblock any threads
         while not self.batch_queue.empty():

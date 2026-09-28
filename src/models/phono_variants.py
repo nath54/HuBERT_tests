@@ -430,15 +430,17 @@ class MoEFeedForwardNetwork(nn.Module):
         topk_probs, topk_indices = torch.topk(router_probs, self.top_k, dim=-1)
         topk_probs = topk_probs / (topk_probs.sum(dim=-1, keepdim=True) + 1e-9)
 
+        # Vectorized zero-sync expert dispatch using index_add_
         out_flat = torch.zeros_like(x_flat)
-        for k in range(self.top_k):
-            expert_idx = topk_indices[:, k]
-            weight = topk_probs[:, k].unsqueeze(-1)
-            for e_id in range(self.num_experts):
-                mask = (expert_idx == e_id)
-                if mask.any():
-                    expert_out = self.experts[e_id](x_flat[mask])
-                    out_flat[mask] += weight[mask] * expert_out
+        batch_idx = torch.arange(x_flat.shape[0], device=x.device)
+        for e_id in range(self.num_experts):
+            mask = (topk_indices == e_id)
+            token_mask = mask.any(dim=-1)
+            idx = batch_idx[token_mask]
+            if idx.shape[0] > 0:
+                w = (topk_probs * mask.float()).sum(dim=-1, keepdim=True)[token_mask]
+                expert_out = self.experts[e_id](x_flat[idx])
+                out_flat.index_add_(0, idx, w * expert_out)
 
         # Switch-Transformer auxiliary load-balancing loss
         density = (router_probs > (1.0 / self.num_experts)).float().mean(dim=0)
@@ -448,7 +450,7 @@ class MoEFeedForwardNetwork(nn.Module):
 
 
 class SparseLocalSelfAttention(nn.Module):
-    """Local Syllabic Window Multi-Head Self-Attention."""
+    """Local Syllabic Window Multi-Head Self-Attention with cached band-diagonal masking."""
 
     def __init__(
         self,
@@ -464,12 +466,24 @@ class SparseLocalSelfAttention(nn.Module):
         self.head_dim = embed_dim // num_heads
         self.window_size = window_size
         self.scaling = self.head_dim ** -0.5
+        self._cached_window_mask = None
 
         self.q_proj = nn.Linear(embed_dim, embed_dim)
         self.k_proj = nn.Linear(embed_dim, embed_dim)
         self.v_proj = nn.Linear(embed_dim, embed_dim)
         self.out_proj = nn.Linear(embed_dim, embed_dim)
         self.dropout = nn.Dropout(dropout)
+
+    def _get_window_mask(self, T: int, device: torch.device) -> torch.Tensor:
+        if (
+            self._cached_window_mask is None
+            or self._cached_window_mask.shape[-1] != T
+            or self._cached_window_mask.device != device
+        ):
+            indices = torch.arange(T, device=device)
+            distance = (indices.unsqueeze(0) - indices.unsqueeze(1)).abs()
+            self._cached_window_mask = (distance > self.window_size).unsqueeze(0).unsqueeze(0)
+        return self._cached_window_mask
 
     def forward(
         self,
@@ -484,11 +498,9 @@ class SparseLocalSelfAttention(nn.Module):
 
         attn_scores = torch.matmul(q, k.transpose(-2, -1)) * self.scaling
 
-        # Symmetric local window mask (|i - j| <= window_size)
-        indices = torch.arange(T, device=x.device)
-        distance = (indices.unsqueeze(0) - indices.unsqueeze(1)).abs()
-        window_mask = distance > self.window_size
-        attn_scores = attn_scores.masked_fill(window_mask.unsqueeze(0).unsqueeze(0), float("-inf"))
+        # Symmetric local window mask (|i - j| <= window_size) using cached tensor
+        window_mask = self._get_window_mask(T, x.device)
+        attn_scores = attn_scores.masked_fill(window_mask, float("-inf"))
 
         if key_padding_mask is not None:
             mask = key_padding_mask.unsqueeze(1).unsqueeze(2)
@@ -619,6 +631,7 @@ class MoETransformerEncoder(nn.Module):
         key_padding_mask: Optional[torch.Tensor] = None,
         output_hidden_states: bool = False,
         output_attentions: bool = False,
+        intermediate_layers: Optional[List[int]] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         pos = self.pos_conv(x)
@@ -627,13 +640,18 @@ class MoETransformerEncoder(nn.Module):
         x = self.dropout(x)
 
         total_aux_loss = torch.tensor(0.0, device=x.device)
-        for layer in self.layers:
+        intermediate_states = {}
+        for idx, layer in enumerate(self.layers):
+            layer_num = idx + 1
             x, _, layer_aux = layer(x, key_padding_mask=key_padding_mask, return_attn_weights=output_attentions)
             total_aux_loss = total_aux_loss + layer_aux
+            if intermediate_layers and layer_num in intermediate_layers:
+                intermediate_states[layer_num] = x
 
         x = self.final_layer_norm(x)
         return {
             "last_hidden_state": x,
+            "intermediate_states": intermediate_states,
             "aux_loss": total_aux_loss,
         }
 
@@ -759,17 +777,21 @@ class PhonoV61MoEForPreTraining(PhonoV5BeamForPreTraining):
 
 
 # ==============================================================================
-# VARIANT 6.2: MoE + Sparse Local Syllabic Attention
+# VARIANT 6.2: MoE + Sparse Local Syllabic Attention + Intermediate CTC Early Exit
 # ==============================================================================
 @dataclass
 class PhonoV62SparseConfig(PhonoV61MoEConfig):
-    """Variant 6.2: Variant 6.1 + Sparse Local Syllabic Attention (Window +-320ms)."""
+    """Variant 6.2: Variant 6.1 + Sparse Local Syllabic Attention + Intermediate CTC Early Exit."""
     use_sparse_attention: bool = True
     sparse_window_size: int = 16
+    enable_intermediate_ctc: bool = True
+    inter_ctc_layers: Tuple[int, ...] = (4, 8)
+    inter_ctc_loss_weight: float = 0.25
+    early_exit_threshold: float = 0.95
 
 
 class PhonoV62SparseForPreTraining(PhonoV61MoEForPreTraining):
-    """Speech Transformer with MoE FFN and Sparse Local Syllabic Attention."""
+    """Speech Transformer with MoE FFN, Sparse Syllabic Attention, and Intermediate CTC Early Exit."""
 
     def __init__(self, config: Optional[PhonoV62SparseConfig] = None):
         super().__init__(config=config or PhonoV62SparseConfig())
@@ -788,21 +810,451 @@ class PhonoV62SparseForPreTraining(PhonoV61MoEForPreTraining):
             pos_conv_groups=self.config.pos_conv_groups,
         )
 
+    def forward(
+        self,
+        audio: torch.Tensor,
+        targets: Optional[torch.Tensor] = None,
+        target_lengths: Optional[torch.Tensor] = None,
+        audio_lengths: Optional[torch.Tensor] = None,
+        frame_targets: Optional[torch.Tensor] = None,
+        frame_lengths: Optional[torch.Tensor] = None,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        cnn_features = self.feature_extractor(audio)
+        projected = self.feature_projection(cnn_features)
+        B, T_frames, D = projected.shape
+
+        if audio_lengths is not None:
+            input_lengths = self._get_feat_extract_output_lengths(audio_lengths)
+        else:
+            input_lengths = torch.full((B,), T_frames, device=audio.device, dtype=torch.long)
+
+        # Apply SpecAugment in training mode
+        features, mask = self.apply_specaugment(projected)
+
+        enable_inter = getattr(self.config, "enable_intermediate_ctc", True)
+        inter_layers = list(getattr(self.config, "inter_ctc_layers", (4, 8))) if enable_inter else None
+
+        encoder_res = self.encoder(features, intermediate_layers=inter_layers)
+        hidden_state = encoder_res["last_hidden_state"]
+        intermediate_states = encoder_res.get("intermediate_states", {})
+        aux_loss = encoder_res.get("aux_loss", torch.tensor(0.0, device=audio.device))
+
+        # Hierarchical Head Factoring for Final Layer
+        state_logits = self.state_router(hidden_state)
+        phoneme_logits = self.phoneme_head(hidden_state)
+        composite_log_probs = self.compute_composite_log_probs(state_logits, phoneme_logits)
+
+        loss = None
+        ctc_loss_val = 0.0
+        inter_loss_val = 0.0
+        accuracy = None
+
+        if targets is not None:
+            ctc_log_probs = composite_log_probs.transpose(0, 1).float()
+            if target_lengths is None:
+                target_lengths = torch.full((B,), targets.shape[1], device=audio.device, dtype=torch.long)
+
+            final_ctc_loss = self.ctc_loss_fn(ctc_log_probs, targets, input_lengths, target_lengths)
+            ctc_loss_val = float(final_ctc_loss.item())
+
+            # Intermediate CTC Multi-Task Loss across Layers (e.g. Layer 4 & Layer 8)
+            inter_ctc_total = torch.tensor(0.0, device=audio.device)
+            if enable_inter and intermediate_states:
+                for l_idx, h_inter in intermediate_states.items():
+                    s_logits_l = self.state_router(h_inter)
+                    p_logits_l = self.phoneme_head(h_inter)
+                    c_log_probs_l = self.compute_composite_log_probs(s_logits_l, p_logits_l).transpose(0, 1).float()
+                    l_loss = self.ctc_loss_fn(c_log_probs_l, targets, input_lengths, target_lengths)
+                    inter_ctc_total = inter_ctc_total + l_loss
+                inter_ctc_total = inter_ctc_total / max(1, len(intermediate_states))
+                inter_loss_val = float(inter_ctc_total.item())
+
+            # Anti-blank regularization
+            blank_penalty_weight = getattr(self.config, "blank_penalty_weight", 0.0)
+            blank_threshold = getattr(self.config, "blank_threshold", 0.25)
+            if blank_penalty_weight > 0.0 and self.training:
+                probs = composite_log_probs.exp()
+                blank_probs = probs[:, :, self.config.blank_token_id]
+                mask_frames = torch.arange(T_frames, device=audio.device).unsqueeze(0) < input_lengths.unsqueeze(1)
+                valid_blank_probs = blank_probs[mask_frames]
+                mean_blank_prob = valid_blank_probs.mean() if valid_blank_probs.numel() > 0 else blank_probs.mean()
+                blank_loss = blank_penalty_weight * torch.relu(mean_blank_prob - blank_threshold) ** 2
+                final_ctc_loss = final_ctc_loss + blank_loss
+
+            aux_weight = getattr(self.config, "moe_aux_loss_weight", 0.01)
+            inter_weight = getattr(self.config, "inter_ctc_loss_weight", 0.25)
+            loss = (
+                final_ctc_loss * self.config.ctc_loss_weight
+                + aux_weight * aux_loss
+                + inter_weight * inter_ctc_total
+            )
+
+            with torch.no_grad():
+                preds_list = self.decode_greedy(composite_log_probs, lengths=input_lengths)
+                matches = 0.0
+                valid_count = 0
+                for b in range(B):
+                    ref_seq = targets[b, : int(target_lengths[b])].tolist()
+                    pred_seq = preds_list[b]
+                    if len(ref_seq) > 0:
+                        try:
+                            import editdistance
+                            dist = editdistance.eval(pred_seq, ref_seq)
+                            s_acc = max(0.0, 1.0 - (dist / max(1, len(ref_seq))))
+                        except Exception:
+                            s_acc = 1.0 if pred_seq == ref_seq else 0.0
+                        matches += s_acc
+                        valid_count += 1
+                accuracy = torch.tensor((matches / max(1, valid_count)) * 100.0, device=audio.device)
+
+        return {
+            "loss": loss,
+            "ctc_loss": ctc_loss_val,
+            "inter_ctc_loss": inter_loss_val,
+            "aux_loss": float(aux_loss.item()) if hasattr(aux_loss, "item") else 0.0,
+            "accuracy": accuracy,
+            "logits": composite_log_probs,
+            "hidden_state": hidden_state,
+            "intermediate_states": intermediate_states,
+            "state_logits": state_logits,
+            "phoneme_logits": phoneme_logits,
+            "input_lengths": input_lengths,
+            "output_lengths": input_lengths,
+            "mask": mask,
+        }
+
+    def decode_early_exit(
+        self,
+        audio: torch.Tensor,
+        confidence_threshold: Optional[float] = None,
+        lengths: Optional[torch.Tensor] = None,
+    ) -> Dict[str, Any]:
+        """Adaptive layer-skipping inference using intermediate CTC confidence gating."""
+        threshold = confidence_threshold or getattr(self.config, "early_exit_threshold", 0.95)
+        self.eval()
+        with torch.no_grad():
+            if audio.dim() == 1:
+                audio = audio.unsqueeze(0)
+            B = audio.shape[0]
+
+            out = self.forward(audio=audio, audio_lengths=lengths)
+            T_frames = out["logits"].shape[1]
+            inter_states = out.get("intermediate_states", {})
+
+            # Frame-level dynamic exit across layers: 4 -> 8 -> 12
+            final_probs = out["logits"].exp()
+            exit_layers_used = torch.full((B, T_frames), 12.0, device=audio.device)
+            selected_probs = final_probs.clone()
+
+            # Process intermediate layers in reverse order: layer 8 then layer 4
+            for l_num in sorted(inter_states.keys(), reverse=True):
+                h_l = inter_states[l_num]
+                s_logits = self.state_router(h_l)
+                p_logits = self.phoneme_head(h_l)
+                log_p = self.compute_composite_log_probs(s_logits, p_logits)
+                probs = log_p.exp()
+                max_p = probs.max(dim=-1).values
+                confident = max_p >= threshold
+
+                selected_probs[confident] = probs[confident]
+                exit_layers_used[confident] = float(l_num)
+
+            selected_log_probs = (selected_probs + 1e-8).log()
+            decoded_tokens = self.decode_greedy(selected_log_probs, lengths=out["input_lengths"])
+            avg_exit_layer = float(exit_layers_used.mean().item())
+            compute_saved_pct = round((1.0 - (avg_exit_layer / 12.0)) * 100.0, 1)
+
+            return {
+                "tokens": decoded_tokens,
+                "avg_exit_layer": avg_exit_layer,
+                "compute_saved_pct": compute_saved_pct,
+            }
+
 
 # ==============================================================================
-# VARIANT 6.3: MoE + Sparse Attention + Sliding Window Diffusion Decoding
+# VARIANT 6.3: MoE + Sparse Attention + Sliding Window Latent Diffusion Refiner
 # ==============================================================================
+class GaussianNoiseScheduler(nn.Module):
+    """Generates spatio-temporal Gaussian-modulated noise schedules for latent diffusion.
+
+    The noise strength follows a bell-shaped Gaussian envelope centered at frame tau:
+        sigma(t; tau) = sigma_scale * exp(- (t - tau)^2 / (2 * w^2))
+    Outside the local receptive window (|t - tau| > 2w), noise rapidly decays to zero.
+    """
+
+    def __init__(self, default_window_width: int = 16, default_noise_max: float = 0.8):
+        super().__init__()
+        self.default_window_width = default_window_width
+        self.default_noise_max = default_noise_max
+
+    def compute_noise_map(
+        self,
+        batch_size: int,
+        seq_len: int,
+        device: torch.device,
+        centers: Optional[torch.Tensor] = None,
+        noise_scales: Optional[torch.Tensor] = None,
+        window_width: Optional[float] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Generates a spatial-temporal Gaussian noise map of shape [B, T, 1]."""
+        w = float(window_width or self.default_window_width)
+        time_steps = torch.arange(seq_len, device=device, dtype=torch.float32)  # [T]
+
+        if centers is None:
+            centers = torch.randint(0, max(1, seq_len), (batch_size,), device=device, dtype=torch.float32)
+        else:
+            centers = centers.to(device=device, dtype=torch.float32)
+
+        if noise_scales is None:
+            noise_scales = torch.empty(batch_size, device=device).uniform_(0.1, self.default_noise_max)
+        else:
+            noise_scales = noise_scales.to(device=device, dtype=torch.float32)
+
+        # Gaussian kernel: [B, T]
+        diff = time_steps.unsqueeze(0) - centers.unsqueeze(1)
+        exponent = -0.5 * (diff / (w + 1e-6)) ** 2
+        gaussian_kernel = torch.exp(exponent)
+        noise_map = (noise_scales.unsqueeze(1) * gaussian_kernel).unsqueeze(-1)  # [B, T, 1]
+
+        return noise_map, centers, noise_scales
+
+
+class LatentDiffusionRefiner(nn.Module):
+    """Lightweight 1D residual convolutional refiner with FiLM noise conditioning.
+
+    Refines noisy frame embeddings Z_sigma back toward clean acoustic latents Z_0.
+    Uses depthwise-separable 1D convolutions and FiLM modulation on the noise map.
+    """
+
+    def __init__(self, embed_dim: int = 512, hidden_dim: Optional[int] = None, dropout: float = 0.1):
+        super().__init__()
+        h_dim = hidden_dim or embed_dim
+        self.in_proj = nn.Linear(embed_dim, h_dim)
+
+        # FiLM projection: noise scale sigma -> scale (gamma) and shift (beta)
+        self.noise_mlp = nn.Sequential(
+            nn.Linear(1, h_dim // 2),
+            nn.SiLU(),
+            nn.Linear(h_dim // 2, 2 * h_dim),
+        )
+
+        # 2 residual blocks with depthwise-separable 1D convs
+        self.conv1 = nn.Conv1d(h_dim, h_dim, kernel_size=5, padding=2, groups=h_dim)
+        self.pw_conv1 = nn.Conv1d(h_dim, h_dim, kernel_size=1)
+        self.norm1 = nn.LayerNorm(h_dim)
+
+        self.conv2 = nn.Conv1d(h_dim, h_dim, kernel_size=5, padding=2, groups=h_dim)
+        self.pw_conv2 = nn.Conv1d(h_dim, h_dim, kernel_size=1)
+        self.norm2 = nn.LayerNorm(h_dim)
+
+        self.act = nn.GELU()
+        self.dropout = nn.Dropout(dropout)
+        self.out_proj = nn.Linear(h_dim, embed_dim)
+
+        # Zero-initialize the final projection so the refiner starts as an identity map
+        nn.init.zeros_(self.out_proj.weight)
+        nn.init.zeros_(self.out_proj.bias)
+
+    def forward(self, z: torch.Tensor, noise_map: torch.Tensor) -> torch.Tensor:
+        """Forward pass for latent refinement.
+
+        Args:
+            z: [B, T, D] frame representations
+            noise_map: [B, T, 1] spatial-temporal noise scale
+        Returns:
+            z_hat: [B, T, D] refined clean representation estimate
+        """
+        h = self.in_proj(z)
+
+        # FiLM parameters: gamma and beta of shape [B, T, H]
+        film_params = self.noise_mlp(noise_map)
+        gamma, beta = torch.chunk(film_params, 2, dim=-1)
+
+        # Residual Block 1
+        res = h
+        h_conv = h.transpose(1, 2)
+        h_conv = self.act(self.pw_conv1(self.conv1(h_conv))).transpose(1, 2)
+        h_conv = self.dropout(h_conv)
+        h = self.norm1(res + h_conv)
+        h = h * (1.0 + gamma) + beta
+
+        # Residual Block 2
+        res = h
+        h_conv = h.transpose(1, 2)
+        h_conv = self.act(self.pw_conv2(self.conv2(h_conv))).transpose(1, 2)
+        h_conv = self.dropout(h_conv)
+        h = self.norm2(res + h_conv)
+
+        # Zero-init residual output addition
+        z_hat = z + self.out_proj(h)
+        return z_hat
+
+
 @dataclass
 class PhonoV63DiffusionConfig(PhonoV62SparseConfig):
-    """Variant 6.3: Variant 6.2 + Sliding Window Diffusion Denoising Decoding."""
-    diffusion_steps: int = 4
-    diffusion_window_size: int = 64
-    diffusion_stride: int = 32
+    """Variant 6.3: MoE + Sparse Attention + Sliding Window Latent Diffusion Refiner."""
+    diffusion_window_width: int = 16       # Gaussian half-width in frames (~320ms)
+    diffusion_noise_max: float = 0.8       # Maximum noise level for training perturbation
+    diffusion_loss_weight: float = 1.0     # Multi-task weight for Gaussian MSE diffusion loss
+    refined_ctc_loss_weight: float = 0.5   # Multi-task weight for refined phoneme CTC loss
+    diffusion_inference_steps: int = 3     # Iterative denoising steps per window during decoding
+    diffusion_window_stride: int = 16      # Stride between consecutive Gaussian sliding windows
+    diffusion_steps: int = 4               # Backward compatibility
+    diffusion_window_size: int = 64        # Backward compatibility
+    diffusion_stride: int = 32             # Backward compatibility
     diffusion_confidence_threshold: float = 0.35
 
 
 class PhonoV63DiffusionForPreTraining(PhonoV62SparseForPreTraining):
-    """Hierarchical MoE Sparse Transformer with Sliding Window Diffusion Decoding."""
+    """Hierarchical MoE Sparse Transformer with Sliding Window Latent Diffusion Refiner."""
+
+    def __init__(self, config: PhonoV63DiffusionConfig):
+        super().__init__(config)
+        self.noise_scheduler = GaussianNoiseScheduler(
+            default_window_width=getattr(config, "diffusion_window_width", 16),
+            default_noise_max=getattr(config, "diffusion_noise_max", 0.8),
+        )
+        self.latent_refiner = LatentDiffusionRefiner(
+            embed_dim=self.config.encoder_embed_dim,
+            dropout=self.config.dropout,
+        )
+
+    def forward(
+        self,
+        audio: torch.Tensor,
+        targets: Optional[torch.Tensor] = None,
+        target_lengths: Optional[torch.Tensor] = None,
+        audio_lengths: Optional[torch.Tensor] = None,
+        frame_targets: Optional[torch.Tensor] = None,
+        frame_lengths: Optional[torch.Tensor] = None,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        # Compute baseline forward pass through acoustic backbone & intermediate CTC
+        out = super().forward(
+            audio=audio,
+            targets=targets,
+            target_lengths=target_lengths,
+            audio_lengths=audio_lengths,
+            frame_targets=frame_targets,
+            frame_lengths=frame_lengths,
+            **kwargs,
+        )
+
+        hidden_state = out.get("hidden_state")
+        input_lengths = out.get("input_lengths")
+
+        if targets is not None and self.training and hidden_state is not None:
+            B, T_frames, D = hidden_state.shape
+            if target_lengths is None:
+                target_lengths = torch.full((B,), targets.shape[1], device=audio.device, dtype=torch.long)
+
+            # 1. Sample spatio-temporal Gaussian noise schedule
+            noise_map, centers, noise_scales = self.noise_scheduler.compute_noise_map(
+                batch_size=B,
+                seq_len=T_frames,
+                device=audio.device,
+                window_width=getattr(self.config, "diffusion_window_width", 16),
+            )
+
+            # 2. Perturb latents with Gaussian-modulated Gaussian noise
+            eps = torch.randn_like(hidden_state)
+            z_noisy = hidden_state + noise_map * eps
+
+            # 3. Latent Diffusion Denoising Step
+            z_clean_est = self.latent_refiner(z_noisy, noise_map)
+
+            # 4. Gaussian-weighted Diffusion Reconstruction Loss
+            diff_sq = (z_clean_est - hidden_state) ** 2
+            weight_norm = (noise_map.sum() * D) + 1e-6
+            diff_loss = (noise_map * diff_sq).sum() / weight_norm
+
+            # 5. Refined CTC Phoneme Loss on recovered latents
+            ref_s_logits = self.state_router(z_clean_est)
+            ref_p_logits = self.phoneme_head(z_clean_est)
+            ref_composite_log_probs = self.compute_composite_log_probs(ref_s_logits, ref_p_logits)
+            ref_ctc_log_probs = ref_composite_log_probs.transpose(0, 1).float()
+            ref_ctc_loss = self.ctc_loss_fn(ref_ctc_log_probs, targets, input_lengths, target_lengths)
+
+            # 6. Combined Multi-Task Objective
+            diff_w = getattr(self.config, "diffusion_loss_weight", 1.0)
+            ref_w = getattr(self.config, "refined_ctc_loss_weight", 0.5)
+            out["loss"] = out["loss"] + (diff_w * diff_loss) + (ref_w * ref_ctc_loss)
+            out["diff_loss"] = float(diff_loss.item())
+            out["refined_ctc_loss"] = float(ref_ctc_loss.item())
+            out["refined_logits"] = ref_composite_log_probs
+        else:
+            out["diff_loss"] = 0.0
+            out["refined_ctc_loss"] = 0.0
+            out["refined_logits"] = out.get("logits")
+
+        return out
+
+    def decode_sliding_diffusion(
+        self,
+        audio: torch.Tensor,
+        lengths: Optional[torch.Tensor] = None,
+        num_steps: Optional[int] = None,
+        window_width: Optional[int] = None,
+        window_stride: Optional[int] = None,
+    ) -> List[List[int]]:
+        """Trailing Sliding Gaussian Window Diffusion Decoding.
+
+        Sweeps a Gaussian noise window across time. Inside the window, latents are iteratively
+        refined. As frames exit the trailing edge of the window, their latents are finalized
+        and decoded into phoneme tokens.
+        """
+        self.eval()
+        with torch.no_grad():
+            if audio.dim() == 1:
+                audio = audio.unsqueeze(0)
+            B = audio.shape[0]
+
+            out = self.forward(audio=audio, audio_lengths=lengths)
+            hidden_states = out["hidden_state"]  # [B, T_frames, D]
+            input_lengths = out["input_lengths"]
+
+            w = float(window_width or getattr(self.config, "diffusion_window_width", 16))
+            stride = int(window_stride or getattr(self.config, "diffusion_window_stride", 16))
+            steps = int(num_steps or getattr(self.config, "diffusion_inference_steps", 3))
+
+            batch_results = []
+            for b in range(B):
+                T_b = int(input_lengths[b].item())
+                z_curr = hidden_states[b, :T_b].clone().unsqueeze(0)  # [1, T_b, D]
+                device = z_curr.device
+
+                # Sliding Gaussian window sweep along the temporal axis
+                for tau in range(0, T_b + int(w), stride):
+                    t_start = max(0, int(tau - 2 * w))
+                    t_end = min(T_b, int(tau + 2 * w))
+                    if t_start >= t_end:
+                        continue
+
+                    active_z = z_curr[:, t_start:t_end]  # [1, T_active, D]
+                    active_T = active_z.shape[1]
+                    time_indices = torch.arange(t_start, t_end, device=device, dtype=torch.float32)
+
+                    # Iterative refinement within the active Gaussian window
+                    for k in range(steps):
+                        sigma_k = getattr(self.config, "diffusion_noise_max", 0.8) * ((steps - k) / steps)
+                        diff = time_indices - tau
+                        noise_map = sigma_k * torch.exp(-0.5 * (diff / (w + 1e-6)) ** 2)
+                        noise_map = noise_map.view(1, active_T, 1)
+
+                        refined_active = self.latent_refiner(active_z, noise_map)
+                        active_z = 0.5 * active_z + 0.5 * refined_active
+
+                    z_curr[:, t_start:t_end] = active_z
+
+                # Trailing decode: emit phonemes once frames have exited the sliding window
+                s_logits = self.state_router(z_curr)
+                p_logits = self.phoneme_head(z_curr)
+                log_probs = self.compute_composite_log_probs(s_logits, p_logits)
+                decoded = self.decode_greedy(log_probs, lengths=torch.tensor([T_b], device=device))[0]
+                batch_results.append(decoded)
+
+            return batch_results
 
     def decode_diffusion(
         self,
@@ -811,54 +1263,9 @@ class PhonoV63DiffusionForPreTraining(PhonoV62SparseForPreTraining):
         num_steps: Optional[int] = None,
         confidence_threshold: Optional[float] = None,
     ) -> List[List[int]]:
-        """Iterative Sliding Window Denoising Decoding over acoustic representations."""
-        steps = num_steps or getattr(self.config, "diffusion_steps", 4)
-        threshold = confidence_threshold or getattr(self.config, "diffusion_confidence_threshold", 0.35)
-
+        """Unified decoding dispatcher supporting both audio and precomputed logits."""
         if logits_or_audio.dim() == 3:
-            log_probs = logits_or_audio
-        else:
-            self.eval()
-            with torch.no_grad():
-                audio = logits_or_audio
-                if audio.dim() == 1:
-                    audio = audio.unsqueeze(0)
-                out = self.forward(audio=audio)
-                log_probs = out["logits"]
-
-        B, T, V = log_probs.shape
-        batch_results = []
-
-        for b in range(B):
-            curr_T = int(lengths[b]) if lengths is not None else T
-            curr_probs = log_probs[b, :curr_T].clone()
-
-            # Iterative diffusion denoising
-            for step in range(steps):
-                probs = F.softmax(curr_probs, dim=-1)
-                top2 = torch.topk(probs, 2, dim=-1).values
-                margin = top2[:, 0] - top2[:, 1]
-                ambiguous = margin < threshold
-
-                if not ambiguous.any():
-                    break
-
-                # Sliding window bidirectional diffusion smoothing over ambiguous frames
-                kernel = torch.tensor([0.2, 0.6, 0.2], device=curr_probs.device, dtype=curr_probs.dtype).unsqueeze(0).unsqueeze(0)
-                smoothed = F.conv1d(
-                    curr_probs.transpose(0, 1).unsqueeze(0),
-                    kernel.repeat(V, 1, 1),
-                    padding=1,
-                    groups=V,
-                ).squeeze(0).transpose(0, 1)
-
-                curr_probs[ambiguous] = 0.5 * curr_probs[ambiguous] + 0.5 * smoothed[ambiguous]
-
-            # Decode via prefix beam search on refined logits
-            refined_batch = curr_probs.unsqueeze(0)
-            refined_len = torch.tensor([curr_T], device=curr_probs.device)
-            decoded = self.decode_beam(refined_batch, lengths=refined_len)[0]
-            batch_results.append(decoded)
-
-        return batch_results
+            # 3D logit tensor: use beam search on logits
+            return self.decode_beam(logits_or_audio, lengths=lengths)
+        return self.decode_sliding_diffusion(logits_or_audio, lengths=lengths, num_steps=num_steps)
 

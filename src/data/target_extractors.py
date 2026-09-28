@@ -121,6 +121,21 @@ class PhonemeTargetExtractor(BaseTargetExtractor):
 
     def __init__(self, tokenizer: Optional[PhonemeTokenizer] = None):
         self.tokenizer = tokenizer or PhonemeTokenizer()
+        self._espeak_phonemizer = None
+        self._phoneme_cache: Dict[str, Tuple[List[int], List[int]]] = {}
+
+        # Precompute static token sets once for ultra-fast lookup
+        self.diacritic_ids = {
+            self.tokenizer.token_to_id.get(ch)
+            for ch in ("ˈ", "ˌ", "ː", "ˑ")
+            if ch in self.tokenizer.token_to_id
+        }
+        non_frame_tokens = {"ˈ", "ˌ", "ː", "ˑ", " ", "-", "\n", "\t"}
+        self.non_frame_ids = {
+            self.tokenizer.token_to_id.get(ch)
+            for ch in non_frame_tokens
+            if ch in self.tokenizer.token_to_id
+        }
 
     @property
     def target_type(self) -> str:
@@ -129,6 +144,12 @@ class PhonemeTargetExtractor(BaseTargetExtractor):
     @property
     def vocab_size(self) -> int:
         return self.tokenizer.vocab_size
+
+    def _get_espeak_phonemizer(self):
+        if self._espeak_phonemizer is None:
+            from piper.voice import EspeakPhonemizer
+            self._espeak_phonemizer = EspeakPhonemizer()
+        return self._espeak_phonemizer
 
     def extract_targets(
         self,
@@ -140,48 +161,62 @@ class PhonemeTargetExtractor(BaseTargetExtractor):
     ) -> Dict[str, torch.Tensor]:
         if not text and transcript:
             text = transcript
-        # 1. Phonemize text
-        if voice is not None and hasattr(voice, "phonemize"):
-            try:
-                phoneme_sentences = voice.phonemize(text)
-                # Flatten nested phoneme list
-                flat_phonemes = []
-                for s in phoneme_sentences:
-                    flat_phonemes.extend(s)
-            except Exception:
-                flat_phonemes = list(text)
+
+        cache_key = f"{lang}:{text}"
+        cached = self._phoneme_cache.get(cache_key)
+
+        if cached is not None:
+            ctc_token_ids, speech_token_ids = cached
         else:
-            flat_phonemes = list(text)
+            # 1. Phonemize text
+            flat_phonemes = None
+            if voice is not None and hasattr(voice, "phonemize"):
+                try:
+                    phoneme_sentences = voice.phonemize(text)
+                    flat_phonemes = [p for s in phoneme_sentences for p in s]
+                except Exception:
+                    pass
 
-        # 2. Encode to token IDs
-        token_ids = self.tokenizer.encode(flat_phonemes, add_eos=True)
+            if flat_phonemes is None:
+                try:
+                    phonemizer = self._get_espeak_phonemizer()
+                    espeak_lang = "fr-fr" if lang == "fr" else "en-us"
+                    phoneme_sentences = phonemizer.phonemize(espeak_lang, text)
+                    flat_phonemes = [p for s in phoneme_sentences for p in s]
+                except Exception:
+                    flat_phonemes = list(text)
 
-        # 3. Build frame-synchronous phoneme targets (16kHz / 320 hop = 50Hz frames)
-        # Filter non-acoustic diacritics from CTC sequence targets (preserve eos token at end)
-        diacritic_ids = {self.tokenizer.token_to_id.get(ch) for ch in ("ˈ", "ˌ", "ː", "ˑ") if ch in self.tokenizer.token_to_id}
-        ctc_token_ids = [t for t in token_ids if t not in diacritic_ids]
-        if not ctc_token_ids:
-            ctc_token_ids = [self.tokenizer.silence_token_id, self.tokenizer.eos_token_id]
+            # 2. Encode to token IDs
+            token_ids = self.tokenizer.encode(flat_phonemes, add_eos=True)
+
+            # Filter non-acoustic diacritics from CTC sequence targets
+            ctc_token_ids = [t for t in token_ids if t not in self.diacritic_ids]
+            if not ctc_token_ids:
+                ctc_token_ids = [self.tokenizer.silence_token_id, self.tokenizer.eos_token_id]
+
+            # Filter non-frame tokens for temporal frame alignment
+            speech_token_ids = [
+                t for t in token_ids
+                if t != self.tokenizer.eos_token_id and t not in self.non_frame_ids
+            ]
+            if not speech_token_ids:
+                speech_token_ids = [self.tokenizer.silence_token_id]
+
+            if len(self._phoneme_cache) < 50000:
+                self._phoneme_cache[cache_key] = (ctc_token_ids, speech_token_ids)
 
         # 3. Build frame-synchronous phoneme targets (16kHz / 320 hop = 50Hz frames)
         num_samples = waveform.shape[-1] if waveform.ndim > 0 else 1
         num_frames = max(1, num_samples // 320)
-
-        # For frame targets: also filter spaces/whitespace (spaces are orthographic, not acoustic temporal frames)
-        non_frame_tokens = {"ˈ", "ˌ", "ː", "ˑ", " ", "-", "\n", "\t"}
-        non_frame_ids = {self.tokenizer.token_to_id.get(ch) for ch in non_frame_tokens if ch in self.tokenizer.token_to_id}
-        speech_token_ids = [t for t in token_ids if t != self.tokenizer.eos_token_id and t not in non_frame_ids]
-        if not speech_token_ids:
-            speech_token_ids = [self.tokenizer.silence_token_id]
-
         silence_pad = min(2, max(0, num_frames // 10))
         speech_frames = max(1, num_frames - 2 * silence_pad)
 
         frame_targets = torch.full((num_frames,), self.tokenizer.silence_token_id, dtype=torch.long)
         L = len(speech_token_ids)
-        for j in range(speech_frames):
-            idx = min(L - 1, (j * L) // speech_frames)
-            frame_targets[silence_pad + j] = speech_token_ids[idx]
+        speech_tensor = torch.tensor(speech_token_ids, dtype=torch.long)
+        j_indices = torch.arange(speech_frames, dtype=torch.long)
+        interp_idx = torch.clamp((j_indices * L) // speech_frames, 0, L - 1)
+        frame_targets[silence_pad : silence_pad + speech_frames] = speech_tensor[interp_idx]
 
         if num_frames > 2 and silence_pad > 0:
             frame_targets[-1] = self.tokenizer.silence_token_id
