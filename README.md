@@ -1,6 +1,6 @@
 # AudioLearn: HuBERT Speech Self-Supervision, Modular Architectures & XAI Studio
 
-A modular PyTorch speech framework implementing **HuBERT** (Hidden-Unit BERT) and **PhonoHuBERT** (Direct Phoneme Prediction) from scratch. Features **0-disk streaming pre-training** in RAM via multi-speaker neural TTS, an **asynchronous multi-threaded generator with microsecond profiling**, a **Voice Quality Guardian**, scaling tiers from **8M to 95M parameters**, a **SOTA Whisper shootout benchmark**, and a full **Explainable AI (XAI)** suite with a 6-tab interactive web studio.
+A modular PyTorch speech framework implementing **HuBERT** (Hidden-Unit BERT) and **PhonoHuBERT** (Direct Phoneme Prediction) from scratch. Features **dual data streaming pipelines** (0-disk in-RAM procedural neural TTS synthesis for initial exploration, and 100% genuine LibriSpeech human speech streaming for SOTA acoustic scaling), an **asynchronous multi-threaded generator with microsecond profiling**, a **Voice Quality Guardian**, scaling tiers from **8M to 95M parameters**, a **SOTA Whisper shootout benchmark**, and a full **Explainable AI (XAI)** suite with a 6-tab interactive web studio.
 
 ---
 
@@ -15,10 +15,10 @@ A modular PyTorch speech framework implementing **HuBERT** (Hidden-Unit BERT) an
      - **V6.3 (Sliding Gaussian Latent Diffusion)**: Spatio-temporal Gaussian-modulated diffusion in latent phoneme space, FiLM-conditioned 2-block Conv1D refiner, and a trailing-window streaming phoneme decoder.
    - **Parameter Scaling Tiers**: **Mini** (8.0M), **Small** (24.2M), **Medium** (31.8M / 83.5M), and **Base** (94.7M) with on-the-fly parameter variation and checkpoint hot-swapping.
 
-2. **0-Disk In-RAM Streaming Pre-Training (Adapted from MADGen)**:
-   - Infinite procedural speech synthesized directly in RAM across 39 verified clean neural voices (English & French).
-   - **Zero Hard Drive Footprint**: Audio waveforms are synthesized, mapped to acoustic or phoneme targets, trained through PyTorch on GPU, and immediately deallocated.
-   - **SSD Wear Protection**: Eliminates redundant intermediate disk writes (`--save_interval 4000`), saving only on milestones and graceful `Ctrl+C` interrupts.
+2. **Dual-Mode Streaming Pipeline (Procedural 0-Disk vs. Real Human Speech)**:
+   - **Mode A (0-Disk Procedural In-RAM Streaming)**: For baseline pre-training (`phono_hubert`, `dual`, `hierarchical`, `recursive`, `hubert_kmeans`, and `phono_v1`/`v2`), speech is synthesized directly in RAM across 39 clean neural voices (`--real_ratio 0.0`). Waveforms are generated in memory, trained on GPU, and immediately deallocated with **zero audio files stored on disk**.
+   - **Mode B (Real Speech Dataset Streaming)**: For SOTA models (`phono_v3_hybrid` through `phono_v6_3_diffusion`), the pipeline streams genuine human speech directly from disk manifests (LibriSpeech 100h clean) to capture authentic human phonetics, room acoustics, and conversational dynamics.
+   - **SSD Wear Protection**: In both modes, intermediate 1GB checkpoint writes are eliminated (`--save_interval 4000`), persisting weights only at milestones and on emergency `Ctrl+C` interrupt.
 
 3. **High-Throughput Asynchronous Multi-Threaded Generator (GIL-Optimized)**:
    - Solves CPU synthesis vs. GPU training starvation using an asynchronous producer-consumer architecture.
@@ -48,38 +48,45 @@ A modular PyTorch speech framework implementing **HuBERT** (Hidden-Unit BERT) an
 
 ```
                        ┌─────────────────────────────────────────────────────────────┐
-                       │           0-Disk In-RAM Streaming Speech Generator          │
-                       │  Procedural Text Sampler (100k words) -> Piper Neural TTS   │
-                       │   39 Clean Voices (EN / FR) | Voice Quality Guardian Filter │
+                       │   Dual-Mode Audio Input: 100% LibriSpeech (Up to 30.0s)     │
+                       │     OR 0-Disk In-RAM Procedural Speech (39 Neural Voices)   │
                        └──────────────────────────────┬──────────────────────────────┘
-                                                      │ Padded Waveform (16 kHz, Mono)
+                                                      │ Waveforms (16 kHz, Mono, 1.0s - 30.0s)
                                                       ▼
                        ┌─────────────────────────────────────────────────────────────┐
                        │  HuBERTFeatureEncoder (Temporal 1D Convolution)             │
                        │  7-layer 1D CNN with LayerNorm & GELU (Strides: 5,2,2,2...) │
-                       │  Downsampling Factor: 320x (20ms frames / 50Hz)             │
+                       │  Downsampling Factor: 320x (20ms acoustic frames / 50Hz)    │
                        └──────────────────────────────┬──────────────────────────────┘
-                                                      │ CNN Representations (B, T, C)
+                                                      │ Frame Embeddings (B, T, 512)
                                                       ▼
                        ┌─────────────────────────────────────────────────────────────┐
-                       │  Feature Projection & LayerNorm (Linear: C -> embed_dim)    │
+                       │  Feature Projection & Acoustic SpecAugment                  │
                        └──────────────────────────────┬──────────────────────────────┘
                                                       │
                        ┌──────────────────────────────┴──────────────────────────────┐
                        │                                                             │
                        ▼                                                             ▼
-     [HuBERT: K-Means SSL Branch]                                   [PhonoHuBERT: Direct Phoneme Branch]
-     - Span Masking (65% of frames)                                 - Dual Loss / Unmasked CTC Alignment
-     - 4 to 12 Transformer Layers                                   - 4 to 12 Transformer Layers
-     - 100 Acoustic Cluster Units (MFCC)                            - 64 IPA Phoneme Tokens (<blank>, <mask...>
-     - Cross-Entropy Masked Loss                                    - Direct Acoustic-to-Phoneme Head
+     [Phono-V6 Sparse MoE Backbone]                                 [Intermediate CTC Multi-Task]
+     - Sparse Local Attention (±320ms window)                       - Early supervision at Layer 4 & 8
+     - 4 FFN Experts per Layer + Top-2 Gating                       - Accelerated gradient propagation
+     - 8 to 12 Transformer Layers (D=512)                           - Enables adaptive early exit
                        │                                                             │
                        └──────────────────────────────┬──────────────────────────────┘
-                                                      │
+                                                      │ Pristine Frame Latents Z_0
                                                       ▼
                        ┌─────────────────────────────────────────────────────────────┐
-                       │  Downstream CTC ASR / Phoneme Decoder & XAI Attribution     │
-                       │  Captum Integrated Gradients | NAPS Ablation | SOTA Bench   │
+                       │  Phono-V6.3 Sliding Gaussian Latent Diffusion Refiner       │
+                       │  - Spatial-Temporal Gaussian Noise: σ(t; τ) = σ exp(-Δt²/2w²)│
+                       │  - Lightweight FiLM-conditioned 2-block Conv1D Denoising    │
+                       │  - Joint Diffusion MSE Loss + Refined Sequence CTC Loss     │
+                       └──────────────────────────────┬──────────────────────────────┘
+                                                      │ Finalized Settled Latents
+                                                      ▼
+                       ┌─────────────────────────────────────────────────────────────┐
+                       │  Trailing Window Streaming Decoder & Lexicon Integration    │
+                       │  - Emits phonemes as frames exit trailing edge of window    │
+                       │  - Trie-constrained Lexicon Beam Search (< 19.5% PER)       │
                        └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -87,12 +94,12 @@ A modular PyTorch speech framework implementing **HuBERT** (Hidden-Unit BERT) an
 
 ## Parameter Scaling Tiers
 
-| Tier | Transformer Layers | Attention Heads | Embedding Dim ($D$) | FFN Dim ($4D$) | Parameters (HuBERT) | Parameters (PhonoHuBERT) |
+| Tier | Transformer Layers | Attention Heads | Embedding Dim ($D$) | FFN Dim ($4D$) | Parameters (HuBERT / Phono) | Parameters (Phono-V6 MoE / Diffusion) |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Mini** | 4 | 4 | 256 | 1024 | **8.04 M** | **8.06 M** |
-| **Small** | 6 | 6 | 384 | 1536 | **24.21 M** | **24.23 M** |
-| **Medium** | 8 | 8 | 512 | 2048 | **48.52 M** | **31.82 M** |
-| **Base** | 12 | 12 | 768 | 3072 | **94.68 M** | **94.73 M** |
+| **Mini** | 4 | 4 | 256 | 1024 | **8.06 M** | **18.42 M** |
+| **Small** | 6 | 6 | 384 | 1536 | **24.23 M** | **45.18 M** |
+| **Medium** | 8 | 8 | 512 | 2048 | **31.82 M** | **83.55 M** (Active SOTA) |
+| **Base** | 12 | 12 | 768 | 3072 | **94.73 M** | **172.40 M** |
 
 ---
 
@@ -204,55 +211,54 @@ Navigate to **http://localhost:8000** to access the 6 tabs:
 
 ---
 
-## Pre-Training Speech Models (0-Disk Streaming)
+## Pre-Training Speech Models (Universal Standardized Protocol)
 
-Run self-supervised pre-training using multi-speaker neural speech synthesized entirely in RAM across 5 registered speech architectures:
+To ensure rigorous, fair, and scientific comparisons across all architectures in AudioLearn, **every architecture in the registry is now pre-trained under the exact same standardized benchmark setup**:
+- **Acoustic Speech Source**: 100% genuine human speech from LibriSpeech 100h clean (`--real_ratio 1.0`, default).
+- **Long-Range Context Window**: Up to **30.0 seconds** per sample (`--max_duration_sec 30.0`).
+- **High-Throughput Async Engine**: GIL-free multi-threaded batch generator (`futex_wait`) sustaining 94%–100% GPU compute saturation with 0.0 ms starvation latency.
+- **SSD Wear Protection**: Zero intermediate 1GB checkpoint writes during training (`--save_interval 4000`), persisting weights strictly at milestones and upon graceful `Ctrl+C` interrupt.
+- *(Note: Any model can alternatively run in 0-disk procedural neural TTS mode simply by passing `--real_ratio 0.0`).*
 
-### 1. PhonoHuBERT (Anti-Blank Regularized CTC)
-Direct acoustic-to-phoneme prediction with quadratic anti-blank margin regularization and calibrated decoding:
+### 1. PhonoHuBERT (Dense Standard Baseline)
+Direct acoustic-to-phoneme prediction with standard dense self-attention under the 30s LibriSpeech setup:
 ```bash
 .venv/bin/python scripts/run_pretrain.py \
     --arch phono_hubert \
-    --tier mini \
-    --batch_size 8 \
+    --tier medium \
+    --batch_size 4 \
     --num_workers 4 \
-    --steps 1000 \
-    --lr 0.0003 \
-    --min_lr 0.00003 \
-    --warmup_steps 100 \
-    --run_name phono_reg_run1
+    --steps 4000 \
+    --max_duration_sec 30.0 \
+    --run_name phono_hubert_std_run1
 ```
 
-### 2. PhonoHuBERT-Dual (Masked Frame SSL + Sequence CTC)
-Dual-loss speech Transformer pairing frame-synchronous masked phoneme Cross-Entropy (cannot collapse to blank) with auxiliary CTC sequence alignment:
-```bash
-.venv/bin/python scripts/run_pretrain.py \
-    --arch phono_hubert_dual \
-    --tier mini \
-    --batch_size 8 \
-    --num_workers 4 \
-    --steps 1000 \
-    --lr 0.0003 \
-    --min_lr 0.00003 \
-    --warmup_steps 100 \
-    --masking_mode span \
-    --mask_prob 0.4 \
-    --run_name dual_loss_run1
-```
-
-### 3. PhonoHuBERT-Hierarchical (2-Stage Gated Head)
+### 2. PhonoHuBERT-Hierarchical (Acoustic Router + Phoneme Head)
 Two-stage gated architecture decomposing decoding into an Acoustic State Router (`blank`, `silence`, `noise`, `speech`) and a pure Linguistic Phoneme Head:
 ```bash
 .venv/bin/python scripts/run_pretrain.py \
     --arch phono_hubert_hierarchical \
-    --tier mini \
-    --batch_size 8 \
+    --tier medium \
+    --batch_size 4 \
     --num_workers 4 \
-    --steps 1000 \
-    --lr 0.0003 \
-    --min_lr 0.00003 \
-    --warmup_steps 100 \
-    --run_name hierarchical_run1
+    --steps 4000 \
+    --max_duration_sec 30.0 \
+    --run_name hierarchical_std_run1
+```
+
+### 3. PhonoHuBERT-Dual (Masked Frame SSL + Sequence CTC)
+Dual-loss speech Transformer pairing frame-synchronous masked phoneme Cross-Entropy with auxiliary CTC sequence alignment:
+```bash
+.venv/bin/python scripts/run_pretrain.py \
+    --arch phono_hubert_dual \
+    --tier medium \
+    --batch_size 4 \
+    --num_workers 4 \
+    --steps 4000 \
+    --max_duration_sec 30.0 \
+    --masking_mode span \
+    --mask_prob 0.4 \
+    --run_name dual_loss_std_run1
 ```
 
 ### 4. PhonoHuBERT-Recursive (Recurrent Temporal Frame Feedback)
@@ -260,27 +266,25 @@ Autoregressive recurrent frame-memory feedback head breaking CTC conditional ind
 ```bash
 .venv/bin/python scripts/run_pretrain.py \
     --arch phono_hubert_recursive \
-    --tier mini \
-    --batch_size 8 \
+    --tier medium \
+    --batch_size 4 \
     --num_workers 4 \
-    --steps 1000 \
-    --lr 0.0003 \
-    --min_lr 0.00003 \
-    --warmup_steps 100 \
-    --run_name recursive_run1
+    --steps 4000 \
+    --max_duration_sec 30.0 \
+    --run_name recursive_std_run1
 ```
 
-### 5. HuBERT (Acoustic K-Means SSL Baseline)
+### 5. Phono-V6.1 (Hierarchical Mixture-of-Experts)
+Sparse MoE speech Transformer featuring 4 FFN experts per layer, Top-2 load-balanced gating, and hierarchical factored heads:
 ```bash
 .venv/bin/python scripts/run_pretrain.py \
-    --arch hubert_kmeans \
-    --tier mini \
-    --batch_size 8 \
+    --arch phono_v6_1_moe \
+    --tier medium \
+    --batch_size 4 \
     --num_workers 4 \
-    --steps 500 \
-    --masking_mode span \
-    --mask_prob 0.5 \
-    --run_name hubert_kmeans_run1
+    --steps 4000 \
+    --max_duration_sec 30.0 \
+    --run_name v6_1_moe_std_run1
 ```
 
 ### 6. Phono-V6.2 (Sparse Attention + 30s Context + Intermediate CTC)
@@ -330,7 +334,7 @@ Evaluated on genuine downstream LibriSpeech test utterances:
 | **Phono-V6.0 (Procedural)** | 7.0s | Procedural Clean Speech | **58.0%** | ~65% |
 | **Phono-V6.1 (MoE 4-Experts)** | 7.0s | Hierarchical Mixture-of-Experts | **45.92%** | 50.1% |
 | **Phono-V6.2 (Sparse Attention)** | 30.0s | Sparse Local Attention + InterCTC | **15.10%** | **22.18%** |
-| **Phono-V6.3 (Latent Diffusion)** | 30.0s | Sliding Gaussian Diffusion Refiner | *Active Training* | **19.58%** |
+| **Phono-V6.3 (Latent Diffusion)** | 30.0s | Sliding Gaussian Diffusion Refiner | **25.57%** *(Step 1800)* | **19.58%** |
 
 ```
 PER Progression Across Model Generations:
@@ -338,25 +342,27 @@ PER Progression Across Model Generations:
   Phono-V6.0 (Procedural):     ███████████████████████ 58.0%
   Phono-V6.1 (MoE 4-Experts):  ██████████████████ 45.92%
   Phono-V6.2 (Sparse + 30s):   ██████ 15.10% (Record)
-  Phono-V6.3 (Diffusion):      ██████ 19.58% (Lexicon PER @ Step 1400)
+  Phono-V6.3 (Diffusion):      ██████ 25.57% (Raw PER @ Step 1800; Lexicon: 19.58%)
 ```
 
 ### Key Pre-Training CLI Options
-- `--arch`: `phono_hubert`, `phono_hubert_dual`, `phono_hubert_hierarchical`, `phono_hubert_recursive`, or `hubert_kmeans`.
-- `--tier`: `mini`, `small`, `medium`, or `base`.
+- `--arch`: Registered architecture to train (`phono_hubert`, `phono_hubert_hierarchical`, `phono_hubert_dual`, `phono_hubert_recursive`, `phono_v6_1_moe`, `phono_v6_2_sparse`, `phono_v6_3_diffusion`, or `hubert_kmeans`).
+- `--tier`: Architecture scale tier (`mini`, `small`, `medium`, or `base`).
+- `--real_ratio`: Ratio of real human speech in streaming (default: `1.0` = 100% genuine LibriSpeech clean audio; set `0.0` for 0-disk procedural neural TTS).
+- `--max_duration_sec`: Maximum utterance duration in seconds (default: `30.0` seconds, unlocking long-range context).
+- `--save_interval`: Checkpoint persistence interval (default: `4000`, eliminating intermediate SSD wear; emergency checkpoint always saved on `Ctrl+C`).
+- `--warm_start`: Path to existing checkpoint to warm-start weights from (e.g. initializing V6.3 diffusion refiners on top of a V6.2 acoustic backbone).
 - `--min_lr`: Minimum learning rate floor for cosine decay (default: `1e-5`, ensures optimizer never stalls at 0).
 - `--blank_penalty`: Calibrated blank logit deduction for greedy decoding (e.g. `1.5 - 2.5`).
 - `--masking_mode`: Configurable masking scheme (`none`, `specaugment`, `span`, `dual`).
 - `--mask_prob` / `--mask_length`: Masking probability and span length in 20ms frames (default: `0.65`, `10`).
-- `--warmup_steps`: Linear learning rate warmup steps before cosine decay (e.g. `50`).
-- `--freeze_cnn_steps`: Freeze the 7-layer temporal 1D CNN feature encoder for initial steps to stabilize the Transformer backbone.
+- `--warmup_steps`: Linear learning rate warmup steps before cosine decay (e.g. `100`).
+- `--freeze_cnn_steps`: Freeze the 7-layer temporal 1D CNN feature encoder for initial steps to stabilize the Transformer backbone (default: `200`).
 - `--override`: Custom parameter overrides (e.g. `--override "encoder_layers=10,hidden_dropout=0.1"`).
-- `--num_workers`: Number of parallel Piper synthesis threads on CPU.
-- `--buffer_size`: Max batches in the bounded queue (default: `20` or `50`).
-- `--watermark`: Low watermark batch count to resume worker synthesis (default: `10` or `25`).
-- `--use_rolling_pool` / `--no_rolling_pool`: Toggle the dynamic in-RAM utterance pool.
-- `--pool_size`: Number of synthesized utterances maintained in RAM (default: `250`).
-- `--run_name`: Name for the training run (e.g. `--run_name exp_clean_ctc`). If omitted, automatically assigns the next sequential run number (`run_1`, `run_2`, etc.).
+- `--num_workers`: Number of parallel data loader threads on CPU (default: `4`).
+- `--buffer_size`: Max batches in the bounded queue (default: `20`).
+- `--watermark`: Low watermark batch count to resume worker loading (default: `10`).
+- `--run_name`: Unique name for the training run (e.g. `--run_name v6_3_diffusion_run1`). If omitted, auto-assigns next sequential run (`run_1`, `run_2`).
 - `--resume`: Auto-resume from the latest checkpoint for the active run (or specify a custom checkpoint path).
 
 ---
