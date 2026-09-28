@@ -328,13 +328,13 @@ Latent diffusion refiner applying a spatio-temporal Gaussian noise envelope in c
 
 Evaluated on genuine downstream LibriSpeech test utterances:
 
-| Architecture Generation | Context Window | Key Innovation | Phoneme Error Rate (PER) | Lexicon PER |
-| :--- | :---: | :--- | :---: | :---: |
-| **Phono-V5 (Dense Baseline)** | 7.0s | Dense Attention + Standard CTC | **75.0%** | ~80% |
-| **Phono-V6.0 (Procedural)** | 7.0s | Procedural Clean Speech | **58.0%** | ~65% |
-| **Phono-V6.1 (MoE 4-Experts)** | 7.0s | Hierarchical Mixture-of-Experts | **45.92%** | 50.1% |
-| **Phono-V6.2 (Sparse Attention)** | 30.0s | Sparse Local Attention + InterCTC | **15.10%** | **22.18%** |
-| **Phono-V6.3 (Latent Diffusion)** | 30.0s | Sliding Gaussian Diffusion Refiner | **25.57%** *(Step 1800)* | **19.58%** |
+| Architecture Generation | Context Window | Training Data Mix | Training Steps | Key Innovation | Phoneme Error Rate (PER) | Lexicon PER |
+| :--- | :---: | :--- | :---: | :--- | :---: | :---: |
+| **Phono-V5 (Dense Baseline)** | 7.0s | 100% Synthetic Procedural TTS | 1,000 steps (~2.5h) | Dense Attention + Standard CTC | **75.0%** | ~80% |
+| **Phono-V6.0 (Procedural)** | 7.0s | 100% Synthetic Procedural TTS | 1,000 steps (~2.5h) | Procedural Clean Speech | **58.0%** | ~65% |
+| **Phono-V6.1 (MoE 4-Experts)** | 7.0s | 50% Synthetic / 50% LibriSpeech | 2,000 steps (~15h) | Hierarchical Mixture-of-Experts | **45.92%** | 50.1% |
+| **Phono-V6.2 (Sparse Attention)** | 30.0s | 100% Genuine LibriSpeech Clean | 4,000 steps (52.1h) | Sparse Local Attention + InterCTC | **15.10%** | **22.18%** |
+| **Phono-V6.3 (Latent Diffusion)** | 30.0s | 100% Genuine LibriSpeech Clean | *4,000 steps (Step 2000: 29.3h)* | Sliding Gaussian Diffusion Refiner | **23.15%** *(Step 2000)* | **18.58%** |
 
 ```
 PER Progression Across Model Generations:
@@ -342,7 +342,7 @@ PER Progression Across Model Generations:
   Phono-V6.0 (Procedural):     ███████████████████████ 58.0%
   Phono-V6.1 (MoE 4-Experts):  ██████████████████ 45.92%
   Phono-V6.2 (Sparse + 30s):   ██████ 15.10% (Record)
-  Phono-V6.3 (Diffusion):      ██████ 25.57% (Raw PER @ Step 1800; Lexicon: 19.58%)
+  Phono-V6.3 (Diffusion):      █████ 23.15% (Raw PER @ Step 2000; Lexicon: 18.58%)
 ```
 
 ### Key Pre-Training CLI Options
