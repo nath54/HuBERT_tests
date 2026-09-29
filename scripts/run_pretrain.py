@@ -853,8 +853,8 @@ def main():
                 history.append(entry)
                 run_mgr.update_history(history)
 
-            # Save model checkpoint: skipped if args.only_save_best to preserve SSD lifetime
-            if not args.only_save_best and (step % args.save_interval == 0 or step == args.steps):
+            # Save final checkpoint with optimizer state for future resumption (periodic checkpoints skipped if only_save_best)
+            if (not args.only_save_best and step % args.save_interval == 0) or (step == args.steps):
                 ckpt_path, latest_path = run_mgr.get_checkpoint_paths(step)
                 save_payload = {
                     "step": step,
@@ -873,6 +873,8 @@ def main():
                     torch.save(save_payload, latest_path)
                     if step == args.steps or step % 4000 == 0:
                         torch.save(save_payload, ckpt_path)
+                    if step == args.steps:
+                        print(f"💾 [Final Step Checkpoint Saved] Saved Step {step} weights, optimizer & scaler states -> {ckpt_path.name}")
                     run_mgr.on_checkpoint_saved(
                         step=step,
                         loss=loss_val,

@@ -353,6 +353,7 @@ class RunManager:
         run_candidates = [
             self.run_ckpt_dir / "checkpoint_latest.pt",
             self.run_ckpt_dir / "latest_checkpoint.pt",
+            self.run_ckpt_dir / "best_checkpoint.pt",
         ]
         for cand in run_candidates:
             if cand.exists():
