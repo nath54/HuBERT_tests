@@ -470,6 +470,24 @@ def main():
     parser.add_argument("--warm_start", type=str, default=None, help="Path to checkpoint from which to initialize model weights (starts from step 1)")
     args = parser.parse_args()
 
+    # V6.3 Diffusion Refiner Specific Tuning:
+    # Use lr=5e-5 for latent diffusion stability and auto warm-start from V6.2 Sparse backbone if available
+    if args.arch == "phono_v6_3_diffusion":
+        if args.lr == 0.0003:
+            args.lr = 5e-5
+            print(f"🎯 [V6.3 Hyperparameter Tuning] Calibrated learning rate to 5e-5 for latent diffusion stability.")
+        if args.warm_start is None:
+            v6_2_candidates = [
+                Path(f"checkpoints/phono_v6_2_sparse/{args.tier}/bench_phono_v6_2_sparse_{args.tier}/best_checkpoint.pt"),
+                Path(f"checkpoints/phono_v6_2_sparse/{args.tier}/v6_2_sparse_100h_run1/checkpoint_step_4000.pt"),
+                Path(f"checkpoints/phono_v6_2_sparse/{args.tier}/best_checkpoint.pt"),
+            ]
+            for cand in v6_2_candidates:
+                if cand.exists():
+                    args.warm_start = str(cand)
+                    print(f"🔥 [V6.3 Auto Warm-Start] Warm-starting acoustic backbone from V6.2 checkpoint: {cand}")
+                    break
+
     device = torch.device(args.device)
     overrides = parse_overrides(args.override)
 

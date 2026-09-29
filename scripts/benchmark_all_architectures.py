@@ -156,6 +156,10 @@ def main():
                 except Exception:
                     pass
 
+            model_lr = args.lr
+            if arch == "phono_v6_3_diffusion" and args.lr == 0.0003:
+                model_lr = 5e-5
+
             cmd = [
                 str(project_root / ".venv" / "bin" / "python"),
                 str(project_root / "scripts" / "run_pretrain.py"),
@@ -166,7 +170,7 @@ def main():
                 "--val_samples", str(args.val_samples),
                 "--test_samples", str(args.test_samples),
                 "--batch_size", str(args.batch_size),
-                "--lr", str(args.lr),
+                "--lr", str(model_lr),
                 "--max_duration_sec", str(args.max_duration_sec),
                 "--real_ratio", str(args.real_ratio),
                 "--blank_penalty", str(args.blank_penalty),
