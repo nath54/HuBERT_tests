@@ -923,6 +923,46 @@ def main():
             },
         )
         raise
+    except Exception as e:
+        is_oom = isinstance(e, torch.cuda.OutOfMemoryError) or "out of memory" in str(e).lower()
+        err_type = "CUDA OOM" if is_oom else type(e).__name__
+        print(f"\n💥 [Run Failed: {err_type}] Architecture {args.arch} [{args.tier}] failed at Step {step if 'step' in locals() else 0}: {e}")
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        summary_path = run_mgr.run_log_dir / "benchmark_summary.json"
+        summary_data = {
+            "arch": args.arch,
+            "tier": args.tier,
+            "total_steps": args.steps,
+            "status": "failed",
+            "error_type": err_type,
+            "error_message": str(e),
+            "failed_at_step": step if "step" in locals() else 0,
+            "best_val_step": best_val_step if "best_val_step" in locals() else 0,
+            "best_val_per": best_val_per if "best_val_per" in locals() and best_val_per != float("inf") else None,
+            "test_clean_per": None,
+            "test_clean_cer": None,
+            "test_clean_lexicon_per": None,
+            "test_clean_lexicon_wer": None,
+            "cumulative_audio_hours": round(total_audio_sec / 3600.0, 4) if "total_audio_sec" in locals() else 0.0,
+            "completed_at": time.time(),
+        }
+        try:
+            with open(summary_path, "w", encoding="utf-8") as f:
+                json.dump(summary_data, f, indent=2)
+        except Exception:
+            pass
+
+        run_mgr.finish_run(
+            status="failed",
+            final_metrics={
+                "step": step if "step" in locals() else 0,
+                "error": str(e),
+                "error_type": err_type,
+            },
+        )
+        sys.exit(2 if is_oom else 1)
     finally:
         batch_generator.stop()
 
