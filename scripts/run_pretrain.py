@@ -7,6 +7,7 @@ and all parameter tiers (mini, small, medium, base) with variable hyperparameter
 
 import argparse
 import collections
+import copy
 from datetime import datetime
 import json
 import os
@@ -15,7 +16,7 @@ import random
 import signal
 import sys
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -276,16 +277,18 @@ def evaluate_direct_phonemes(
     model: nn.Module,
     phoneme_tokenizer: PhonemeTokenizer,
     device: torch.device,
+    manifest_path: Union[str, Path] = "data/librispeech/librispeech_test_clean.json",
     num_samples: int = 20,
     blank_penalty: float = 0.0,
+    compute_lexicon: bool = False,
 ) -> Dict[str, Any]:
-    """Evaluate direct phoneme prediction model directly on LibriSpeech test-clean benchmark."""
+    """Evaluate direct phoneme prediction model on a given JSON manifest."""
     global _GLOBAL_LEX_DECODER
-    test_manifest = Path("data/librispeech/librispeech_test_clean.json")
-    if not test_manifest.exists():
+    manifest = Path(manifest_path)
+    if not manifest.exists():
         return {"wer": 100.0, "cer": 100.0, "per": 100.0, "sample_pred": ""}
 
-    with open(test_manifest, "r", encoding="utf-8") as f:
+    with open(manifest, "r", encoding="utf-8") as f:
         samples = json.load(f)[:num_samples]
 
     runner = SOTABenchmarkRunner(device=str(device))
@@ -378,8 +381,8 @@ def evaluate_direct_phonemes(
         pers.append(p)
         cers.append(c)
 
-        # Lexicon-constrained evaluation on first 10 samples
-        if lex_decoder is not None and idx < 10:
+        # Lexicon-constrained evaluation on first 10 samples (when enabled)
+        if compute_lexicon and lex_decoder is not None and idx < 10:
             try:
                 with torch.no_grad():
                     out_lex = model(audio=speech_tensor)
@@ -452,6 +455,11 @@ def main():
     parser.add_argument("--mask_prob", type=float, default=None, help="Probability of acoustic masking")
     parser.add_argument("--mask_length", type=int, default=None, help="Span mask length in 20ms frames")
     parser.add_argument("--save_interval", type=int, default=4000, help="Checkpoint interval (default 4000 to minimize SSD writes)")
+    parser.add_argument("--val_manifest", type=str, default="data/librispeech/benchmark_val.json", help="Path to held-out validation JSON manifest")
+    parser.add_argument("--test_manifest", type=str, default="data/librispeech/librispeech_test_clean.json", help="Path to LibriSpeech test-clean benchmark JSON manifest")
+    parser.add_argument("--val_samples", type=int, default=50, help="Number of validation samples evaluated every eval_interval")
+    parser.add_argument("--test_samples", type=int, default=100, help="Number of test-clean samples evaluated at the end of training")
+    parser.add_argument("--only_save_best", action="store_true", default=False, help="Only save the single best checkpoint (protects SSD wear and eliminates intermediate checkpoints)")
     parser.add_argument("--real_speech_manifest", type=str, default=None, help="Path to real speech JSON manifest for pre-training")
     parser.add_argument("--real_ratio", type=float, default=1.0, help="Ratio of real human speech in streaming (0.0=all synthetic, 1.0=all real LibriSpeech)")
     parser.add_argument("--min_duration_sec", type=float, default=1.0, help="Minimum utterance duration in seconds")
@@ -534,12 +542,15 @@ def main():
 
     # Resolve hybrid real speech dataset if enabled or requested
     real_manifest = args.real_speech_manifest
-    if not real_manifest and (
-        getattr(config, "hybrid_training", False)
-        or args.arch in ("phono_v3_hybrid", "phono_v4_scaled", "phono_v5_beam")
-        or args.arch.startswith("phono_v6")
-    ):
-        real_manifest = getattr(config, "librispeech_manifest", "data/librispeech/librispeech_train.json")
+    if not real_manifest:
+        if Path("data/librispeech/benchmark_train.json").exists():
+            real_manifest = "data/librispeech/benchmark_train.json"
+        elif (
+            getattr(config, "hybrid_training", False)
+            or args.arch in ("phono_v3_hybrid", "phono_v4_scaled", "phono_v5_beam")
+            or args.arch.startswith("phono_v6")
+        ):
+            real_manifest = getattr(config, "librispeech_manifest", "data/librispeech/librispeech_train.json")
 
     # For v6.2+ variants, default to 100% human speech if real_ratio wasn't explicitly changed
     if args.arch in ("phono_v6_2_sparse", "phono_v6_3_diffusion") and args.real_ratio == 0.5:
@@ -634,6 +645,9 @@ def main():
             set_feature_extractor_grad(model, True)
 
     recent_step_durations = collections.deque(maxlen=20)
+    best_val_per = float("inf")
+    best_val_step = 0
+    best_model_state_dict = None
     print(f"\n[Ready] Starting decoupled threaded streaming loop (Step {start_step} -> {args.steps})...\n")
 
     try:
@@ -773,37 +787,74 @@ def main():
             if step % 50 == 0 or step == 5:
                 print("\n" + profiler.format_console_breakdown(batch_generator.buffer_occupancy, args.buffer_size) + "\n")
 
-            # Milestone Benchmark Evaluation (Inside Loop)
+            # Milestone Validation Evaluation (Every eval_interval or at final step)
             if step % args.eval_interval == 0 or step == args.steps:
-                print(f"\n--- [Milestone Step {step}] Downstream LibriSpeech Evaluation ---")
+                val_manifest_path = Path(args.val_manifest)
+                manifest_to_eval = val_manifest_path if val_manifest_path.exists() else Path("data/librispeech/librispeech_test_clean.json")
+                is_eval_val = (manifest_to_eval == val_manifest_path)
+                eval_tag = "Validation Set" if is_eval_val else "Test-Clean (Fallback)"
+
+                print(f"\n--- [Step {step}] Evaluating on {eval_tag} ({manifest_to_eval}) ---")
                 if target_extractor.target_type == "phoneme_tokens":
-                    print("🎯 [Direct Phoneme Architecture] Evaluating PER directly on LibriSpeech via PhonemeTokenizer...")
-                    bench_res = evaluate_direct_phonemes(model, phoneme_tokenizer, device, num_samples=20, blank_penalty=args.blank_penalty)
+                    bench_res = evaluate_direct_phonemes(
+                        model,
+                        phoneme_tokenizer,
+                        device,
+                        manifest_path=manifest_to_eval,
+                        num_samples=args.val_samples,
+                        blank_penalty=args.blank_penalty,
+                        compute_lexicon=False,
+                    )
                 else:
                     calibrated_ctc = run_quick_ctc_calibration(model, config, tokenizer, device, probe_steps=args.probe_steps)
-                    bench_res = evaluate_on_benchmark(calibrated_ctc, tokenizer, device, num_samples=20)
-                print(f"🏆 Milestone Step {step} -> WER: {bench_res['wer']}% | CER: {bench_res['cer']}% | PER: {bench_res['per']}%")
-                if bench_res.get("lexicon_per") is not None:
-                    print(f"📖 [Lexicon Decoder] -> PER: {bench_res['lexicon_per']}% | WER: {bench_res.get('lexicon_wer', 0.0)}% | Sample: {bench_res.get('sample_lex_pred', '')[:65]}...")
+                    bench_res = evaluate_on_benchmark(calibrated_ctc, tokenizer, device, num_samples=args.val_samples)
+
+                val_per = bench_res["per"]
+                print(f"📊 Step {step} {eval_tag} -> PER: {val_per:.2f}% | CER: {bench_res['cer']:.2f}%")
+
+                is_new_best = val_per < best_val_per
+                if is_new_best:
+                    best_val_per = val_per
+                    best_val_step = step
+                    best_model_state_dict = copy.deepcopy(model.state_dict())
+                    best_ckpt_path = run_mgr.run_ckpt_dir / "best_checkpoint.pt"
+                    best_save_payload = {
+                        "step": step,
+                        "arch": args.arch,
+                        "tier": args.tier,
+                        "run_name": run_mgr.run_name,
+                        "config": config,
+                        "model_state_dict": model.state_dict(),
+                        "optimizer_state_dict": optimizer.state_dict(),
+                        "scaler_state_dict": scaler.state_dict(),
+                        "val_per": best_val_per,
+                        "total_audio_sec": total_audio_sec,
+                        "history": history,
+                        "saved_at": time.time(),
+                    }
+                    try:
+                        torch.save(best_save_payload, best_ckpt_path)
+                        print(f"🌟 [New Best Model Saved] Step {step} achieved lowest Val PER: {best_val_per:.2f}% -> {best_ckpt_path.name}")
+                    except Exception as e:
+                        print(f"⚠️ Failed to save best checkpoint: {e}")
 
                 entry = {
                     "step": step,
                     "cumulative_audio_hours": round(hours, 4),
                     "pretrain_loss": loss_val,
                     "masked_acc_pct": acc_val,
-                    "librispeech_wer": bench_res["wer"],
-                    "librispeech_cer": bench_res["cer"],
-                    "librispeech_per": bench_res["per"],
+                    "val_per": val_per,
+                    "val_cer": bench_res["cer"],
+                    "best_val_per": best_val_per,
+                    "best_val_step": best_val_step,
+                    "is_best_val": is_new_best,
                     "sample_prediction": bench_res["sample_pred"],
-                    "lexicon_per": bench_res.get("lexicon_per"),
-                    "lexicon_wer": bench_res.get("lexicon_wer"),
-                    "sample_lex_prediction": bench_res.get("sample_lex_pred"),
                 }
                 history.append(entry)
                 run_mgr.update_history(history)
 
-            # Save model checkpoint: only on milestone (args.steps or step % args.save_interval == 0) to protect SSD
-            if step % args.save_interval == 0 or step == args.steps:
+            # Save model checkpoint: skipped if args.only_save_best to preserve SSD lifetime
+            if not args.only_save_best and (step % args.save_interval == 0 or step == args.steps):
                 ckpt_path, latest_path = run_mgr.get_checkpoint_paths(step)
                 save_payload = {
                     "step": step,
@@ -826,7 +877,7 @@ def main():
                         step=step,
                         loss=loss_val,
                         acc=acc_val,
-                        per=history[-1].get("librispeech_per") if history else None,
+                        per=history[-1].get("val_per") if history else None,
                         audio_hours=round(hours, 4),
                     )
                 except Exception as e:
@@ -875,11 +926,67 @@ def main():
     finally:
         batch_generator.stop()
 
+    # Final Unbiased Evaluation on LibriSpeech Test-Clean using the BEST validation model
+    test_manifest_path = Path(args.test_manifest)
+    final_test_res = {}
+    if test_manifest_path.exists():
+        print(f"\n=======================================================")
+        print(f"🏆 FINAL UNBIASED EVALUATION ON LIBRISPEECH TEST-CLEAN")
+        print(f"   Architecture: {args.arch} [{args.tier}]")
+        print(f"   Restoring best validation model from Step {best_val_step} (Lowest Val PER: {best_val_per:.2f}%)")
+        print(f"=======================================================")
+        if best_model_state_dict is not None:
+            model.load_state_dict(best_model_state_dict)
+        elif (run_mgr.run_ckpt_dir / "best_checkpoint.pt").exists():
+            payload = torch.load(run_mgr.run_ckpt_dir / "best_checkpoint.pt", map_location=device, weights_only=False)
+            model.load_state_dict(payload["model_state_dict"])
+
+        if target_extractor.target_type == "phoneme_tokens":
+            final_test_res = evaluate_direct_phonemes(
+                model,
+                phoneme_tokenizer,
+                device,
+                manifest_path=test_manifest_path,
+                num_samples=args.test_samples,
+                blank_penalty=args.blank_penalty,
+                compute_lexicon=True,
+            )
+        else:
+            calibrated_ctc = run_quick_ctc_calibration(model, config, tokenizer, device, probe_steps=args.probe_steps)
+            final_test_res = evaluate_on_benchmark(calibrated_ctc, tokenizer, device, num_samples=args.test_samples)
+
+        print(f"🎯 Final Test-Clean Scores (Best Model from Step {best_val_step}):")
+        print(f"   • Test PER (Greedy CTC)   : {final_test_res['per']:.2f}%")
+        print(f"   • Test CER                : {final_test_res['cer']:.2f}%")
+        if final_test_res.get("lexicon_per") is not None:
+            print(f"   • Test Lexicon PER        : {final_test_res['lexicon_per']:.2f}%")
+            print(f"   • Test Lexicon WER        : {final_test_res.get('lexicon_wer', 0.0):.2f}%")
+            print(f"   • Sample Lexicon Decode   : {final_test_res.get('sample_lex_pred', '')[:65]}...")
+        print(f"=======================================================\n")
+
+        summary_path = run_mgr.run_log_dir / "benchmark_summary.json"
+        summary_data = {
+            "arch": args.arch,
+            "tier": args.tier,
+            "total_steps": args.steps,
+            "best_val_step": best_val_step,
+            "best_val_per": best_val_per,
+            "test_clean_per": final_test_res["per"],
+            "test_clean_cer": final_test_res["cer"],
+            "test_clean_lexicon_per": final_test_res.get("lexicon_per"),
+            "test_clean_lexicon_wer": final_test_res.get("lexicon_wer"),
+            "sample_prediction": final_test_res.get("sample_pred"),
+            "sample_lex_prediction": final_test_res.get("sample_lex_pred"),
+            "cumulative_audio_hours": round(total_audio_sec / 3600.0, 4),
+            "completed_at": time.time(),
+        }
+        with open(summary_path, "w", encoding="utf-8") as f:
+            json.dump(summary_data, f, indent=2)
+
     # Mark run as finished
     live_status["is_running"] = False
     live_status["status"] = "completed"
     run_mgr.update_status(live_status)
-    best_per = min([h.get("librispeech_per", 100.0) for h in history], default=None) if history else None
     run_mgr.finish_run(
         status="completed",
         final_metrics={
@@ -887,7 +994,11 @@ def main():
             "loss": loss_val,
             "accuracy": acc_val,
             "cumulative_audio_hours": round(hours, 4),
-            "best_per": best_per,
+            "best_val_per": best_val_per,
+            "best_val_step": best_val_step,
+            "test_clean_per": final_test_res.get("per"),
+            "test_clean_lexicon_per": final_test_res.get("lexicon_per"),
+            "test_clean_lexicon_wer": final_test_res.get("lexicon_wer"),
         },
     )
     print(f"\n[Completed] Pre-training run '{run_mgr.run_name}' finished for {args.arch} [{args.tier}] at step {args.steps}!")
