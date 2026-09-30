@@ -1,12 +1,12 @@
 # Standardized Cross-Architecture Benchmark Report
 
-**Date**: 2026-09-29 19:11:26  
+**Date**: 2026-09-30 20:28:21  
 **Model Tiers**: `medium` | **Training Steps**: `4,000` | **Evaluation Interval**: every `200` steps  
 **Training Split**: `benchmark_train.json` (~95% LibriSpeech Clean-100)  
 **Validation Split**: `benchmark_val.json` (~5% Held-Out LibriSpeech Clean-100)  
 **Test Benchmark**: `librispeech_test_clean.json` (Untainted Test-Clean)  
-**Summary**: 7 Successful / 0 Failed / 7 Total Runs  
-**Total Suite Runtime**: 524.5 minutes  
+**Summary**: 8 Successful / 0 Failed / 8 Total Runs  
+**Total Suite Runtime**: 479.5 minutes  
 
 ## Executive Summary & Model Selection Protocol
 1. **Fair & Scientific Comparison**: All architectures trained on identical audio frames and random seeds with identical learning rates and batch sizes.
@@ -19,21 +19,23 @@
 
 | Architecture | Tier | Best Val PER | Best Step | Test PER (Greedy) | Test Lexicon PER | Test CER | Audio Hours | Status / Checkpoint |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
+| **phono_v6_4_gated_diffusion** | medium | 18.27% | 2800 | **14.63%** | 16.78% | 14.63% | 56.2h | `checkpoints/phono_v6_4_gated_diffusion/medium/best_checkpoint.pt` |
 | **phono_v6_3_diffusion** | medium | 20.58% | 3600 | **16.05%** | 19.46% | 16.05% | 56.3h | `checkpoints/phono_v6_3_diffusion/medium/best_checkpoint.pt` |
-| **phono_v6_2_sparse** | medium | 24.82% | 4000 | **19.13%** | 20.27% | 19.13% | 56.4h | `checkpoints/phono_v6_2_sparse/medium/best_checkpoint.pt` |
-| **phono_v6_1_moe** | medium | 47.06% | 4000 | **39.37%** | 44.46% | 39.37% | 56.4h | `checkpoints/phono_v6_1_moe/medium/best_checkpoint.pt` |
-| **phono_hubert_dual** | medium | 97.37% | 200 | **94.97%** | 81.24% | 94.97% | 56.7h | `checkpoints/phono_hubert_dual/medium/best_checkpoint.pt` |
-| **phono_hubert_recursive** | medium | 95.99% | 200 | **95.74%** | 142.69% | 95.74% | 56.5h | `checkpoints/phono_hubert_recursive/medium/best_checkpoint.pt` |
-| **phono_hubert** | medium | 99.04% | 400 | **99.34%** | 97.34% | 99.34% | 56.3h | `checkpoints/phono_hubert/medium/best_checkpoint.pt` |
-| **phono_hubert_hierarchical** | medium | 100.00% | 200 | **100.00%** | 100.00% | 100.00% | 56.4h | `checkpoints/phono_hubert_hierarchical/medium/best_checkpoint.pt` |
+| **phono_v4_scaled** | medium | 32.73% | 3400 | **27.49%** | 36.96% | 27.49% | 56.4h | `checkpoints/phono_v4_scaled/medium/best_checkpoint.pt` |
+| **phono_v6_1_moe** | medium | 35.49% | 3800 | **28.60%** | 33.83% | 28.60% | 56.4h | `checkpoints/phono_v6_1_moe/medium/best_checkpoint.pt` |
+| **phono_v5_beam** | medium | 35.50% | 3600 | **29.77%** | 32.64% | 29.77% | 56.6h | `checkpoints/phono_v5_beam/medium/best_checkpoint.pt` |
+| **phono_v2_specaugment** | medium | 37.08% | 4000 | **30.38%** | 34.75% | 30.38% | 56.3h | `checkpoints/phono_v2_specaugment/medium/best_checkpoint.pt` |
+| **phono_v3_hybrid** | medium | 39.34% | 4000 | **34.83%** | 40.89% | 34.83% | 56.4h | `checkpoints/phono_v3_hybrid/medium/best_checkpoint.pt` |
+| **phono_v1_frontend** | medium | 43.51% | 3800 | **37.98%** | 30.37% | 37.98% | 56.5h | `checkpoints/phono_v1_frontend/medium/best_checkpoint.pt` |
 
 ```
 Test PER Ranking (Lower is Better):
+  phono_v6_4_gated_diffusion [medium]: █████ 14.63%
   phono_v6_3_diffusion [medium]   : ██████ 16.05%
-  phono_v6_2_sparse [medium]      : ███████ 19.13%
-  phono_v6_1_moe [medium]         : ███████████████ 39.37%
-  phono_hubert_dual [medium]      : █████████████████████████████████████ 94.97%
-  phono_hubert_recursive [medium] : ██████████████████████████████████████ 95.74%
-  phono_hubert [medium]           : ███████████████████████████████████████ 99.34%
-  phono_hubert_hierarchical [medium]: ████████████████████████████████████████ 100.00%
+  phono_v4_scaled [medium]        : ██████████ 27.49%
+  phono_v6_1_moe [medium]         : ███████████ 28.60%
+  phono_v5_beam [medium]          : ███████████ 29.77%
+  phono_v2_specaugment [medium]   : ████████████ 30.38%
+  phono_v3_hybrid [medium]        : █████████████ 34.83%
+  phono_v1_frontend [medium]      : ███████████████ 37.98%
 ```

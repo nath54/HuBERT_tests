@@ -307,3 +307,39 @@ def test_v6_3_diffusion_decoding():
         assert isinstance(preds_diffusion[0], list)
 
 
+def test_v6_4_gated_diffusion():
+    """Verify PhonoV64GatedDiffusion forward pass, confidence gating, and deep refiner."""
+    from src.models.phono_variants import DeepLatentDiffusionRefiner
+
+    config = ModelRegistry.build_config("phono_v6_4_gated_diffusion", tier="mini")
+    assert config.gate_confidence_high == 0.8
+    assert config.gate_confidence_low == 0.3
+    assert config.use_deep_refiner is True
+
+    model = ModelRegistry.build_model("phono_v6_4_gated_diffusion", tier="mini", config=config)
+    assert isinstance(model.latent_refiner, DeepLatentDiffusionRefiner)
+
+    model.train()
+    dummy_audio = torch.randn(2, 16000)
+    dummy_targets = torch.randint(1, 40, (2, 10))
+    target_lengths = torch.tensor([10, 8])
+
+    out = model(audio=dummy_audio, targets=dummy_targets, target_lengths=target_lengths)
+    assert "loss" in out
+    assert "diff_loss" in out
+    assert "gate_bypass_pct" in out
+    assert "gate_partial_pct" in out
+    assert "gate_full_pct" in out
+    assert out["loss"].requires_grad
+
+    out["loss"].backward()
+    assert model.latent_refiner.out_proj.weight.grad is not None
+
+    model.eval()
+    with torch.no_grad():
+        preds_gated = model.decode_gated_diffusion(dummy_audio, num_steps=2, window_width=8, window_stride=8)
+        assert len(preds_gated) == 2
+        assert isinstance(preds_gated[0], list)
+
+
+

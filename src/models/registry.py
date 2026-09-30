@@ -39,6 +39,8 @@ from src.models.phono_variants import (
     PhonoV62SparseForPreTraining,
     PhonoV63DiffusionConfig,
     PhonoV63DiffusionForPreTraining,
+    PhonoV64GatedDiffusionConfig,
+    PhonoV64GatedDiffusionForPreTraining,
 )
 from src.data.target_extractors import (
     BaseTargetExtractor,
@@ -370,4 +372,14 @@ ModelRegistry.register(
     target_extractor_cls=PhonemeTargetExtractor,
     target_type="phoneme_tokens",
 )(PhonoV63DiffusionForPreTraining)
+
+ModelRegistry.register(
+    model_id="phono_v6_4_gated_diffusion",
+    display_name="Phono-V6.4 (Confidence-Gated Diffusion)",
+    description="Variant 6.4: Variant 6.3 + Confidence-Gated Latent Diffusion. High-confidence CTC frames bypass diffusion; only ambiguous frames are refined via a deep 3-block denoiser.",
+    model_cls=PhonoV64GatedDiffusionForPreTraining,
+    config_cls=PhonoV64GatedDiffusionConfig,
+    target_extractor_cls=PhonemeTargetExtractor,
+    target_type="phoneme_tokens",
+)(PhonoV64GatedDiffusionForPreTraining)
 

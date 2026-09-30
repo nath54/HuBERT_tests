@@ -13,6 +13,7 @@ A modular PyTorch speech framework implementing **HuBERT** (Hidden-Unit BERT) an
      - **V6.1 (MoE Transformer)**: Sparse Mixture-of-Experts with 4 FFN experts, Top-2 gating, and dynamic load-balancing auxiliary loss.
      - **V6.2 (Sparse Attention + 30s Context + InterCTC)**: Local sliding attention window ($\pm 320$ms), 30-second context window (up to 1,500 frames), Intermediate Layer-4 & Layer-8 CTC multi-task supervision, achieving our breakthrough **15.10% PER** on LibriSpeech clean-100.
      - **V6.3 (Sliding Gaussian Latent Diffusion)**: Spatio-temporal Gaussian-modulated diffusion in latent phoneme space, FiLM-conditioned 2-block Conv1D refiner, and a trailing-window streaming phoneme decoder.
+     - **V6.4 (Confidence-Gated Diffusion & Deep Refiner)**: Adaptive margin gating where confident CTC frames (> 0.8) bypass diffusion to preserve crisp spikes while ambiguous frames receive targeted denoising via an enhanced 3-block convolutional refiner.
    - **Parameter Scaling Tiers**: **Mini** (8.0M), **Small** (24.2M), **Medium** (31.8M / 83.5M), and **Base** (94.7M) with on-the-fly parameter variation and checkpoint hot-swapping.
 
 2. **Dual-Mode Streaming Pipeline (Procedural 0-Disk vs. Real Human Speech)**:
@@ -335,6 +336,7 @@ Evaluated on genuine downstream LibriSpeech test utterances:
 | **Phono-V6.1 (MoE 4-Experts)** | 7.0s | 50% Synthetic / 50% LibriSpeech | 2,000 steps (~15h) | Hierarchical Mixture-of-Experts | **45.92%** | 50.1% |
 | **Phono-V6.2 (Sparse Attention)** | 30.0s | 100% Genuine LibriSpeech Clean | 4,000 steps (52.1h) | Sparse Local Attention + InterCTC | **15.10%** | **22.18%** |
 | **Phono-V6.3 (Latent Diffusion)** | 30.0s | 100% Genuine LibriSpeech Clean | 4,000 steps (56.2h) | Latent Diffusion Multi-Task Regularization | **13.70%** *(Project Record)* | **20.74%** |
+| **Phono-V6.4 (Gated Diffusion)** | 30.0s | 100% Genuine LibriSpeech Clean | 4,000 steps (56.2h) | Confidence-Gated Diffusion + Deep Refiner | **14.63%** | **16.78%** *(Best Lexicon PER)* |
 
 ```
 PER Progression Across Model Generations:
@@ -343,10 +345,27 @@ PER Progression Across Model Generations:
   Phono-V6.1 (MoE 4-Experts):  ██████████████████ 45.92%
   Phono-V6.2 (Sparse + 30s):   ██████ 15.10%
   Phono-V6.3 (Diffusion):      █████ 13.70% (Project Record)
+  Phono-V6.4 (Gated Diffusion):█████ 14.63% (16.78% Lexicon PER)
 ```
 
+### Standardized Cross-Architecture Benchmark Suite (Medium Tier, 4,000 Steps Each)
+
+Cheat-free evaluation protocol: model selection performed strictly on held-out validation split (`benchmark_val.json`, 5.09h), followed by unbiased evaluation on standard `librispeech_test_clean.json`:
+
+| Architecture | Tier | Best Val PER | Best Step | Test PER (Greedy) | Test Lexicon PER | Test CER | Audio Hours |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **phono_v6_4_gated_diffusion** | medium | 18.27% | 2800 | **14.63%** | **16.78%** | 14.63% | 56.2h |
+| **phono_v6_3_diffusion** | medium | 20.58% | 3600 | **16.05%** | 19.46% | 16.05% | 56.3h |
+| **phono_v6_2_sparse** | medium | 24.82% | 4000 | **19.13%** | 20.27% | 19.13% | 56.4h |
+| **phono_v4_scaled** | medium | 32.73% | 3400 | **27.49%** | 36.96% | 27.49% | 56.4h |
+| **phono_v6_1_moe** | medium | 35.49% | 3800 | **28.60%** | 33.83% | 28.60% | 56.4h |
+| **phono_v5_beam** | medium | 35.50% | 3600 | **29.77%** | 32.64% | 29.77% | 56.6h |
+| **phono_v2_specaugment** | medium | 37.08% | 4000 | **30.38%** | 34.75% | 30.38% | 56.3h |
+| **phono_v3_hybrid** | medium | 39.34% | 4000 | **34.83%** | 40.89% | 34.83% | 56.4h |
+| **phono_v1_frontend** | medium | 43.51% | 3800 | **37.98%** | 30.37% | 37.98% | 56.5h |
+
 ### Key Pre-Training CLI Options
-- `--arch`: Registered architecture to train (`phono_hubert`, `phono_hubert_hierarchical`, `phono_hubert_dual`, `phono_hubert_recursive`, `phono_v6_1_moe`, `phono_v6_2_sparse`, `phono_v6_3_diffusion`, or `hubert_kmeans`).
+- `--arch`: Registered architecture to train (`phono_hubert`, `phono_hubert_hierarchical`, `phono_hubert_dual`, `phono_hubert_recursive`, `phono_v6_1_moe`, `phono_v6_2_sparse`, `phono_v6_3_diffusion`, `phono_v6_4_gated_diffusion`, or `hubert_kmeans`).
 - `--tier`: Architecture scale tier (`mini`, `small`, `medium`, or `base`).
 - `--real_ratio`: Ratio of real human speech in streaming (default: `1.0` = 100% genuine LibriSpeech clean audio; set `0.0` for 0-disk procedural neural TTS).
 - `--max_duration_sec`: Maximum utterance duration in seconds (default: `30.0` seconds, unlocking long-range context).

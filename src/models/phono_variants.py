@@ -1269,3 +1269,386 @@ class PhonoV63DiffusionForPreTraining(PhonoV62SparseForPreTraining):
             return self.decode_beam(logits_or_audio, lengths=lengths)
         return self.decode_sliding_diffusion(logits_or_audio, lengths=lengths, num_steps=num_steps)
 
+
+# ==============================================================================
+# VARIANT 6.4: Confidence-Gated Latent Diffusion with Deep Refiner
+# ==============================================================================
+
+class DeepLatentDiffusionRefiner(nn.Module):
+    """3-Block Residual Convolutional Refiner with FiLM noise conditioning.
+
+    Extends the 2-block LatentDiffusionRefiner with an additional residual block
+    for stronger denoising capacity on ambiguous frames, plus a wider kernel for
+    better temporal context.
+    """
+
+    def __init__(self, embed_dim: int = 512, hidden_dim: Optional[int] = None, dropout: float = 0.1):
+        super().__init__()
+        h_dim = hidden_dim or embed_dim
+        self.in_proj = nn.Linear(embed_dim, h_dim)
+
+        # FiLM projection: noise scale sigma -> scale (gamma) and shift (beta)
+        self.noise_mlp = nn.Sequential(
+            nn.Linear(1, h_dim // 2),
+            nn.SiLU(),
+            nn.Linear(h_dim // 2, 2 * h_dim),
+        )
+
+        # 3 residual blocks with depthwise-separable 1D convs
+        # conv1 & conv2 match LatentDiffusionRefiner (kernel 5) for seamless warm-start from V6.3
+        self.conv1 = nn.Conv1d(h_dim, h_dim, kernel_size=5, padding=2, groups=h_dim)
+        self.pw_conv1 = nn.Conv1d(h_dim, h_dim, kernel_size=1)
+        self.norm1 = nn.LayerNorm(h_dim)
+
+        self.conv2 = nn.Conv1d(h_dim, h_dim, kernel_size=5, padding=2, groups=h_dim)
+        self.pw_conv2 = nn.Conv1d(h_dim, h_dim, kernel_size=1)
+        self.norm2 = nn.LayerNorm(h_dim)
+
+        # Additional residual block for fine detail and deeper denoising capacity
+        self.conv3 = nn.Conv1d(h_dim, h_dim, kernel_size=3, padding=1, groups=h_dim)
+        self.pw_conv3 = nn.Conv1d(h_dim, h_dim, kernel_size=1)
+        self.norm3 = nn.LayerNorm(h_dim)
+
+        self.act = nn.GELU()
+        self.dropout = nn.Dropout(dropout)
+        self.out_proj = nn.Linear(h_dim, embed_dim)
+
+        # Zero-initialize the final projection so the refiner starts as identity
+        nn.init.zeros_(self.out_proj.weight)
+        nn.init.zeros_(self.out_proj.bias)
+
+    def forward(self, z: torch.Tensor, noise_map: torch.Tensor) -> torch.Tensor:
+        """Forward pass for latent refinement.
+
+        Args:
+            z: [B, T, D] frame representations
+            noise_map: [B, T, 1] spatial-temporal noise scale
+        Returns:
+            z_hat: [B, T, D] refined clean representation estimate
+        """
+        h = self.in_proj(z)
+
+        # FiLM parameters: gamma and beta of shape [B, T, H]
+        film_params = self.noise_mlp(noise_map)
+        gamma, beta = torch.chunk(film_params, 2, dim=-1)
+
+        # Residual Block 1 (wide kernel=7 for broad context)
+        res = h
+        h_conv = h.transpose(1, 2)
+        h_conv = self.act(self.pw_conv1(self.conv1(h_conv))).transpose(1, 2)
+        h_conv = self.dropout(h_conv)
+        h = self.norm1(res + h_conv)
+        h = h * (1.0 + gamma) + beta  # FiLM conditioning
+
+        # Residual Block 2 (medium kernel=5)
+        res = h
+        h_conv = h.transpose(1, 2)
+        h_conv = self.act(self.pw_conv2(self.conv2(h_conv))).transpose(1, 2)
+        h_conv = self.dropout(h_conv)
+        h = self.norm2(res + h_conv)
+
+        # Residual Block 3 (narrow kernel=3 for fine detail)
+        res = h
+        h_conv = h.transpose(1, 2)
+        h_conv = self.act(self.pw_conv3(self.conv3(h_conv))).transpose(1, 2)
+        h_conv = self.dropout(h_conv)
+        h = self.norm3(res + h_conv)
+
+        # Zero-init residual output addition
+        z_hat = z + self.out_proj(h)
+        return z_hat
+
+
+@dataclass
+class PhonoV64GatedDiffusionConfig(PhonoV63DiffusionConfig):
+    """Variant 6.4: Confidence-Gated Latent Diffusion with Deep Refiner.
+
+    Key innovation: Frames where CTC is already confident (high top-1 margin)
+    bypass diffusion entirely, preserving crisp probability spikes. Only ambiguous
+    frames receive iterative Gaussian denoising through a deeper 3-block refiner.
+
+    This solves V6.3's weakness of smearing already-confident CTC peaks.
+    """
+    # Confidence gating thresholds
+    gate_confidence_high: float = 0.8     # Frames with margin > this bypass diffusion entirely
+    gate_confidence_low: float = 0.3      # Frames with margin < this get full diffusion
+    # Between low and high: linear interpolation (smooth transition)
+
+    # Deep refiner uses 3 conv blocks instead of 2
+    use_deep_refiner: bool = True
+
+    # Confidence-weighted diffusion loss: weight diffusion loss inversely with confidence
+    confidence_weighted_loss: bool = True
+
+    # Gating statistics tracking
+    gate_ema_decay: float = 0.99          # EMA decay for tracking gating statistics
+
+
+class PhonoV64GatedDiffusionForPreTraining(PhonoV63DiffusionForPreTraining):
+    """MoE Sparse Transformer with Confidence-Gated Latent Diffusion Refiner.
+
+    Adaptive gating mechanism:
+    - High-confidence frames (CTC margin > 0.8): bypass diffusion, preserve crisp spikes
+    - Low-confidence frames (CTC margin < 0.3): full diffusion refinement
+    - Medium-confidence frames: smooth linear interpolation between original and refined
+
+    Uses a deeper 3-block convolutional refiner for stronger denoising on ambiguous frames.
+    """
+
+    def __init__(self, config: PhonoV64GatedDiffusionConfig):
+        super().__init__(config)
+
+        # Replace the 2-block refiner with a deeper 3-block refiner
+        if getattr(config, "use_deep_refiner", True):
+            self.latent_refiner = DeepLatentDiffusionRefiner(
+                embed_dim=self.config.encoder_embed_dim,
+                dropout=self.config.dropout,
+            )
+
+        # Running statistics for monitoring gating behavior
+        self.register_buffer("_gate_bypass_ema", torch.tensor(0.0))
+        self.register_buffer("_gate_partial_ema", torch.tensor(0.0))
+        self.register_buffer("_gate_full_ema", torch.tensor(0.0))
+
+    def _compute_confidence_gate(
+        self,
+        hidden_state: torch.Tensor,
+        input_lengths: torch.Tensor,
+    ) -> torch.Tensor:
+        """Compute per-frame confidence gate from CTC logit margin.
+
+        Args:
+            hidden_state: [B, T, D] encoder hidden states
+            input_lengths: [B] valid frame counts
+
+        Returns:
+            gate: [B, T, 1] in [0, 1] where 0 = bypass diffusion, 1 = full diffusion
+        """
+        with torch.no_grad():
+            # Get CTC log-probabilities from the hierarchical head
+            s_logits = self.state_router(hidden_state)
+            p_logits = self.phoneme_head(hidden_state)
+            log_probs = self.compute_composite_log_probs(s_logits, p_logits)
+            probs = log_probs.exp()  # [B, T, V]
+
+            # Compute top-1 margin: difference between highest and second-highest probability
+            top2_probs, _ = probs.topk(2, dim=-1)  # [B, T, 2]
+            margin = top2_probs[:, :, 0] - top2_probs[:, :, 1]  # [B, T]
+
+            # Linear gate: high confidence -> 0 (bypass), low confidence -> 1 (full diffusion)
+            high = getattr(self.config, "gate_confidence_high", 0.8)
+            low = getattr(self.config, "gate_confidence_low", 0.3)
+
+            # Clamp margin to [low, high] and linearly map to [1, 0]
+            gate = 1.0 - (margin - low).clamp(0.0, high - low) / max(high - low, 1e-6)
+            gate = gate.unsqueeze(-1)  # [B, T, 1]
+
+            # Mask out padding frames (set gate to 0 = no diffusion on padding)
+            B, T = gate.shape[:2]
+            frame_mask = torch.arange(T, device=gate.device).unsqueeze(0) < input_lengths.unsqueeze(1)
+            gate = gate * frame_mask.unsqueeze(-1).float()
+
+            # Update running statistics for monitoring
+            if self.training:
+                decay = getattr(self.config, "gate_ema_decay", 0.99)
+                valid_gate = gate[frame_mask.unsqueeze(-1).expand_as(gate)]
+                if valid_gate.numel() > 0:
+                    bypass_frac = (valid_gate < 0.1).float().mean()
+                    partial_frac = ((valid_gate >= 0.1) & (valid_gate <= 0.9)).float().mean()
+                    full_frac = (valid_gate > 0.9).float().mean()
+                    self._gate_bypass_ema.mul_(decay).add_((1 - decay) * bypass_frac)
+                    self._gate_partial_ema.mul_(decay).add_((1 - decay) * partial_frac)
+                    self._gate_full_ema.mul_(decay).add_((1 - decay) * full_frac)
+
+        return gate
+
+    def forward(
+        self,
+        audio: torch.Tensor,
+        targets: Optional[torch.Tensor] = None,
+        target_lengths: Optional[torch.Tensor] = None,
+        audio_lengths: Optional[torch.Tensor] = None,
+        frame_targets: Optional[torch.Tensor] = None,
+        frame_lengths: Optional[torch.Tensor] = None,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        # Run the V6.2 Sparse backbone forward (CTC + MoE + InterCTC)
+        # We call V6.2's forward directly, skipping V6.3's unconditional diffusion
+        out = PhonoV62SparseForPreTraining.forward(
+            self,
+            audio=audio,
+            targets=targets,
+            target_lengths=target_lengths,
+            audio_lengths=audio_lengths,
+            frame_targets=frame_targets,
+            frame_lengths=frame_lengths,
+            **kwargs,
+        )
+
+        hidden_state = out.get("hidden_state")
+        input_lengths = out.get("input_lengths")
+
+        if targets is not None and self.training and hidden_state is not None:
+            B, T_frames, D = hidden_state.shape
+            if target_lengths is None:
+                target_lengths = torch.full((B,), targets.shape[1], device=audio.device, dtype=torch.long)
+
+            # 1. Compute per-frame confidence gate
+            gate = self._compute_confidence_gate(hidden_state, input_lengths)  # [B, T, 1]
+
+            # 2. Sample spatio-temporal Gaussian noise schedule
+            noise_map, centers, noise_scales = self.noise_scheduler.compute_noise_map(
+                batch_size=B,
+                seq_len=T_frames,
+                device=audio.device,
+                window_width=getattr(self.config, "diffusion_window_width", 16),
+            )
+
+            # 3. Gate the noise: only inject noise on ambiguous frames
+            gated_noise_map = noise_map * gate  # [B, T, 1]
+
+            # 4. Perturb latents with confidence-gated Gaussian noise
+            eps = torch.randn_like(hidden_state)
+            z_noisy = hidden_state + gated_noise_map * eps
+
+            # 5. Deep Latent Diffusion Denoising Step
+            z_clean_est = self.latent_refiner(z_noisy, gated_noise_map)
+
+            # 6. Gate the refinement: blend refined with original based on confidence
+            # High confidence frames keep their original hidden state
+            z_blended = gate * z_clean_est + (1.0 - gate) * hidden_state
+
+            # 7. Confidence-weighted Diffusion Reconstruction Loss
+            diff_sq = (z_blended - hidden_state) ** 2
+            if getattr(self.config, "confidence_weighted_loss", True):
+                # Weight loss by gate: focus on ambiguous frames, ignore confident ones
+                weight_map = gated_noise_map + 1e-6
+                weight_norm = (weight_map.sum() * D) + 1e-6
+                diff_loss = (weight_map * diff_sq).sum() / weight_norm
+            else:
+                weight_norm = (noise_map.sum() * D) + 1e-6
+                diff_loss = (noise_map * diff_sq).sum() / weight_norm
+
+            # 8. Refined CTC Phoneme Loss on blended latents
+            ref_s_logits = self.state_router(z_blended)
+            ref_p_logits = self.phoneme_head(z_blended)
+            ref_composite_log_probs = self.compute_composite_log_probs(ref_s_logits, ref_p_logits)
+            ref_ctc_log_probs = ref_composite_log_probs.transpose(0, 1).float()
+            ref_ctc_loss = self.ctc_loss_fn(ref_ctc_log_probs, targets, input_lengths, target_lengths)
+
+            # 9. Combined Multi-Task Objective
+            diff_w = getattr(self.config, "diffusion_loss_weight", 1.0)
+            ref_w = getattr(self.config, "refined_ctc_loss_weight", 0.5)
+            out["loss"] = out["loss"] + (diff_w * diff_loss) + (ref_w * ref_ctc_loss)
+            out["diff_loss"] = float(diff_loss.item())
+            out["refined_ctc_loss"] = float(ref_ctc_loss.item())
+            out["refined_logits"] = ref_composite_log_probs
+            out["gate_bypass_pct"] = float(self._gate_bypass_ema.item()) * 100.0
+            out["gate_partial_pct"] = float(self._gate_partial_ema.item()) * 100.0
+            out["gate_full_pct"] = float(self._gate_full_ema.item()) * 100.0
+        else:
+            out["diff_loss"] = 0.0
+            out["refined_ctc_loss"] = 0.0
+            out["refined_logits"] = out.get("logits")
+            out["gate_bypass_pct"] = float(self._gate_bypass_ema.item()) * 100.0
+            out["gate_partial_pct"] = float(self._gate_partial_ema.item()) * 100.0
+            out["gate_full_pct"] = float(self._gate_full_ema.item()) * 100.0
+
+        return out
+
+    def decode_gated_diffusion(
+        self,
+        audio: torch.Tensor,
+        lengths: Optional[torch.Tensor] = None,
+        num_steps: Optional[int] = None,
+        window_width: Optional[int] = None,
+        window_stride: Optional[int] = None,
+    ) -> List[List[int]]:
+        """Confidence-Gated Sliding Gaussian Window Diffusion Decoding.
+
+        Like V6.3's sliding diffusion, but high-confidence frames bypass refinement
+        entirely. Only ambiguous frames are iteratively denoised.
+        """
+        self.eval()
+        with torch.no_grad():
+            if audio.dim() == 1:
+                audio = audio.unsqueeze(0)
+            B = audio.shape[0]
+
+            out = PhonoV62SparseForPreTraining.forward(self, audio=audio, audio_lengths=lengths)
+            hidden_states = out["hidden_state"]  # [B, T_frames, D]
+            input_lengths = out["input_lengths"]
+
+            w = float(window_width or getattr(self.config, "diffusion_window_width", 16))
+            stride = int(window_stride or getattr(self.config, "diffusion_window_stride", 16))
+            steps = int(num_steps or getattr(self.config, "diffusion_inference_steps", 3))
+
+            batch_results = []
+            for b in range(B):
+                T_b = int(input_lengths[b].item())
+                z_curr = hidden_states[b, :T_b].clone().unsqueeze(0)  # [1, T_b, D]
+                device = z_curr.device
+
+                # Compute per-frame confidence gate
+                gate = self._compute_confidence_gate(
+                    z_curr, torch.tensor([T_b], device=device)
+                )  # [1, T_b, 1]
+
+                # Sliding Gaussian window sweep with confidence gating
+                for tau in range(0, T_b + int(w), stride):
+                    t_start = max(0, int(tau - 2 * w))
+                    t_end = min(T_b, int(tau + 2 * w))
+                    if t_start >= t_end:
+                        continue
+
+                    active_z = z_curr[:, t_start:t_end]  # [1, T_active, D]
+                    active_gate = gate[:, t_start:t_end]  # [1, T_active, 1]
+                    active_T = active_z.shape[1]
+
+                    # Skip this window if all frames are confident (gate ~ 0)
+                    if active_gate.mean().item() < 0.05:
+                        continue
+
+                    time_indices = torch.arange(t_start, t_end, device=device, dtype=torch.float32)
+
+                    # Iterative refinement within the active Gaussian window
+                    for k in range(steps):
+                        sigma_k = getattr(self.config, "diffusion_noise_max", 0.8) * ((steps - k) / steps)
+                        diff = time_indices - tau
+                        noise_map = sigma_k * torch.exp(-0.5 * (diff / (w + 1e-6)) ** 2)
+                        noise_map = noise_map.view(1, active_T, 1)
+
+                        # Gate the noise: only apply to ambiguous frames
+                        gated_noise = noise_map * active_gate
+
+                        refined_active = self.latent_refiner(active_z, gated_noise)
+
+                        # Blend: confident frames keep original, ambiguous frames get refined
+                        active_z = active_gate * (0.5 * active_z + 0.5 * refined_active) + \
+                                   (1.0 - active_gate) * active_z
+
+                    z_curr[:, t_start:t_end] = active_z
+
+                # Decode from refined latents
+                s_logits = self.state_router(z_curr)
+                p_logits = self.phoneme_head(z_curr)
+                log_probs = self.compute_composite_log_probs(s_logits, p_logits)
+                decoded = self.decode_greedy(log_probs, lengths=torch.tensor([T_b], device=device))[0]
+                batch_results.append(decoded)
+
+            return batch_results
+
+    def decode_sliding_diffusion(
+        self,
+        audio: torch.Tensor,
+        lengths: Optional[torch.Tensor] = None,
+        num_steps: Optional[int] = None,
+        window_width: Optional[int] = None,
+        window_stride: Optional[int] = None,
+    ) -> List[List[int]]:
+        """Override V6.3's decode to use confidence-gated version."""
+        return self.decode_gated_diffusion(
+            audio, lengths=lengths, num_steps=num_steps,
+            window_width=window_width, window_stride=window_stride,
+        )
+

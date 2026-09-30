@@ -488,6 +488,27 @@ def main():
                     print(f"🔥 [V6.3 Auto Warm-Start] Warm-starting acoustic backbone from V6.2 checkpoint: {cand}")
                     break
 
+    # V6.4 Confidence-Gated Diffusion Specific Tuning:
+    # Use lr=5e-5 and auto warm-start from V6.3 Diffusion (preferred) or V6.2 Sparse backbone
+    if args.arch == "phono_v6_4_gated_diffusion":
+        if args.lr == 0.0003:
+            args.lr = 5e-5
+            print(f"🎯 [V6.4 Hyperparameter Tuning] Calibrated learning rate to 5e-5 for gated diffusion stability.")
+        if args.warm_start is None:
+            v6_4_candidates = [
+                # Prefer V6.3 diffusion checkpoint (closest architecture)
+                Path(f"checkpoints/phono_v6_3_diffusion/{args.tier}/bench_phono_v6_3_diffusion_{args.tier}/best_checkpoint.pt"),
+                Path(f"checkpoints/phono_v6_3_diffusion/{args.tier}/best_checkpoint.pt"),
+                # Fall back to V6.2 sparse if no V6.3 available
+                Path(f"checkpoints/phono_v6_2_sparse/{args.tier}/bench_phono_v6_2_sparse_{args.tier}/best_checkpoint.pt"),
+                Path(f"checkpoints/phono_v6_2_sparse/{args.tier}/best_checkpoint.pt"),
+            ]
+            for cand in v6_4_candidates:
+                if cand.exists():
+                    args.warm_start = str(cand)
+                    print(f"🔥 [V6.4 Auto Warm-Start] Warm-starting from checkpoint: {cand}")
+                    break
+
     device = torch.device(args.device)
     overrides = parse_overrides(args.override)
 
@@ -507,8 +528,22 @@ def main():
         p = Path(args.warm_start)
         if p.exists():
             payload = torch.load(p, map_location=device, weights_only=False)
-            model.load_state_dict(payload["model_state_dict"], strict=False)
-            print(f"🔥 [Warm-Start] Loaded model weights from: {p} (starting fresh from Step 1)")
+            ckpt_dict = payload.get("model_state_dict", payload)
+            model_dict = model.state_dict()
+            compatible_dict = {}
+            mismatched_keys = []
+            for k, v in ckpt_dict.items():
+                if k in model_dict:
+                    if v.shape == model_dict[k].shape:
+                        compatible_dict[k] = v
+                    else:
+                        mismatched_keys.append((k, v.shape, model_dict[k].shape))
+            incompatible = model.load_state_dict(compatible_dict, strict=False)
+            print(f"🔥 [Warm-Start] Loaded {len(compatible_dict)} compatible weight tensors from: {p}")
+            if mismatched_keys:
+                print(f"⚠️ [Warm-Start] Skipped {len(mismatched_keys)} mismatched layers: {[k[0] for k in mismatched_keys]}")
+            if incompatible.missing_keys:
+                print(f"ℹ️ [Warm-Start] Newly initialized layers ({len(incompatible.missing_keys)}): {incompatible.missing_keys[:5]}...")
         else:
             print(f"⚠️ [Warm-Start] Checkpoint not found at: {p}")
 

@@ -35,15 +35,17 @@ import sys
 import time
 from typing import Any, Dict, List, Optional
 
-# Architectures ordered by conceptual evolution
+# Architectures ordered by conceptual evolution (Progressive Lineage)
 DEFAULT_ARCHITECTURES = [
-    "phono_hubert",               # Dense Baseline + Anti-Blank CTC
-    "phono_hubert_dual",          # Dual-Loss SSL Frame CE + CTC
-    "phono_hubert_hierarchical",  # 2-Stage Gated Router
-    "phono_hubert_recursive",     # Recurrent Frame Memory Feedback
+    "phono_v1_frontend",          # Pretrained Formant-Tuned CNN + Hierarchical Head
+    "phono_v2_specaugment",       # V1 + Dynamic Acoustic SpecAugment
+    "phono_v3_hybrid",            # V2 + Hybrid Real Human & Synthetic Data
+    "phono_v4_scaled",            # V3 + Deep Scaled Transformer Capacity (8L/D512)
+    "phono_v5_beam",              # V4 + CTC Prefix Beam Search with Phonotactics
     "phono_v6_1_moe",             # 4-Expert Mixture of Experts FFN
     "phono_v6_2_sparse",          # Sparse Syllabic Local Attention + InterCTC
     "phono_v6_3_diffusion",       # Gaussian Latent Diffusion Refiner
+    "phono_v6_4_gated_diffusion", # Confidence-Gated Diffusion + Deep Refiner
 ]
 
 
@@ -68,6 +70,8 @@ def parse_args():
     parser.add_argument("--blank_penalty", type=float, default=2.0, help="Blank logit deduction during evaluation")
     parser.add_argument("--output_dir", type=str, default="reports/cross_arch_benchmark", help="Directory for summary reports")
     parser.add_argument("--skip_existing", action="store_true", help="Skip architectures with existing completed benchmark summary")
+    parser.add_argument("--hyperparams_config", type=str, default="configs/benchmark_hyperparams.json",
+                        help="Path to per-architecture hyperparameter JSON config file")
     parser.add_argument("--dry_run", action="store_true", help="Quick dry-run: 4 steps, eval every 2 steps on 2 architectures")
     return parser.parse_args()
 
@@ -112,6 +116,17 @@ def main():
         from scripts.prepare_benchmark_split import create_benchmark_split
         create_benchmark_split()
 
+    # Load per-model hyperparameter config if available
+    hyperparams_path = project_root / args.hyperparams_config
+    per_model_hyperparams: Dict[str, Dict[str, Any]] = {}
+    if hyperparams_path.exists():
+        with open(hyperparams_path, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        per_model_hyperparams = {k: v for k, v in raw.items() if not k.startswith("_")}
+        print(f"📋 Loaded per-model hyperparameters from {hyperparams_path} ({len(per_model_hyperparams)} architectures)")
+    else:
+        print(f"⚠️ No per-model hyperparameter config found at {hyperparams_path}. Using global defaults for all models.")
+
     out_dir = project_root / args.output_dir
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -128,6 +143,7 @@ def main():
     print(f"  • Model Selection   : Best model state on Validation Set (Lowest Val PER)")
     print(f"  • Checkpoint Policy : ONLY best_checkpoint.pt saved to disk (Zero intermediate SSD writes)")
     print(f"  • Fault Tolerance   : Failure / CUDA OOM recorded; auto-advances to next model")
+    print(f"  • Hyperparams Config: {hyperparams_path.name if per_model_hyperparams else 'NONE (global defaults only)'}")
     print(f"  • Final Benchmark   : Single uncheated evaluation on {test_manifest.name} ({args.test_samples} samples)")
     print("=" * 70 + "\n")
 
@@ -156,9 +172,15 @@ def main():
                 except Exception:
                     pass
 
-            model_lr = args.lr
-            if arch == "phono_v6_3_diffusion" and args.lr == 0.0003:
-                model_lr = 5e-5
+            # Resolve per-model hyperparameters from JSON config
+            model_hp = per_model_hyperparams.get(arch, {})
+            model_lr = model_hp.get("lr", args.lr)
+            model_warmup = model_hp.get("warmup_steps", args.warmup_steps if hasattr(args, "warmup_steps") else 100)
+            model_blank_penalty = model_hp.get("blank_penalty", args.blank_penalty)
+
+            if model_hp:
+                hp_summary = ", ".join(f"{k}={v}" for k, v in model_hp.items() if k != "warm_start")
+                print(f"   📋 Per-model hyperparams: {hp_summary}")
 
             cmd = [
                 str(project_root / ".venv" / "bin" / "python"),
@@ -171,15 +193,54 @@ def main():
                 "--test_samples", str(args.test_samples),
                 "--batch_size", str(args.batch_size),
                 "--lr", str(model_lr),
+                "--warmup_steps", str(model_warmup),
                 "--max_duration_sec", str(args.max_duration_sec),
                 "--real_ratio", str(args.real_ratio),
-                "--blank_penalty", str(args.blank_penalty),
+                "--blank_penalty", str(model_blank_penalty),
                 "--real_speech_manifest", str(train_manifest),
                 "--val_manifest", str(val_manifest),
                 "--test_manifest", str(test_manifest),
                 "--only_save_best",
                 "--run_name", run_name,
             ]
+
+            # Per-model masking overrides
+            if "masking_mode" in model_hp:
+                cmd.extend(["--masking_mode", str(model_hp["masking_mode"])])
+            if "mask_prob" in model_hp:
+                cmd.extend(["--mask_prob", str(model_hp["mask_prob"])])
+            if "mask_length" in model_hp:
+                cmd.extend(["--mask_length", str(model_hp["mask_length"])])
+
+            # Per-model warm-start (auto-discovery for special values)
+            warm_start_val = model_hp.get("warm_start")
+            if warm_start_val == "auto_from_v6_2":
+                candidates = [
+                    project_root / f"checkpoints/phono_v6_2_sparse/{tier}/bench_phono_v6_2_sparse_{tier}/best_checkpoint.pt",
+                    project_root / f"checkpoints/phono_v6_2_sparse/{tier}/v6_2_sparse_100h_run1/checkpoint_step_4000.pt",
+                    project_root / f"checkpoints/phono_v6_2_sparse/{tier}/best_checkpoint.pt",
+                ]
+                for cand in candidates:
+                    if cand.exists():
+                        cmd.extend(["--warm_start", str(cand)])
+                        print(f"   🔥 Auto warm-start from V6.2: {cand}")
+                        break
+            elif warm_start_val == "auto_from_v6_3":
+                candidates = [
+                    project_root / f"checkpoints/phono_v6_3_diffusion/{tier}/bench_phono_v6_3_diffusion_{tier}/best_checkpoint.pt",
+                    project_root / f"checkpoints/phono_v6_3_diffusion/{tier}/best_checkpoint.pt",
+                    project_root / f"checkpoints/phono_v6_2_sparse/{tier}/bench_phono_v6_2_sparse_{tier}/best_checkpoint.pt",
+                    project_root / f"checkpoints/phono_v6_2_sparse/{tier}/best_checkpoint.pt",
+                ]
+                for cand in candidates:
+                    if cand.exists():
+                        cmd.extend(["--warm_start", str(cand)])
+                        print(f"   🔥 Auto warm-start from V6.3/V6.2: {cand}")
+                        break
+            elif warm_start_val and warm_start_val != "none":
+                ws_path = project_root / warm_start_val
+                if ws_path.exists():
+                    cmd.extend(["--warm_start", str(ws_path)])
 
             t0 = time.time()
             print(f"💻 Command: {' '.join(cmd)}\n")

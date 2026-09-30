@@ -1,0 +1,40 @@
+{
+  "_description": "Per-architecture optimal training hyperparameters for fair cross-architecture benchmarking. Keys map to run_pretrain.py CLI arguments. Missing keys fall back to benchmark_all_architectures.py global defaults (lr=3e-4, batch_size=4, blank_penalty=2.0, warmup_steps=100, masking uses model default).",
+
+  "phono_v1_frontend": {
+    "lr": 3e-4,
+    "warmup_steps": 100
+  },
+  "phono_v2_specaugment": {
+    "lr": 3e-4,
+    "warmup_steps": 100
+  },
+  "phono_v3_hybrid": {
+    "lr": 3e-4,
+    "warmup_steps": 100
+  },
+  "phono_v4_scaled": {
+    "lr": 3e-4,
+    "warmup_steps": 100
+  },
+  "phono_v5_beam": {
+    "lr": 3e-4,
+    "warmup_steps": 100
+  },
+  "phono_v6_1_moe": {
+    "lr": 3e-4,
+    "warmup_steps": 100
+  },
+  "phono_v6_2_sparse": {
+    "lr": 3e-4,
+    "warmup_steps": 100
+  },
+  "phono_v6_3_diffusion": {
+    "lr": 5e-5,
+    "warm_start": "auto_from_v6_2"
+  },
+  "phono_v6_4_gated_diffusion": {
+    "lr": 5e-5,
+    "warm_start": "auto_from_v6_3"
+  }
+}
