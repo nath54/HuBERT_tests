@@ -425,10 +425,9 @@ def get_scheduled_lr(step: int, total_steps: int, base_lr: float, warmup_steps: 
     """Compute learning rate with linear warmup and cosine decay bounded by min_lr."""
     if warmup_steps > 0 and step <= warmup_steps:
         return max(min_lr, base_lr * (step / float(warmup_steps)))
-    if warmup_steps > 0:
-        progress = (step - warmup_steps) / float(max(1, total_steps - warmup_steps))
-        return min_lr + (base_lr - min_lr) * 0.5 * (1.0 + math.cos(math.pi * progress))
-    return base_lr
+    decay_total = max(1, total_steps - warmup_steps)
+    progress = max(0.0, min(1.0, (step - warmup_steps) / float(decay_total)))
+    return min_lr + (base_lr - min_lr) * 0.5 * (1.0 + math.cos(math.pi * progress))
 
 
 def main():
@@ -467,6 +466,7 @@ def main():
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--run_name", type=str, default=None, help="Name of this training run (default: auto-incremented run_1, run_2, ...)")
     parser.add_argument("--resume", nargs="?", const="auto", default=None, help="Resume training")
+    parser.add_argument("--additional_steps", type=int, default=None, help="Train for an additional N steps beyond the resumed step")
     parser.add_argument("--warm_start", type=str, default=None, help="Path to checkpoint from which to initialize model weights (starts from step 1)")
     args = parser.parse_args()
 
@@ -489,14 +489,17 @@ def main():
                     break
 
     # V6.4 Confidence-Gated Diffusion Specific Tuning:
-    # Use lr=5e-5 and auto warm-start from V6.3 Diffusion (preferred) or V6.2 Sparse backbone
+    # Use lr=5e-5 and auto warm-start from V6.4 (existing best), V6.3 Diffusion, or V6.2 Sparse backbone
     if args.arch == "phono_v6_4_gated_diffusion":
         if args.lr == 0.0003:
             args.lr = 5e-5
             print(f"🎯 [V6.4 Hyperparameter Tuning] Calibrated learning rate to 5e-5 for gated diffusion stability.")
         if args.warm_start is None:
             v6_4_candidates = [
-                # Prefer V6.3 diffusion checkpoint (closest architecture)
+                # Prefer existing V6.4 checkpoint if available
+                Path(f"checkpoints/phono_v6_4_gated_diffusion/{args.tier}/best_checkpoint.pt"),
+                Path(f"checkpoints/phono_v6_4_gated_diffusion/{args.tier}/bench_phono_v6_4_gated_diffusion_{args.tier}/best_checkpoint.pt"),
+                # Fall back to V6.3 diffusion checkpoint (closest architecture)
                 Path(f"checkpoints/phono_v6_3_diffusion/{args.tier}/bench_phono_v6_3_diffusion_{args.tier}/best_checkpoint.pt"),
                 Path(f"checkpoints/phono_v6_3_diffusion/{args.tier}/best_checkpoint.pt"),
                 # Fall back to V6.2 sparse if no V6.3 available
@@ -660,6 +663,13 @@ def main():
         else:
             print(f"ℹ️ [Resume] No previous checkpoint found for run '{run_mgr.run_name}'. Starting fresh from Step 1.")
 
+    if args.additional_steps is not None:
+        args.steps = (start_step - 1) + args.additional_steps
+        print(f"⏩ [Target Steps] Configured to train for +{args.additional_steps} steps -> Target Step {args.steps}")
+    elif start_step > args.steps:
+        print(f"\n⚠️  [Target Steps Warning] Resumed checkpoint is already at Step {start_step - 1}, but --steps was set to {args.steps}.")
+        print(f"   To continue training, provide a larger target (e.g. --steps {start_step - 1 + 10000}) or use --additional_steps <N>.\n")
+
     if not history:
         run_history_file = run_mgr.run_log_dir / "history.json"
         if run_history_file.exists():
@@ -701,6 +711,25 @@ def main():
     best_val_per = float("inf")
     best_val_step = 0
     best_model_state_dict = None
+
+    # Restore best validation metric so resuming doesn't overwrite a better earlier checkpoint
+    best_ckpt_path = run_mgr.run_ckpt_dir / "best_checkpoint.pt"
+    if best_ckpt_path.exists():
+        try:
+            best_pl = torch.load(best_ckpt_path, map_location="cpu", weights_only=False)
+            best_val_per = best_pl.get("val_per", float("inf"))
+            best_val_step = best_pl.get("step", 0)
+            print(f"🏆 [Resume] Restored best baseline Val PER: {best_val_per:.2f}% (achieved at step {best_val_step})")
+        except Exception:
+            pass
+    if history and best_val_per == float("inf"):
+        for h in history:
+            if "val_per" in h and h["val_per"] is not None and h["val_per"] < best_val_per:
+                best_val_per = h["val_per"]
+                best_val_step = h.get("step", 0)
+        if best_val_per < float("inf"):
+            print(f"🏆 [Resume] Restored best baseline Val PER from history: {best_val_per:.2f}% (achieved at step {best_val_step})")
+
     print(f"\n[Ready] Starting decoupled threaded streaming loop (Step {start_step} -> {args.steps})...\n")
 
     try:

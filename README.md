@@ -13,13 +13,16 @@ A modular PyTorch speech framework implementing **HuBERT** (Hidden-Unit BERT) an
      - **V6.1 (MoE Transformer)**: Sparse Mixture-of-Experts with 4 FFN experts, Top-2 gating, and dynamic load-balancing auxiliary loss.
      - **V6.2 (Sparse Attention + 30s Context + InterCTC)**: Local sliding attention window ($\pm 320$ms), 30-second context window (up to 1,500 frames), Intermediate Layer-4 & Layer-8 CTC multi-task supervision, achieving our breakthrough **15.10% PER** on LibriSpeech clean-100.
      - **V6.3 (Sliding Gaussian Latent Diffusion)**: Spatio-temporal Gaussian-modulated diffusion in latent phoneme space, FiLM-conditioned 2-block Conv1D refiner, and a trailing-window streaming phoneme decoder.
-     - **V6.4 (Confidence-Gated Diffusion & Deep Refiner)**: Adaptive margin gating where confident CTC frames (> 0.8) bypass diffusion to preserve crisp spikes while ambiguous frames receive targeted denoising via an enhanced 3-block convolutional refiner.
+     - **V6.4 (Confidence-Gated Diffusion, Learnable Gate Thresholds & Word Decoder)**: Adaptive margin gating where confident CTC frames bypass diffusion while ambiguous frames receive targeted denoising via an enhanced 3-block convolutional refiner. Features dynamic **learnable gate thresholds** via an MLP taking `[hidden_state; margin; top1_prob]` to dynamically predict gate probability $g \in [0, 1]$. Accompanied by a standalone **Word Denoising Decoder** (`src/models/word_denoising_decoder.py`) with 4-expert MoE text modeling, banded cross-attention, continuous word latent diffusion, and contrastive homophone loss.
    - **Parameter Scaling Tiers**: **Mini** (8.0M), **Small** (24.2M), **Medium** (31.8M / 83.5M), and **Base** (94.7M) with on-the-fly parameter variation and checkpoint hot-swapping.
 
-2. **Dual-Mode Streaming Pipeline (Procedural 0-Disk vs. Real Human Speech)**:
+2. **Dual-Mode Streaming Pipeline & Full 960h LibriSpeech Interleaving**:
+   - **Full 960h Scale**: Scales pre-training to the complete LibriSpeech 960h corpus (276,715 utterances, 945.5h) deterministically and uniformly interleaved across `clean-100`, `clean-360`, and `other-500` splits (`data/librispeech/benchmark_train_960h.json`).
+   - **Multi-Split Balanced Validation**: 4,526 held-out utterances (15.55h) balanced across Clean-100, Clean-360, and Other-500 splits (`data/librispeech/benchmark_val.json`) with zero train-val overlap.
    - **Mode A (0-Disk Procedural In-RAM Streaming)**: For baseline pre-training (`phono_hubert`, `dual`, `hierarchical`, `recursive`, `hubert_kmeans`, and `phono_v1`/`v2`), speech is synthesized directly in RAM across 39 clean neural voices (`--real_ratio 0.0`). Waveforms are generated in memory, trained on GPU, and immediately deallocated with **zero audio files stored on disk**.
-   - **Mode B (Real Speech Dataset Streaming)**: For SOTA models (`phono_v3_hybrid` through `phono_v6_3_diffusion`), the pipeline streams genuine human speech directly from disk manifests (LibriSpeech 100h clean) to capture authentic human phonetics, room acoustics, and conversational dynamics.
-   - **SSD Wear Protection**: In both modes, intermediate 1GB checkpoint writes are eliminated (`--save_interval 4000`), persisting weights only at milestones and on emergency `Ctrl+C` interrupt.
+   - **Mode B (Real Speech Dataset Streaming)**: For SOTA models (`phono_v3_hybrid` through `phono_v6_4_gated_diffusion`), the pipeline streams genuine human speech directly from disk manifests (LibriSpeech 100h clean or full 960h) to capture authentic human phonetics, room acoustics, and conversational dynamics.
+   - **SSD Wear Protection**: Intermediate 1GB checkpoint writes are eliminated (`--only_save_best`), persisting weights strictly when a new project validation record is broken and at final step completion.
+   - **Seamless Multi-Stage Training & Resumption**: Supports modular training stages with `--additional_steps <X>` or `--steps <TOTAL>`, automatically restoring historical best validation metrics (`val_per`) to protect project records and decaying the learning rate smoothly.
 
 3. **High-Throughput Asynchronous Multi-Threaded Generator (GIL-Optimized)**:
    - Solves CPU synthesis vs. GPU training starvation using an asynchronous producer-consumer architecture.
@@ -125,6 +128,8 @@ audiolearn/
 │   │   ├── hubert_asr.py       # Full HuBERTForCTC model + greedy CTC decoder
 │   │   ├── hubert_pretrain.py  # HuBERT masked acoustic cluster SSL model
 │   │   ├── phono_hubert.py     # PhonoHuBERT direct phoneme model with special tokens
+│   │   ├── phono_variants.py   # V6.1 MoE, V6.2 Sparse, V6.3 Diffusion & V6.4 Gated Diffusion
+│   │   ├── word_denoising_decoder.py # MoE Banded Cross-Attention Word Diffusion Decoder
 │   │   └── registry.py         # ModelRegistry factory for dynamic discovery & scaling
 │   ├── data/                   # Data pipelines & tokenization
 │   │   ├── tokenizer.py        # Character CTC Tokenizer (31 tokens)
@@ -323,6 +328,41 @@ Latent diffusion refiner applying a spatio-temporal Gaussian noise envelope in c
     --run_name v6_3_diffusion_run1
 ```
 
+### 8. Phono-V6.4 (Confidence-Gated Diffusion & 960h Scaling Run)
+Pre-train or resume on the full 960-hour deterministically interleaved LibriSpeech corpus with learnable gate thresholds and SSD wear protection:
+```bash
+# Launch Stage 1 (Initial 30,000 steps on 960h dataset)
+.venv/bin/python scripts/run_pretrain.py \
+    --arch phono_v6_4_gated_diffusion \
+    --tier medium \
+    --run_name v6_4_960h \
+    --steps 30000 \
+    --eval_interval 500 \
+    --val_samples 50 \
+    --test_samples 100 \
+    --batch_size 4 \
+    --lr 5e-5 \
+    --min_lr 1e-5 \
+    --real_ratio 1.0 \
+    --real_speech_manifest data/librispeech/benchmark_train_960h.json \
+    --val_manifest data/librispeech/benchmark_val.json \
+    --warm_start checkpoints/phono_v6_4_gated_diffusion/medium/bench_phono_v6_4_gated_diffusion_medium/best_checkpoint.pt \
+    --only_save_best
+
+# Modular Continuation (Easily resume for any additional X steps):
+.venv/bin/python scripts/run_pretrain.py \
+    --arch phono_v6_4_gated_diffusion \
+    --tier medium \
+    --run_name v6_4_960h \
+    --resume auto \
+    --additional_steps 30000 \
+    --batch_size 4 \
+    --real_ratio 1.0 \
+    --real_speech_manifest data/librispeech/benchmark_train_960h.json \
+    --val_manifest data/librispeech/benchmark_val.json \
+    --only_save_best
+```
+
 ---
 
 ## Longitudinal PER Benchmark Progression
@@ -441,13 +481,13 @@ AudioLearn implements three interpretability paradigms:
 
 ## Automated Testing
 
-AudioLearn includes a comprehensive 24-test suite covering data synthesis, model architectures (HuBERT, PhonoHuBERT, V6.1 MoE, V6.2 Sparse, V6.3 Diffusion), the Voice Quality Guardian, the threaded batch generator, and XAI attribution:
+AudioLearn includes a comprehensive 62-test suite covering data synthesis, model architectures (HuBERT, PhonoHuBERT, V6.1 MoE, V6.2 Sparse, V6.3 Diffusion, V6.4 Gated Diffusion with learnable thresholds, Word Denoising Decoder), the Voice Quality Guardian, the threaded batch generator, RunManager isolation, and XAI attribution:
 
 ```bash
 PYTHONPATH=. .venv/bin/pytest tests/ -v
 ```
 
-All 24 tests pass in $< 25\text{s}$ on CPU/GPU.
+All 62 tests pass in $< 36\text{s}$ on CPU/GPU.
 
 ---
 

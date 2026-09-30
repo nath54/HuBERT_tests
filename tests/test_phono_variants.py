@@ -334,12 +334,38 @@ def test_v6_4_gated_diffusion():
 
     out["loss"].backward()
     assert model.latent_refiner.out_proj.weight.grad is not None
+    if getattr(model, "learnable_gating", False) and hasattr(model, "gate_mlp"):
+        assert model.gate_mlp[0].weight.grad is not None
 
     model.eval()
     with torch.no_grad():
         preds_gated = model.decode_gated_diffusion(dummy_audio, num_steps=2, window_width=8, window_stride=8)
         assert len(preds_gated) == 2
         assert isinstance(preds_gated[0], list)
+
+
+def test_word_denoising_decoder():
+    """Verify Phoneme-to-Word Denoising Decoder with Banded Cross-Attention & MoE Text Modeling."""
+    from src.models.word_denoising_decoder import WordDecoderConfig, WordDenoisingDecoder
+
+    cfg = WordDecoderConfig(vocab_size=500, word_embed_dim=128, acoustic_embed_dim=256, decoder_layers=2)
+    decoder = WordDenoisingDecoder(cfg)
+    decoder.train()
+
+    B, L, T = 2, 8, 32
+    dummy_words = torch.randint(1, 400, (B, L))
+    dummy_targets = torch.randint(1, 400, (B, L))
+    dummy_acoustic = torch.randn(B, T, 256)
+
+    out = decoder(word_ids=dummy_words, acoustic_memory=dummy_acoustic, target_word_ids=dummy_targets)
+    assert "loss" in out
+    assert out["loss"] is not None
+    assert out["loss"].item() > 0
+    assert "diff_loss" in out
+    assert "contrastive_loss" in out
+
+    out["loss"].backward()
+    assert decoder.word_embedding.weight.grad is not None
 
 
 

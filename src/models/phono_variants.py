@@ -1380,19 +1380,19 @@ class PhonoV64GatedDiffusionConfig(PhonoV63DiffusionConfig):
     # Confidence-weighted diffusion loss: weight diffusion loss inversely with confidence
     confidence_weighted_loss: bool = True
 
-    # Gating statistics tracking
-    gate_ema_decay: float = 0.99          # EMA decay for tracking gating statistics
+    # Learnable gating: If True, uses a small MLP over hidden states and margin to learn the gating map
+    learnable_gating: bool = True
+    gating_hidden_dim: int = 128
 
 
 class PhonoV64GatedDiffusionForPreTraining(PhonoV63DiffusionForPreTraining):
     """MoE Sparse Transformer with Confidence-Gated Latent Diffusion Refiner.
 
     Adaptive gating mechanism:
-    - High-confidence frames (CTC margin > 0.8): bypass diffusion, preserve crisp spikes
-    - Low-confidence frames (CTC margin < 0.3): full diffusion refinement
-    - Medium-confidence frames: smooth linear interpolation between original and refined
-
-    Uses a deeper 3-block convolutional refiner for stronger denoising on ambiguous frames.
+    - High-confidence frames: bypass diffusion, preserve crisp spikes
+    - Low-confidence frames: full diffusion refinement
+    - Medium-confidence frames: smooth learned or linear interpolation
+    - Trainable Gating MLP: learns optimal non-linear boundary between CTC backbone and diffusion
     """
 
     def __init__(self, config: PhonoV64GatedDiffusionConfig):
@@ -1405,6 +1405,20 @@ class PhonoV64GatedDiffusionForPreTraining(PhonoV63DiffusionForPreTraining):
                 dropout=self.config.dropout,
             )
 
+        # Trainable Gating MLP: takes [hidden_state (D), margin (1), max_prob (1)] -> gate in [0, 1]
+        self.learnable_gating = getattr(config, "learnable_gating", True)
+        if self.learnable_gating:
+            g_dim = getattr(config, "gating_hidden_dim", 128)
+            in_dim = self.config.encoder_embed_dim + 2  # D + margin + top1_prob
+            self.gate_mlp = nn.Sequential(
+                nn.Linear(in_dim, g_dim),
+                nn.GELU(),
+                nn.Linear(g_dim, 1),
+                nn.Sigmoid(),
+            )
+            # Initialize gate_mlp bias so it starts with initial bias towards 0.5 (balanced)
+            nn.init.constant_(self.gate_mlp[-2].bias, 0.0)
+
         # Running statistics for monitoring gating behavior
         self.register_buffer("_gate_bypass_ema", torch.tensor(0.0))
         self.register_buffer("_gate_partial_ema", torch.tensor(0.0))
@@ -1415,7 +1429,7 @@ class PhonoV64GatedDiffusionForPreTraining(PhonoV63DiffusionForPreTraining):
         hidden_state: torch.Tensor,
         input_lengths: torch.Tensor,
     ) -> torch.Tensor:
-        """Compute per-frame confidence gate from CTC logit margin.
+        """Compute per-frame confidence gate from CTC logit margin or learnable MLP.
 
         Args:
             hidden_state: [B, T, D] encoder hidden states
@@ -1424,32 +1438,34 @@ class PhonoV64GatedDiffusionForPreTraining(PhonoV63DiffusionForPreTraining):
         Returns:
             gate: [B, T, 1] in [0, 1] where 0 = bypass diffusion, 1 = full diffusion
         """
+        # 1. Compute CTC logits and probabilities (no gradients needed through head for gating)
         with torch.no_grad():
-            # Get CTC log-probabilities from the hierarchical head
             s_logits = self.state_router(hidden_state)
             p_logits = self.phoneme_head(hidden_state)
             log_probs = self.compute_composite_log_probs(s_logits, p_logits)
             probs = log_probs.exp()  # [B, T, V]
-
-            # Compute top-1 margin: difference between highest and second-highest probability
             top2_probs, _ = probs.topk(2, dim=-1)  # [B, T, 2]
-            margin = top2_probs[:, :, 0] - top2_probs[:, :, 1]  # [B, T]
+            top1_prob = top2_probs[:, :, :1]        # [B, T, 1]
+            margin = top1_prob - top2_probs[:, :, 1:2]  # [B, T, 1]
 
-            # Linear gate: high confidence -> 0 (bypass), low confidence -> 1 (full diffusion)
-            high = getattr(self.config, "gate_confidence_high", 0.8)
-            low = getattr(self.config, "gate_confidence_low", 0.3)
+        if getattr(self, "learnable_gating", False) and hasattr(self, "gate_mlp"):
+            # Differentiable learned gate conditioned on acoustic context + margin + top-1 prob
+            g_in = torch.cat([hidden_state, margin, top1_prob], dim=-1)  # [B, T, D + 2]
+            gate = self.gate_mlp(g_in)  # [B, T, 1] in [0, 1]
+        else:
+            with torch.no_grad():
+                high = getattr(self.config, "gate_confidence_high", 0.8)
+                low = getattr(self.config, "gate_confidence_low", 0.3)
+                gate = 1.0 - (margin - low).clamp(0.0, high - low) / max(high - low, 1e-6)
 
-            # Clamp margin to [low, high] and linearly map to [1, 0]
-            gate = 1.0 - (margin - low).clamp(0.0, high - low) / max(high - low, 1e-6)
-            gate = gate.unsqueeze(-1)  # [B, T, 1]
+        # Mask out padding frames (set gate to 0 = no diffusion on padding)
+        B, T = gate.shape[:2]
+        frame_mask = torch.arange(T, device=gate.device).unsqueeze(0) < input_lengths.unsqueeze(1)
+        gate = gate * frame_mask.unsqueeze(-1).float()
 
-            # Mask out padding frames (set gate to 0 = no diffusion on padding)
-            B, T = gate.shape[:2]
-            frame_mask = torch.arange(T, device=gate.device).unsqueeze(0) < input_lengths.unsqueeze(1)
-            gate = gate * frame_mask.unsqueeze(-1).float()
-
-            # Update running statistics for monitoring
-            if self.training:
+        # Update running statistics for monitoring
+        if self.training:
+            with torch.no_grad():
                 decay = getattr(self.config, "gate_ema_decay", 0.99)
                 valid_gate = gate[frame_mask.unsqueeze(-1).expand_as(gate)]
                 if valid_gate.numel() > 0:
