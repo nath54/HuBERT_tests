@@ -42,6 +42,10 @@ from src.models.phono_variants import (
     PhonoV64GatedDiffusionConfig,
     PhonoV64GatedDiffusionForPreTraining,
 )
+from src.models.phono_v6_5_hierarchical_decoder import (
+    HierarchicalByteConfig,
+    PhonoV65HierarchicalByteDecoder,
+)
 from src.data.target_extractors import (
     BaseTargetExtractor,
     KMeansUnitExtractor,
@@ -382,4 +386,15 @@ ModelRegistry.register(
     target_extractor_cls=PhonemeTargetExtractor,
     target_type="phoneme_tokens",
 )(PhonoV64GatedDiffusionForPreTraining)
+
+ModelRegistry.register(
+    model_id="phono_v6_5_hierarchical_decoder",
+    display_name="Phono-V6.5 (Hierarchical Byte Decoder)",
+    description="Variant 6.5: Token-free universal multilingual hierarchical word-to-byte decoder. Features a 261-class UTF-8 recursive byte head (<150 KB RAM) with 0.0% OOV across all languages.",
+    model_cls=PhonoV65HierarchicalByteDecoder,
+    config_cls=HierarchicalByteConfig,
+    target_extractor_cls=PhonemeTargetExtractor,
+    target_type="phoneme_tokens",
+)(PhonoV65HierarchicalByteDecoder)
+
 

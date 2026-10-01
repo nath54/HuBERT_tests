@@ -20,4 +20,4 @@ outputs/probes/*.png
 logs/
 *history*.json
 checkpoints/
-data/
+/data/
