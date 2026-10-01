@@ -76,11 +76,14 @@ class BandedCrossAttention(nn.Module):
         query: torch.Tensor,
         key_value: torch.Tensor,
         key_padding_mask: Optional[torch.Tensor] = None,
+        expected_total_len: Optional[int] = None,
     ) -> torch.Tensor:
         """
         Args:
             query: [B, L_words, D] text token queries
             key_value: [B, T_audio, D_audio] acoustic representations
+            key_padding_mask: [B, T_audio] boolean mask where True indicates padding
+            expected_total_len: Optional estimated full word length (for autoregressive generation)
         """
         B, L, _ = query.shape
         _, T, _ = key_value.shape
@@ -93,9 +96,10 @@ class BandedCrossAttention(nn.Module):
 
         # Monotonic linear center alignment: token position l maps proportionally to time position t
         if self.band_width > 0 and T > self.band_width:
+            total_l = expected_total_len if expected_total_len is not None else L
             l_idx = torch.arange(L, device=query.device, dtype=torch.float32).unsqueeze(1)  # [L, 1]
             t_idx = torch.arange(T, device=query.device, dtype=torch.float32).unsqueeze(0)  # [1, T]
-            expected_t = (l_idx / max(1, L - 1)) * max(1, T - 1)
+            expected_t = (l_idx / max(1, total_l - 1)) * max(1, T - 1)
             dist = (t_idx - expected_t).abs()
             band_mask = dist > self.band_width
             attn_scores = attn_scores.masked_fill(band_mask.unsqueeze(0).unsqueeze(0), float("-inf"))
@@ -149,6 +153,7 @@ class MoEWordDecoderLayer(nn.Module):
         acoustic_memory: torch.Tensor,
         self_attn_mask: Optional[torch.Tensor] = None,
         memory_padding_mask: Optional[torch.Tensor] = None,
+        expected_total_len: Optional[int] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         # 1. Masked Self-Attention
         res = x
@@ -159,7 +164,12 @@ class MoEWordDecoderLayer(nn.Module):
         # 2. Banded Acoustic Cross-Attention
         res = x
         normed = self.norm2(x)
-        ca_out = self.cross_attn(normed, acoustic_memory, key_padding_mask=memory_padding_mask)
+        ca_out = self.cross_attn(
+            normed,
+            acoustic_memory,
+            key_padding_mask=memory_padding_mask,
+            expected_total_len=expected_total_len,
+        )
         x = res + self.dropout(ca_out)
 
         # 3. MoE FFN
@@ -179,6 +189,10 @@ class WordDenoisingDecoder(nn.Module):
         self.config = config or WordDecoderConfig()
 
         self.word_embedding = nn.Embedding(self.config.vocab_size, self.config.word_embed_dim, padding_idx=self.config.pad_token_id)
+        nn.init.normal_(self.word_embedding.weight, mean=0.0, std=0.02)
+        with torch.no_grad():
+            self.word_embedding.weight[self.config.pad_token_id].fill_(0.0)
+
         self.pos_embedding = nn.Parameter(torch.randn(1, 512, self.config.word_embed_dim) * 0.02)
 
         self.layers = nn.ModuleList([
@@ -204,6 +218,7 @@ class WordDenoisingDecoder(nn.Module):
         acoustic_memory: torch.Tensor,
         memory_lengths: Optional[torch.Tensor] = None,
         target_word_ids: Optional[torch.Tensor] = None,
+        expected_total_len: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Args:
@@ -226,7 +241,13 @@ class WordDenoisingDecoder(nn.Module):
 
         total_aux_loss = torch.tensor(0.0, device=word_ids.device)
         for layer in self.layers:
-            x, aux = layer(x, acoustic_memory, self_attn_mask=causal_mask, memory_padding_mask=mem_pad_mask)
+            x, aux = layer(
+                x,
+                acoustic_memory,
+                self_attn_mask=causal_mask,
+                memory_padding_mask=mem_pad_mask,
+                expected_total_len=expected_total_len,
+            )
             total_aux_loss = total_aux_loss + aux
 
         x = self.final_norm(x)
@@ -277,3 +298,43 @@ class WordDenoisingDecoder(nn.Module):
             "diff_loss": diff_loss,
             "contrastive_loss": contrastive_loss,
         }
+
+    @torch.no_grad()
+    def generate(
+        self,
+        acoustic_memory: torch.Tensor,
+        memory_lengths: Optional[torch.Tensor] = None,
+        max_len: int = 50,
+        temperature: float = 1.0,
+    ) -> torch.Tensor:
+        """Autoregressive greedy generation given acoustic representations."""
+        B, T, _ = acoustic_memory.shape
+        device = acoustic_memory.device
+        
+        # Estimate expected target word length based on acoustic frame count (~12-15 frames per word)
+        expected_len = max(5, int(T / 12.0))
+        
+        cur_tokens = torch.full((B, 1), self.config.bos_token_id, device=device, dtype=torch.long)
+        finished = torch.zeros(B, dtype=torch.bool, device=device)
+
+        for _ in range(max_len):
+            out = self.forward(
+                word_ids=cur_tokens,
+                acoustic_memory=acoustic_memory,
+                memory_lengths=memory_lengths,
+                expected_total_len=expected_len,
+            )
+            next_logits = out["logits"][:, -1, :]
+            if temperature > 0.0 and temperature != 1.0:
+                next_logits = next_logits / temperature
+            next_tokens = next_logits.argmax(dim=-1, keepdim=True)
+            
+            # Mask out already finished sequences
+            next_tokens = torch.where(finished.unsqueeze(1), torch.full_like(next_tokens, self.config.pad_token_id), next_tokens)
+            cur_tokens = torch.cat([cur_tokens, next_tokens], dim=1)
+            
+            finished = finished | (next_tokens.squeeze(1) == self.config.eos_token_id)
+            if finished.all():
+                break
+
+        return cur_tokens

@@ -73,3 +73,10 @@ def test_word_denoising_decoder_forward():
     infer_out = decoder(word_ids, acoustic_latents)
     assert 'logits' in infer_out
     assert infer_out['logits'].shape == (B, L, cfg.vocab_size)
+
+    # Autoregressive generation
+    gen_tokens = decoder.generate(acoustic_latents, max_len=10)
+    assert gen_tokens.shape[0] == B
+    assert gen_tokens.shape[1] <= 11
+    assert (gen_tokens[:, 0] == cfg.bos_token_id).all()
+

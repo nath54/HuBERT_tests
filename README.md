@@ -377,8 +377,8 @@ Evaluated on genuine downstream LibriSpeech test utterances:
 | **Phono-V6.2 (Sparse Attention)** | 30.0s | 100% Genuine LibriSpeech Clean | 4,000 steps (52.1h) | Sparse Local Attention + InterCTC | **15.10%** | **22.18%** |
 | **Phono-V6.3 (Latent Diffusion)** | 30.0s | 100% Genuine LibriSpeech Clean | 4,000 steps (56.2h) | Latent Diffusion Multi-Task Regularization | **13.70%** | **20.74%** |
 | **Phono-V6.4 (Gated Diffusion 100h)** | 30.0s | 100% Genuine LibriSpeech Clean | 4,000 steps (56.2h) | Confidence-Gated Diffusion + Deep Refiner | **14.63%** | **16.78%** |
-| **Phono-V6.4 (Gated Diff 960h - Stage 1)** | 30.0s | 100% Full 960h LibriSpeech Mixed | 30,000 steps (410.3h) | Learnable Gate MLP + 960h Scaling | **7.50%** | **12.43%** |
-| **Phono-V6.4 (Gated Diff 960h - Full Epoch)** | 25.0s | 100% Full 960h LibriSpeech Mixed | 70,000 steps (956.8h) | 1 Full Epoch 960h + Memory Stabilization | **5.87%** *(Project Record)* | **11.92%** *(Project Record)* |
+| **Phono-V6.4 (Gated Diff 960h - Stage 1)** | 30.0s | 100% Full 960h LibriSpeech Mixed | 30,000 steps (410.3h) | Learnable Gate MLP | **7.50%** | **12.43%** |
+| **Phono-V6.4 (Gated Diff 960h - Full Epoch)** | 25.0s | 100% Full 960h LibriSpeech Mixed | 70,000 steps (956.8h) | 1 Full Epoch 960h  | **5.87%** *(Project Record)* | **11.92%** *(Project Record)* |
 
 ```
 PER Progression Across Model Generations:
