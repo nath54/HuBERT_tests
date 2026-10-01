@@ -26,6 +26,10 @@ from src.models.registry import ModelRegistry
 from src.models.phono_v6_5_hierarchical_decoder import (
     HierarchicalByteConfig,
     PhonoV65HierarchicalByteDecoder,
+    SLOT_SILENCE,
+    SLOT_WORD,
+    SLOT_EOS,
+    SLOT_SPACE,
 )
 from src.data.byte_tokenizer import ByteTokenizer
 
@@ -87,7 +91,7 @@ class MultilingualByteDataset(Dataset):
 
 
 class HierarchicalByteCollateFn:
-    """Collation function padding audio, word slots, and byte sequences."""
+    """Collation function padding audio, word slots, and byte sequences with macro slot targets."""
 
     def __init__(self, tokenizer: ByteTokenizer, max_bytes_per_word: int = 24):
         self.tokenizer = tokenizer
@@ -100,6 +104,7 @@ class HierarchicalByteCollateFn:
 
         word_counts = [max(1, item["num_words"]) for item in batch]
         max_words = max(word_counts)
+        total_slots = max_words + 1  # Extra slot for explicit EOS target
 
         # Determine max bytes across all words in this batch
         max_bytes = 0
@@ -109,13 +114,15 @@ class HierarchicalByteCollateFn:
         max_bytes = min(max_bytes + 1, self.max_bytes_per_word)  # +1 for BOS
 
         padded_audio = torch.zeros(B, max_audio_len, dtype=torch.float32)
-        padded_input_bytes = torch.full((B, max_words, max_bytes), self.tokenizer.pad_id, dtype=torch.long)
-        padded_target_bytes = torch.full((B, max_words, max_bytes), self.tokenizer.pad_id, dtype=torch.long)
+        padded_input_bytes = torch.full((B, total_slots, max_bytes), self.tokenizer.pad_id, dtype=torch.long)
+        padded_target_bytes = torch.full((B, total_slots, max_bytes), self.tokenizer.pad_id, dtype=torch.long)
+        slot_targets = torch.full((B, total_slots), SLOT_SILENCE, dtype=torch.long)
 
         for i, item in enumerate(batch):
             a_len = item["audio_len"]
             padded_audio[i, :a_len] = item["audio"]
 
+            w_count = item["num_words"]
             for w_idx, w_bytes in enumerate(item["word_byte_seqs"]):
                 # Truncate if exceeds limit
                 cur_w = w_bytes[:max_bytes - 1]
@@ -126,12 +133,17 @@ class HierarchicalByteCollateFn:
 
                 padded_input_bytes[i, w_idx, :k] = torch.tensor(in_seq[:k], dtype=torch.long)
                 padded_target_bytes[i, w_idx, :k] = torch.tensor(tgt_seq, dtype=torch.long)
+                slot_targets[i, w_idx] = SLOT_WORD
+
+            if w_count < total_slots:
+                slot_targets[i, w_count] = SLOT_EOS
 
         return {
             "audio": padded_audio,
             "audio_lens": audio_lens,
             "input_byte_ids": padded_input_bytes,
             "target_byte_ids": padded_target_bytes,
+            "slot_targets": slot_targets,
             "num_words": torch.tensor(word_counts, dtype=torch.long),
             "texts": [item["text"] for item in batch],
         }
@@ -165,6 +177,9 @@ def evaluate_v6_5(
             in_bytes = batch["input_byte_ids"].to(device)
             tgt_bytes = batch["target_byte_ids"].to(device)
             num_words = batch["num_words"].to(device)
+            slot_targets = batch.get("slot_targets")
+            if slot_targets is not None:
+                slot_targets = slot_targets.to(device)
             refs = batch["texts"]
 
             # Frozen acoustic extraction
@@ -179,6 +194,7 @@ def evaluate_v6_5(
                     num_words=num_words,
                     input_byte_ids=in_bytes,
                     target_byte_ids=tgt_bytes,
+                    slot_targets=slot_targets,
                 )
                 loss = out_dec["loss"]
                 logits = out_dec["logits"]
@@ -231,6 +247,10 @@ def main():
     parser.add_argument("--backbone_ckpt", type=str, default="checkpoints/phono_v6_4_gated_diffusion/medium/v6_4_960h/best_checkpoint.pt")
     parser.add_argument("--train_manifest", type=str, default="data/librispeech/benchmark_train_960h.json")
     parser.add_argument("--val_manifest", type=str, default="data/librispeech/benchmark_val.json")
+    parser.add_argument("--tier", type=str, default="medium", choices=["medium", "large"], help="Architecture tier (medium: 16 experts top-2, large: 32 experts top-4)")
+    parser.add_argument("--micro_num_experts", type=int, default=16, help="Experts in micro byte head (default: 16)")
+    parser.add_argument("--micro_moe_top_k", type=int, default=2, help="Top-K sparse routing in micro head (default: 2)")
+    parser.add_argument("--disable_macro_fastpath", action="store_true", default=False, help="Disable Macro Fast-Path routing")
     parser.add_argument("--steps", type=int, default=10000, help="Total training steps")
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size per step")
     parser.add_argument("--accum_steps", type=int, default=2, help="Gradient accumulation steps (effective batch 16)")
@@ -249,7 +269,7 @@ def main():
 
     print("=" * 75)
     print("🚀 PHONO-V6.5: HIERARCHICAL WORD-TO-BYTE RECURSIVE DENOISING DECODER")
-    print(f"Device: {device} | Total Steps: {args.steps} | Batch Size: {args.batch_size} (Effective: {args.batch_size * args.accum_steps})")
+    print(f"Device: {device} | Tier: {args.tier.upper()} | Total Steps: {args.steps} | Batch Size: {args.batch_size} (Effective: {args.batch_size * args.accum_steps})")
     print(f"Backbone: {args.backbone_ckpt}")
     print(f"Output: {output_dir}")
     print("=" * 75)
@@ -270,26 +290,27 @@ def main():
         p.requires_grad = False
     print(f"🔒 Frozen acoustic backbone initialized ({arch}, ~83.88M parameters).")
 
-    # 3. Phono-V6.5 Model
-    config = HierarchicalByteConfig(
-        macro_dim=512,
-        acoustic_dim=512,
-        macro_layers=4,
-        macro_heads=8,
-        macro_ffn_dim=1536,
-        num_experts=4,
-        moe_top_k=2,
-        cross_attn_band_width=32,
-        micro_dim=256,
-        micro_layers=2,
-        micro_heads=4,
-        micro_ffn_dim=512,
-        byte_vocab_size=tokenizer.vocab_size,
-    )
+    # 3. Phono-V6.5 Model Configured by Tier
+    enable_fastpath = not args.disable_macro_fastpath
+    if args.tier == "large":
+        config = HierarchicalByteConfig.large(
+            byte_vocab_size=tokenizer.vocab_size,
+            enable_macro_fastpath=enable_fastpath,
+        )
+    else:
+        config = HierarchicalByteConfig.medium(
+            byte_vocab_size=tokenizer.vocab_size,
+            micro_num_experts=args.micro_num_experts,
+            micro_moe_top_k=args.micro_moe_top_k,
+            enable_macro_fastpath=enable_fastpath,
+        )
+
     decoder = PhonoV65HierarchicalByteDecoder(config).to(device)
     decoder_params = sum(p.numel() for p in decoder.parameters() if p.requires_grad)
     emb_size_kb = decoder.micro_byte_head.byte_embedding.weight.numel() * 2 / 1024
-    print(f"✨ Phono-V6.5 Initialized: {decoder_params:,} trainable parameters ({decoder_params/1e6:.2f}M).")
+    print(f"✨ Phono-V6.5-MoE Initialized: {decoder_params:,} trainable parameters ({decoder_params/1e6:.2f}M).")
+    print(f"🧠 Micro Byte Head: {config.micro_layers} Layers, {config.micro_num_experts} Experts (Top-{config.micro_moe_top_k} Routing), d={config.micro_dim}.")
+    print(f"⚡ Macro Fast-Path Router: {'Enabled (Instant EOS Early-Exit + Silence Bypass)' if config.enable_macro_fastpath else 'Disabled'}")
     print(f"💾 Byte Embedding Table: {emb_size_kb:.1f} KB in FP16 (vs 10.2 MB in fixed word models).")
 
     # 4. Data Loaders
@@ -360,6 +381,9 @@ def main():
             in_bytes = batch["input_byte_ids"].to(device, non_blocking=True)
             tgt_bytes = batch["target_byte_ids"].to(device, non_blocking=True)
             num_words = batch["num_words"].to(device, non_blocking=True)
+            slot_targets = batch.get("slot_targets")
+            if slot_targets is not None:
+                slot_targets = slot_targets.to(device, non_blocking=True)
             refs = batch["texts"]
 
             # Frozen acoustic extraction
@@ -375,6 +399,7 @@ def main():
                     num_words=num_words,
                     input_byte_ids=in_bytes,
                     target_byte_ids=tgt_bytes,
+                    slot_targets=slot_targets,
                 )
                 loss = out_dec["loss"] / args.accum_steps
 
