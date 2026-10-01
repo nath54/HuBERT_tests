@@ -375,17 +375,19 @@ Evaluated on genuine downstream LibriSpeech test utterances:
 | **Phono-V6.0 (Procedural)** | 7.0s | 100% Synthetic Procedural TTS | 1,000 steps (~2.5h) | Procedural Clean Speech | **58.0%** | ~65% |
 | **Phono-V6.1 (MoE 4-Experts)** | 7.0s | 50% Synthetic / 50% LibriSpeech | 2,000 steps (~15h) | Hierarchical Mixture-of-Experts | **45.92%** | 50.1% |
 | **Phono-V6.2 (Sparse Attention)** | 30.0s | 100% Genuine LibriSpeech Clean | 4,000 steps (52.1h) | Sparse Local Attention + InterCTC | **15.10%** | **22.18%** |
-| **Phono-V6.3 (Latent Diffusion)** | 30.0s | 100% Genuine LibriSpeech Clean | 4,000 steps (56.2h) | Latent Diffusion Multi-Task Regularization | **13.70%** *(Project Record)* | **20.74%** |
-| **Phono-V6.4 (Gated Diffusion)** | 30.0s | 100% Genuine LibriSpeech Clean | 4,000 steps (56.2h) | Confidence-Gated Diffusion + Deep Refiner | **14.63%** | **16.78%** *(Best Lexicon PER)* |
+| **Phono-V6.3 (Latent Diffusion)** | 30.0s | 100% Genuine LibriSpeech Clean | 4,000 steps (56.2h) | Latent Diffusion Multi-Task Regularization | **13.70%** | **20.74%** |
+| **Phono-V6.4 (Gated Diffusion 100h)** | 30.0s | 100% Genuine LibriSpeech Clean | 4,000 steps (56.2h) | Confidence-Gated Diffusion + Deep Refiner | **14.63%** | **16.78%** |
+| **Phono-V6.4 (Gated Diffusion 960h)** | 30.0s | 100% Full 960h LibriSpeech Mixed | 30,000 steps (410.3h) | Learnable Gate MLP + 960h Interleaved Scaling | **7.50%** *(Project Record)* | **12.43%** *(Project Record)* |
 
 ```
 PER Progression Across Model Generations:
-  Phono-V5 (Dense Baseline):   ██████████████████████████████ 75.0%
-  Phono-V6.0 (Procedural):     ███████████████████████ 58.0%
-  Phono-V6.1 (MoE 4-Experts):  ██████████████████ 45.92%
-  Phono-V6.2 (Sparse + 30s):   ██████ 15.10%
-  Phono-V6.3 (Diffusion):      █████ 13.70% (Project Record)
-  Phono-V6.4 (Gated Diffusion):█████ 14.63% (16.78% Lexicon PER)
+  Phono-V5 (Dense Baseline):     ██████████████████████████████ 75.0%
+  Phono-V6.0 (Procedural):       ███████████████████████ 58.0%
+  Phono-V6.1 (MoE 4-Experts):    ██████████████████ 45.92%
+  Phono-V6.2 (Sparse + 30s):     ██████ 15.10%
+  Phono-V6.3 (Diffusion):        █████ 13.70%
+  Phono-V6.4 (Gated Diff 100h):  █████ 14.63%
+  Phono-V6.4 (Gated Diff 960h):  ███ 7.50% (Project Record: 12.43% Lexicon PER)
 ```
 
 ### Standardized Cross-Architecture Benchmark Suite (Medium Tier, 4,000 Steps Each)
