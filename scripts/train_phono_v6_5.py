@@ -502,21 +502,22 @@ def main():
                     torch.save(save_payload, best_ckpt_path)
                     print(f"🌟 [New Best Model Saved] Step {step} achieved lowest Val WER: {best_val_wer:.2f}% (Loss: {best_val_loss:.4f}) -> {best_ckpt_path.name}")
 
-                # Save latest checkpoint
-                latest_ckpt_path = output_dir / "checkpoint_latest.pt"
-                save_payload = {
-                    "step": step,
-                    "arch": "phono_v6_5_hierarchical_decoder",
-                    "config": config,
-                    "model_state_dict": decoder.state_dict(),
-                    "optimizer_state_dict": optimizer.state_dict(),
-                    "val_loss": eval_metrics["val_loss"],
-                    "val_acc": eval_metrics["val_acc"],
-                    "val_wer": eval_metrics["val_wer"],
-                    "saved_at": time.time(),
-                }
-                torch.save(save_payload, latest_ckpt_path)
-                print(f"💾 Checkpoint saved at step {step} -> {latest_ckpt_path.name}\n")
+                # Save latest checkpoint only if not only_save_best
+                if not args.only_save_best:
+                    latest_ckpt_path = output_dir / "checkpoint_latest.pt"
+                    save_payload = {
+                        "step": step,
+                        "arch": "phono_v6_5_hierarchical_decoder",
+                        "config": config,
+                        "model_state_dict": decoder.state_dict(),
+                        "optimizer_state_dict": optimizer.state_dict(),
+                        "val_loss": eval_metrics["val_loss"],
+                        "val_acc": eval_metrics["val_acc"],
+                        "val_wer": eval_metrics["val_wer"],
+                        "saved_at": time.time(),
+                    }
+                    torch.save(save_payload, latest_ckpt_path)
+                    print(f"💾 Checkpoint saved at step {step} -> {latest_ckpt_path.name}\n")
 
     print("\n" + "=" * 75)
     print("🏁 PHONO-V6.5 TRAINING COMPLETED!")
