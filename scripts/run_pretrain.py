@@ -11,6 +11,7 @@ import copy
 from datetime import datetime
 import json
 import os
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 from pathlib import Path
 import random
 import signal
@@ -788,6 +789,13 @@ def main():
             with profiler.time_block("time_optimizer_step"):
                 scaler.step(optimizer)
                 scaler.update()
+
+            del audio, targets, target_lengths, audio_lengths
+            if frame_targets is not None:
+                del frame_targets, frame_lengths
+
+            if step % 100 == 0 and torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
             t_train_total = time.perf_counter() - t_train_start
             profiler.record("total_train_step_sec", t_train_total)
