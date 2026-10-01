@@ -32,6 +32,8 @@ from src.models.phono_v6_5_hierarchical_decoder import (
     SLOT_SPACE,
 )
 from src.data.byte_tokenizer import ByteTokenizer
+from src.data.phoneme_tokenizer import PhonemeTokenizer
+from src.data.target_extractors import PhonemeTargetExtractor
 
 
 class MultilingualByteDataset(Dataset):
@@ -259,6 +261,8 @@ def main():
     parser.add_argument("--eval_interval", type=int, default=500, help="Steps between validation evaluations")
     parser.add_argument("--max_duration_sec", type=float, default=20.0, help="Max duration filter")
     parser.add_argument("--output_dir", type=str, default="checkpoints/phono_v6_5_hierarchical/medium")
+    parser.add_argument("--resume_ckpt", type=str, default=None, help="Resume training from existing checkpoint")
+    parser.add_argument("--log_step_every", type=int, default=1, help="Log batch sample every N steps (default: 1)")
     parser.add_argument("--only_save_best", action="store_true", default=True, help="Only save best checkpoint to protect SSD")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     args = parser.parse_args()
@@ -362,10 +366,47 @@ def main():
 
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
-    # 6. Training Loop
+    # Phoneme Tokenizer & Extractor for per-step sample logging
+    phoneme_tokenizer = PhonemeTokenizer()
+    phoneme_target_extractor = PhonemeTargetExtractor(tokenizer=phoneme_tokenizer)
+    truth_ph_cache: Dict[str, str] = {}
+
+    def get_truth_phonemes(text: str) -> str:
+        if text in truth_ph_cache:
+            return truth_ph_cache[text]
+        try:
+            phonemizer = phoneme_target_extractor._get_espeak_phonemizer()
+            sentences = phonemizer.phonemize("en-us", text)
+            ph = "".join([p for s in sentences for p in s])
+        except Exception:
+            ph = text
+        if len(truth_ph_cache) < 20000:
+            truth_ph_cache[text] = ph
+        return ph
+
+    # 6. Checkpoint Resumption & Training Loop
     best_val_wer = float("inf")
     best_val_loss = float("inf")
-    step = 0
+    start_step = 0
+
+    if args.resume_ckpt:
+        resume_path = Path(args.resume_ckpt)
+        if resume_path.exists():
+            print(f"🔄 Resuming checkpoint from {resume_path}...")
+            ckpt = torch.load(resume_path, map_location=device, weights_only=False)
+            decoder.load_state_dict(ckpt["model_state_dict"])
+            if "optimizer_state_dict" in ckpt:
+                optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+            start_step = ckpt.get("step", 0)
+            best_val_wer = ckpt.get("val_wer", float("inf"))
+            best_val_loss = ckpt.get("val_loss", float("inf"))
+            for _ in range(start_step):
+                scheduler.step()
+            print(f"✅ Successfully resumed at Step {start_step} (Best Val WER: {best_val_wer:.2f}%, Loss: {best_val_loss:.4f}).")
+        else:
+            print(f"⚠️ Resume checkpoint {resume_path} not found. Starting from step 0.")
+
+    step = start_step
     t0 = time.time()
     optimizer.zero_grad(set_to_none=True)
 
@@ -421,46 +462,51 @@ def main():
             diff_val = out_dec["diff_loss"].item()
             aux_val = out_dec["aux_loss"].item()
 
-            # Compute live training batch WER every 10 steps
-            live_wer_str = "N/A"
-            if step % 10 == 0 or step == 1:
+            # Per-step or periodic batch sample logging
+            if step % args.log_step_every == 0 or step == args.steps:
+                cur_lr = scheduler.get_last_lr()[0]
+                elapsed = time.time() - t0
+                steps_done = max(1, step - start_step)
+                steps_per_sec = steps_done / max(1e-5, elapsed)
+                remaining_sec = (args.steps - step) / max(1e-5, steps_per_sec)
+                eta_min = int(remaining_sec / 60)
+
+                # 1. Truth Words & Truth Phonemes
+                truth_words = refs[0].strip()
+                truth_ph = get_truth_phonemes(truth_words)
+
+                # 2. Predicted Phonemes (Greedy CTC from frozen acoustic backbone)
+                pred_ph = ""
                 with torch.no_grad():
-                    logits = out_dec["logits"]
-                    preds_ids = logits.argmax(dim=-1)  # [B, L, K]
-                    pred_texts = []
-                    for b_idx in range(min(4, audio.size(0))):
-                        utt_words = []
-                        for w_idx in range(num_words[b_idx].item()):
-                            b_seq = preds_ids[b_idx, w_idx].tolist()
-                            w_str = tokenizer.decode(b_seq, skip_special=True)
-                            if w_str:
-                                utt_words.append(w_str)
-                        pred_texts.append(" ".join(utt_words))
-                    
-                    sub_refs = [refs[b_idx].lower() for b_idx in range(len(pred_texts))]
-                    try:
-                        w_val = jiwer.wer(sub_refs, pred_texts) * 100.0
-                        live_wer_str = f"{w_val:5.1f}%"
-                    except Exception:
-                        live_wer_str = "N/A"
+                    if "logits" in out_bb and hasattr(backbone, "decode_greedy"):
+                        pred_ph_ids = backbone.decode_greedy(out_bb["logits"][:1])[0]
+                        pred_ph = phoneme_tokenizer.decode(pred_ph_ids, skip_special=True)
+
+                # 3. Predicted Words (Greedy from Tier-2 Micro Byte Head)
+                pred_words = ""
+                if out_dec["logits"] is not None:
+                    first_preds = out_dec["logits"][0].argmax(dim=-1)  # [L, K]
+                    n_w = num_words[0].item() if num_words is not None else first_preds.shape[0]
+                    pred_w_list = []
+                    for w_idx in range(min(n_w, first_preds.shape[0])):
+                        b_seq = first_preds[w_idx].tolist()
+                        w_str = tokenizer.decode(b_seq, skip_special=True)
+                        if w_str:
+                            pred_w_list.append(w_str)
+                    pred_words = " ".join(pred_w_list)
+
+                print(
+                    f"[Phono-V6.5 Step {step:5d}/{args.steps}] Loss: {raw_loss:.4f} | "
+                    f"Acc: {batch_acc:5.1f}% | LR: {cur_lr:.2e} | Speed: {steps_per_sec:.2f} it/s | ETA: {eta_min}m\n"
+                    f"  - Truth phonems: {truth_ph}\n"
+                    f"  - Predicted phonems: {pred_ph}\n"
+                    f"  - Predicted words: {pred_words}\n"
+                    f"  - Truth words: {truth_words}"
+                )
 
             del audio, audio_lens, in_bytes, tgt_bytes, num_words, acoustic_mem, mem_lens
             if step % 100 == 0 and torch.cuda.is_available():
                 torch.cuda.empty_cache()
-
-            # Logging with Accuracy and WER
-            if step % 10 == 0 or step == 1:
-                cur_lr = scheduler.get_last_lr()[0]
-                elapsed = time.time() - t0
-                steps_per_sec = step / max(1e-5, elapsed)
-                remaining_sec = (args.steps - step) / max(1e-5, steps_per_sec)
-                eta_min = int(remaining_sec / 60)
-                print(
-                    f"[V6.5 Step {step:5d}/{args.steps}] Loss: {raw_loss:.4f} | "
-                    f"Acc: {batch_acc:5.1f}% | WER: {live_wer_str} | "
-                    f"Diff: {diff_val:.4f} | Aux: {aux_val:.3f} | "
-                    f"LR: {cur_lr:.2e} | Speed: {steps_per_sec:.2f} it/s | ETA: {eta_min}m"
-                )
 
             # Validation & Checkpointing
             if step % args.eval_interval == 0 or step == args.steps:
