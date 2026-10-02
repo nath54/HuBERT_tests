@@ -52,7 +52,8 @@ class PhonoV67SpeechConfig:
             encoder_heads=8,
             encoder_embed_dim=512,
             encoder_ffn_dim=2048,
-            num_experts=16,
+            vocab_size=64,
+            num_experts=4,
             moe_top_k=2,
             use_deep_refiner=True,
             learnable_gating=True,
@@ -182,10 +183,13 @@ class PhonoV67SpeechModel(nn.Module):
         if encoder_checkpoint_path:
             ckpt = torch.load(encoder_checkpoint_path, map_location="cpu")
             state_dict = ckpt.get("model_state_dict", ckpt)
-            clean_sd = {
-                (k[len("encoder."):] if k.startswith("encoder.") else k): v
-                for k, v in state_dict.items()
-            }
+            if any(k.startswith("encoder.feature_extractor") for k in state_dict):
+                clean_sd = {
+                    (k[len("encoder."):] if k.startswith("encoder.") else k): v
+                    for k, v in state_dict.items()
+                }
+            else:
+                clean_sd = state_dict
             enc_missing, enc_unexpected = self.encoder.load_state_dict(clean_sd, strict=False)
             results["encoder"] = {
                 "transferred": len(clean_sd) - len(enc_unexpected),
@@ -197,10 +201,13 @@ class PhonoV67SpeechModel(nn.Module):
         if decoder_checkpoint_path:
             ckpt = torch.load(decoder_checkpoint_path, map_location="cpu")
             state_dict = ckpt.get("model_state_dict", ckpt)
-            clean_sd = {
-                (k[len("decoder."):] if k.startswith("decoder.") else k): v
-                for k, v in state_dict.items()
-            }
+            if any(k.startswith("decoder.macro_layers") for k in state_dict):
+                clean_sd = {
+                    (k[len("decoder."):] if k.startswith("decoder.") else k): v
+                    for k, v in state_dict.items()
+                }
+            else:
+                clean_sd = state_dict
             dec_missing, dec_unexpected = self.decoder.load_state_dict(clean_sd, strict=False)
             results["decoder"] = {
                 "transferred": len(clean_sd) - len(dec_unexpected),

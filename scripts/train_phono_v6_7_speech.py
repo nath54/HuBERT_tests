@@ -144,7 +144,7 @@ def parse_args():
     parser.add_argument("--output_dir", type=str, default="checkpoints/phono_v6_7_speech/medium")
     parser.add_argument("--only_save_best", action="store_true", default=True, help="Strictly keep only best checkpoint")
     parser.add_argument("--encoder_ckpt", type=str, default="checkpoints/phono_v6_4_gated_diffusion/medium/v6_4_960h/best_checkpoint.pt")
-    parser.add_argument("--decoder_ckpt", type=str, default="checkpoints/phono_v6_6_adaptive/medium/best_checkpoint.pt")
+    parser.add_argument("--decoder_ckpt", type=str, default="checkpoints/phono_v6_6_adaptive/best_checkpoint.pt")
     parser.add_argument("--smoke_test", action="store_true", help="Run 10 steps smoke test and exit")
     return parser.parse_args()
 
