@@ -46,6 +46,10 @@ from src.models.phono_v6_5_hierarchical_decoder import (
     HierarchicalByteConfig,
     PhonoV65HierarchicalByteDecoder,
 )
+from src.models.phono_v6_6_adaptive_decoder import (
+    AdaptivePathConfig,
+    PhonoV66AdaptiveDecoder,
+)
 from src.data.target_extractors import (
     BaseTargetExtractor,
     KMeansUnitExtractor,
@@ -396,5 +400,16 @@ ModelRegistry.register(
     target_extractor_cls=PhonemeTargetExtractor,
     target_type="phoneme_tokens",
 )(PhonoV65HierarchicalByteDecoder)
+
+ModelRegistry.register(
+    model_id="phono_v6_6_adaptive_decoder",
+    display_name="Phono-V6.6 (4-Path Length-Adaptive Decoder)",
+    description="Variant 6.6: 4-Path Length-Adaptive Word Routing & Conditioned MoE Character Decoder. Dynamically bounds unrolling across Blank/Special (0 FLOPs), Short (K=5), Medium (K=9), and Long (K=24) words.",
+    model_cls=PhonoV66AdaptiveDecoder,
+    config_cls=AdaptivePathConfig,
+    target_extractor_cls=PhonemeTargetExtractor,
+    target_type="phoneme_tokens",
+)(PhonoV66AdaptiveDecoder)
+
 
 

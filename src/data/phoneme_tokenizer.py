@@ -48,6 +48,13 @@ class PhonemeTokenizer:
         "θ", "ð", "ʃ", "ʒ", "ŋ", "ɲ", "ʁ", "ɹ", "ʔ",
         # Affricates / Digraphs
         "tʃ", "dʒ", "ts", "dz",
+        # Multilingual Consonants & Vowels (ES, DE, IT, AR, CMN, JA, KO)
+        "x", "ɣ", "β", "ɾ", "ħ", "ʕ", "χ", "ɕ", "ʑ", "ç", "ɴ", "q", "ɽ",
+        "ɐ", "ɯ", "ɤ", "ɨ", "1", "2", "3", "4", "5", ".",
+        "\u031e", "\u0308", "\u032a", "\u0361", "\u1d5d",
+        "c", "ɫ", "ɸ", "ʎ", "ʏ", "ʐ", "ʝ", "ɚ", "ᵻ",
+        "\u02b2", "\u02e4", "\u0327", "\u0329",
+        "!", ",", ":", ";", "?",
     ]
 
     def __init__(self, extra_tokens: Optional[List[str]] = None):
