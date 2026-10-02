@@ -115,8 +115,9 @@ def evaluate(
 
         logits = out["logits"]
         preds = logits.argmax(dim=-1)
-        valid_mask = target_bytes != -100
-        total_char_correct += (preds[valid_mask] == target_bytes[valid_mask]).sum().item()
+        tb_sliced = target_bytes[:, : logits.shape[1]]
+        valid_mask = tb_sliced != -100
+        total_char_correct += (preds[valid_mask] == tb_sliced[valid_mask]).sum().item()
         total_char_tokens += valid_mask.sum().item()
 
     count = max(batches_run, 1)
@@ -373,34 +374,34 @@ def main():
                     f"Rate: {rate:.2f} steps/s | ETA: {eta}"
                 )
 
-        # Evaluation & Checkpointing
-        if (step % args.eval_every == 0 or step == max_steps) and not args.smoke_test:
-            print(f"\n🧪 Evaluating at step {step}...")
-            val_metrics = evaluate(model, val_loader, device=device)
-            v_loss = val_metrics["val_loss"]
-            print(
-                f"  Validation Loss:    {v_loss:.4f} "
-                f"(Enc: {val_metrics['val_enc_loss']:.3f}, Dec: {val_metrics['val_dec_loss']:.3f}) | "
-                f"PathAcc: {val_metrics['val_path_acc']:.1f}% | "
-                f"CharAcc: {val_metrics['val_char_acc']:.1f}%"
-            )
-
-            if v_loss < best_val_loss:
-                best_val_loss = v_loss
-                print(f"  ⭐ New best validation loss! Saving best checkpoint to {best_ckpt_path}...")
-                torch.save(
-                    {
-                        "step": step,
-                        "model_state_dict": model.state_dict(),
-                        "optimizer_state_dict": optimizer.state_dict(),
-                        "config": config,
-                        "val_loss": v_loss,
-                        "val_metrics": val_metrics,
-                    },
-                    best_ckpt_path,
+            # Evaluation & Checkpointing
+            if step > 0 and (step % args.eval_every == 0 or step == max_steps) and not args.smoke_test:
+                print(f"\n🧪 Evaluating at step {step}...")
+                val_metrics = evaluate(model, val_loader, device=device)
+                v_loss = val_metrics["val_loss"]
+                print(
+                    f"  Validation Loss:    {v_loss:.4f} "
+                    f"(Enc: {val_metrics['val_enc_loss']:.3f}, Dec: {val_metrics['val_dec_loss']:.3f}) | "
+                    f"PathAcc: {val_metrics['val_path_acc']:.1f}% | "
+                    f"CharAcc: {val_metrics['val_char_acc']:.1f}%"
                 )
-            print()
-            model.train()
+
+                if v_loss < best_val_loss:
+                    best_val_loss = v_loss
+                    print(f"  ⭐ New best validation loss! Saving best checkpoint to {best_ckpt_path}...")
+                    torch.save(
+                        {
+                            "step": step,
+                            "model_state_dict": model.state_dict(),
+                            "optimizer_state_dict": optimizer.state_dict(),
+                            "config": config,
+                            "val_loss": v_loss,
+                            "val_metrics": val_metrics,
+                        },
+                        best_ckpt_path,
+                    )
+                print()
+                model.train()
 
     print(f"\n🎉 Completed {step} steps in {time.time() - start_time:.1f}s!")
     if not args.smoke_test:
