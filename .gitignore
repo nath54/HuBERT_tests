@@ -21,3 +21,6 @@ logs/
 *history*.json
 checkpoints/
 /data/
+.*.txt
+.*token*
+*token*.txt

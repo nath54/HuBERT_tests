@@ -50,6 +50,14 @@ from src.models.phono_v6_6_adaptive_decoder import (
     AdaptivePathConfig,
     PhonoV66AdaptiveDecoder,
 )
+from src.models.phono_v6_7_windowed_decoder import (
+    WindowedAdaptivePathConfig,
+    PhonoV67WindowedDecoder,
+)
+from src.models.phono_v6_7_speech_model import (
+    PhonoV67SpeechConfig,
+    PhonoV67SpeechModel,
+)
 from src.data.target_extractors import (
     BaseTargetExtractor,
     KMeansUnitExtractor,
@@ -410,6 +418,26 @@ ModelRegistry.register(
     target_extractor_cls=PhonemeTargetExtractor,
     target_type="phoneme_tokens",
 )(PhonoV66AdaptiveDecoder)
+
+ModelRegistry.register(
+    model_id="phono_v6_7_windowed_decoder",
+    display_name="Phono-V6.7 (Windowed Multi-Word MoE Decoder)",
+    description="Variant 6.7: Windowed Multi-Word Context Cross-Attention (W=4 preceding words) with relative positional bias & ramped 30% scheduled sampling. Eliminates homophone ambiguity and grammatical agreement bottlenecks.",
+    model_cls=PhonoV67WindowedDecoder,
+    config_cls=WindowedAdaptivePathConfig,
+    target_extractor_cls=PhonemeTargetExtractor,
+    target_type="phoneme_tokens",
+)(PhonoV67WindowedDecoder)
+
+ModelRegistry.register(
+    model_id="phono_v6_7_speech_model",
+    display_name="Phono-V6.7 (Continuous Speech Model with Double Loss)",
+    description="Variant 6.7 End-to-End: Direct continuous speech wiring with double loss (CTC phoneme loss on frozen/fine-tuned PhonoV6.4 Gated Diffusion encoder + character cross-entropy on PhonoV6.7 Windowed MoE Decoder).",
+    model_cls=PhonoV67SpeechModel,
+    config_cls=PhonoV67SpeechConfig,
+    target_extractor_cls=PhonemeTargetExtractor,
+    target_type="phoneme_tokens",
+)(PhonoV67SpeechModel)
 
 
 

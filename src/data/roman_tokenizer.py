@@ -4,14 +4,15 @@ Covers (all normalized to lowercase):
 - Control tokens (<pad>, <blank>, <bos>, <eos>, <eow>, <unk>)
 - Digits: 0-9
 - Lowercase Latin: a-z
-- Standard ASCII punctuation and math/typography symbols
+- Standard ASCII punctuation and math/typography symbols (excluding space, which is strictly <eow>)
 - Spanish punctuation: ¡, ¿
 - Accented Latin vowels and consonants (French, Spanish, German, Italian):
   à, á, â, ã, ä, å, æ, ç, è, é, ê, ë, ì, í, î, ï, ð, ñ, ò, ó, ô, õ, ö, ø, ù, ú, û, ü, ý, þ, ÿ, ß, œ
 - Pinyin vowels with tone marks: ā, á, ǎ, à, ē, é, ě, è, ī, í, ǐ, ì, ō, ó, ǒ, ò, ū, ú, ǔ, ù, ǖ, ǘ, ǚ, ǜ.
 
-Vocab size: ~110-120 tokens (~115 KB embedding table in FP16 at d=512).
-All text is automatically converted to lowercase during normalization, eliminating casing entropy.
+Vocab size: 122 tokens (~125 KB embedding table in FP16 at d=512).
+Spaces are strictly represented by the <eow> word-boundary token, completely eliminating
+whitespace duplication, intra-word spacing, and trailing whitespace artifacts.
 """
 
 from typing import Dict, List, Optional, Set, Union
@@ -63,7 +64,7 @@ class RomanCharTokenizer:
             self.unk_id: "<unk>",
         }
 
-        # Build ordered unique character list (lowercase only)
+        # Build ordered unique character list (lowercase only, NO whitespace character)
         chars = []
 
         # 1. Digits
@@ -72,9 +73,9 @@ class RomanCharTokenizer:
         # 2. Lowercase ASCII
         chars.extend([chr(c) for c in range(ord("a"), ord("z") + 1)])
 
-        # 3. Standard ASCII punctuation & math symbols
+        # 3. Standard ASCII punctuation & math symbols (excluding space)
         ascii_punct = [
-            " ", "'", '"', ",", ".", "-", "?", "!", ":", ";",
+            "'", '"', ",", ".", "-", "?", "!", ":", ";",
             "(", ")", "[", "]", "{", "}", "/", "\\", "@", "#",
             "$", "%", "^", "&", "*", "_", "+", "=", "<", ">",
             "~", "|",
@@ -138,7 +139,6 @@ class RomanCharTokenizer:
             for k, v in self.NORM_MAP.items():
                 if k in text:
                     text = text.replace(k, v)
-        # NFC normal form ensures composed characters
         text = unicodedata.normalize("NFC", text)
         return text.lower()
 
@@ -150,7 +150,9 @@ class RomanCharTokenizer:
             tokens.append(self.bos_id)
 
         for ch in text:
-            if ch in self.char2id:
+            if ch == " ":
+                tokens.append(self.eow_id)
+            elif ch in self.char2id:
                 tokens.append(self.char2id[ch])
             else:
                 tokens.append(self.unk_id)
@@ -166,7 +168,7 @@ class RomanCharTokenizer:
         word_sequences = []
         for w in words:
             seq = []
-            for ch in w:
+            for ch in w.strip():
                 if ch in self.char2id:
                     seq.append(self.char2id[ch])
                 else:
@@ -176,11 +178,13 @@ class RomanCharTokenizer:
         return word_sequences
 
     def decode(self, token_ids: List[int], skip_special: bool = True) -> str:
-        """Decode token IDs back to a lowercase string."""
+        """Decode token IDs back to a lowercase string, truncating at <eos> or <eow>."""
         chars = []
         for tid in token_ids:
             if tid == self.eow_id:
                 chars.append(" ")
+            elif tid == self.eos_id:
+                break
             elif tid in self.id2char and tid not in self.special_tokens:
                 chars.append(self.id2char[tid])
             elif not skip_special:
@@ -189,13 +193,22 @@ class RomanCharTokenizer:
         return "".join(chars).strip()
 
     def decode_words(self, word_token_lists: List[List[int]]) -> str:
-        """Decode a list of word token sequences into space-separated text."""
+        """Decode word token sequences into cleanly spaced text, stripping whitespace per word."""
         decoded_words = []
         for seq in word_token_lists:
-            w = self.decode(seq, skip_special=True)
+            clean_tokens = []
+            for tid in seq:
+                # Early stop at word delimiter
+                if tid in (self.eow_id, self.eos_id):
+                    break
+                if tid not in (self.pad_id, self.bos_id, self.blank_id):
+                    clean_tokens.append(tid)
+
+            w = "".join(self.id2char.get(t, "") for t in clean_tokens if t in self.id2char).strip()
             if w:
                 decoded_words.append(w)
-        return " ".join(decoded_words)
+
+        return " ".join(decoded_words).strip()
 
 
 if __name__ == "__main__":
@@ -203,7 +216,7 @@ if __name__ == "__main__":
     print(f"RomanCharTokenizer Vocab Size: {tok.vocab_size} tokens")
 
     samples = [
-        "He hoped there would be stew for dinner 123!",
+        "  He hoped there would be stew for dinner 123!  ",
         "Le renard brun rapide saute par-dessus le chien endormi, où sont les élèves?",
         "El rápido zorro marrón salta sobre el perro perezoso. ¡Hola! ¿Cómo estás hoy?",
         "Der schnelle braune Fuchs springt über den faulen Hund in der Straße 42.",
@@ -215,10 +228,9 @@ if __name__ == "__main__":
         "“Edge Computing” — AudioLearn 2026: cost $0.00!",
     ]
     for s in samples:
-        enc = tok.encode(s)
-        dec = tok.decode(enc)
-        unk_count = enc.count(tok.unk_id)
-        norm_s = tok.normalize(s)
-        print(f"[{len(norm_s)} chars -> {len(enc)} tokens | unk={unk_count}] '{s}' -> '{dec}'")
-        assert dec == norm_s or dec == norm_s.strip(), f"Mismatch: '{norm_s}' != '{dec}'"
-    print("✅ All lowercase samples passed cleanly!")
+        words = tok.encode_words(s)
+        dec = tok.decode_words(words)
+        norm_s = tok.normalize(s).strip()
+        print(f"'{s.strip()[:35]}' -> '{dec[:35]}'")
+        assert dec == norm_s or dec == " ".join(norm_s.split())
+    print("✅ All samples cleanly stripped without whitespace issues!")

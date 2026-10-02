@@ -12,14 +12,14 @@ import struct
 from typing import Any, Dict, List, Optional, Tuple
 
 import torch
-from torch.utils.data import Dataset, IterableDataset
+from torch.utils.data import Dataset
 
 from src.data.phoneme_tokenizer import PhonemeTokenizer
 from src.data.roman_tokenizer import RomanCharTokenizer
 
 
 class MultilingualShardDataset(Dataset):
-    """Memory-mapped binary shard dataset for pretraining Phono-V6.5."""
+    """Memory-mapped binary shard dataset for pretraining Phono-V6.6."""
 
     def __init__(
         self,
@@ -39,7 +39,6 @@ class MultilingualShardDataset(Dataset):
         if not self.idx_files:
             raise ValueError(f"No shard .idx files found in {shards_dir}")
 
-        # Index all samples across shards: list of (shard_bin_path, byte_offset, length)
         self.samples: List[Tuple[str, int, int]] = []
         for idx_path in self.idx_files:
             bin_path = idx_path[:-4] + ".bin"
@@ -53,7 +52,6 @@ class MultilingualShardDataset(Dataset):
                     off, length = struct.unpack_from("<QI", raw, i * 12)
                     self.samples.append((bin_path, off, length))
 
-        # Cached file handles to avoid reopening files repeatedly
         self._file_cache: Dict[str, Any] = {}
 
     def __len__(self) -> int:
@@ -103,7 +101,7 @@ class MultilingualShardDataset(Dataset):
 
 
 class MultilingualPretrainCollator:
-    """Collates multilingual shard records into training tensors for Phono-V6.5."""
+    """Collates multilingual shard records into training tensors for Phono-V6.6."""
 
     def __init__(
         self,
@@ -111,24 +109,15 @@ class MultilingualPretrainCollator:
         roman_tokenizer: RomanCharTokenizer,
         acoustic_dim: int = 512,
         max_bytes_per_word: int = 24,
-        frames_per_phoneme_range: Tuple[int, int] = (2, 5),
     ):
         self.ph_tok = phoneme_tokenizer
         self.rom_tok = roman_tokenizer
         self.acoustic_dim = acoustic_dim
         self.max_bytes_per_word = max_bytes_per_word
-        self.min_fp, self.max_fp = frames_per_phoneme_range
-
-        # Synthetic phoneme embedding table for acoustic simulation
-        self.ph_embed = torch.nn.Embedding(self.ph_tok.vocab_size, acoustic_dim)
-        torch.nn.init.normal_(self.ph_embed.weight, mean=0.0, std=0.02)
-        # Freeze synthetic embedding
-        self.ph_embed.weight.requires_grad = False
 
     def __call__(self, batch: List[Dict[str, Any]]) -> Dict[str, Any]:
         B = len(batch)
         max_words = max(len(s["words"]) for s in batch)
-        # Allocate extra slots for EOS and silence
         max_word_slots = max(max_words + 2, 4)
         K = self.max_bytes_per_word
 
@@ -140,11 +129,15 @@ class MultilingualPretrainCollator:
         truth_words = []
         truth_phonemes = []
 
-        # Synthetic acoustic memory generation
-        simulated_memories = []
-        memory_lengths = []
+        max_ph_len = max(len(s["phoneme_ids"]) for s in batch)
+        phoneme_ids = torch.zeros(B, max_ph_len, dtype=torch.long)
+        phoneme_lengths = torch.tensor([len(s["phoneme_ids"]) for s in batch], dtype=torch.long)
 
         for b_idx, sample in enumerate(batch):
+            # Phoneme IDs
+            ph = sample["phoneme_ids"]
+            phoneme_ids[b_idx, : len(ph)] = torch.tensor(ph, dtype=torch.long)
+
             words = sample["words"]
             num_w = len(words)
 
@@ -176,35 +169,14 @@ class MultilingualPretrainCollator:
             input_bytes[b_idx, num_w, 0] = self.rom_tok.bos_id
             target_bytes[b_idx, num_w, 0] = self.rom_tok.eos_id
 
-            # Decoded representations for logging
             truth_w = self.rom_tok.decode_words(words)
             truth_p = self.ph_tok.decode(sample["phoneme_ids"])
             truth_words.append(truth_w)
             truth_phonemes.append(truth_p)
 
-            # Generate synthetic 50Hz acoustic frames with random phoneme durations
-            ph_tensor = torch.tensor(sample["phoneme_ids"], dtype=torch.long)
-            expanded_frames = []
-            for pid in ph_tensor:
-                d = random.randint(self.min_fp, self.max_fp)
-                expanded_frames.extend([pid.item()] * d)
-
-            sim_ph = torch.tensor(expanded_frames, dtype=torch.long)
-            with torch.no_grad():
-                mem = self.ph_embed(sim_ph)
-                # Add acoustic jitter/noise to simulate natural speech latents
-                mem = mem + torch.randn_like(mem) * 0.05
-            simulated_memories.append(mem)
-            memory_lengths.append(len(mem))
-
-        max_T = max(memory_lengths)
-        acoustic_memory = torch.zeros(B, max_T, self.acoustic_dim)
-        for b_idx, mem in enumerate(simulated_memories):
-            acoustic_memory[b_idx, : len(mem)] = mem
-
         return {
-            "acoustic_memory": acoustic_memory,
-            "memory_lengths": torch.tensor(memory_lengths, dtype=torch.long),
+            "phoneme_ids": phoneme_ids,
+            "phoneme_lengths": phoneme_lengths,
             "input_byte_ids": input_bytes,
             "target_byte_ids": target_bytes,
             "slot_targets": slot_targets,

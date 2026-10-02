@@ -6,7 +6,7 @@ from src.data.roman_tokenizer import RomanCharTokenizer
 
 def test_roman_char_tokenizer_basic():
     tok = RomanCharTokenizer()
-    assert tok.vocab_size == 123
+    assert tok.vocab_size == 122
 
     # Test specials
     assert tok.special_tokens[tok.pad_id] == "<pad>"

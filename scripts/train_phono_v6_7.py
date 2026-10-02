@@ -1,14 +1,11 @@
 #!/usr/bin/env python3
-"""Phono-V6.6 Multilingual 4-Path Length-Adaptive Pre-training Script.
+"""Phono-V6.7 Training Script: Windowed Multi-Word MoE Adaptive Decoder.
 
-Pre-trains Architecture 6.6 with:
-- End-to-End Learnable Phoneme Acoustic Encoder (deterministic across workers).
-- 4-Path Length-Adaptive Word Routing (Special/0, Short/1, Mid/2, Long/3).
-- Path-Conditioned 16-Expert MoE Character Decoder with Scheduled Sampling.
-- Lowercase RomanCharTokenizer (122 tokens, zero space tokens inside words).
-- Zero language tags: native intra-sentence multilingual code-switching.
-- Whitespace stripping and strict <eow> truncation.
-- --only_save_best SSD wear protection.
+Key Capabilities:
+1. Warm-starts directly from Phono-V6.6 best checkpoint (Step 11,000 / Val Loss 1.5405).
+2. Conditions character decoding on a sliding window of W=4 words (preceding 3 words + current word).
+3. Ramped 30% scheduled sampling with 2-step prefix rollout.
+4. Strict --only_save_best checkpointing to checkpoints/phono_v6_7_windowed/best_checkpoint.pt.
 """
 
 import argparse
@@ -16,51 +13,47 @@ import math
 import os
 import sys
 import time
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
+from transformers import get_cosine_schedule_with_warmup
 
-from src.data.multilingual_shard_dataset import (
-    MultilingualPretrainCollator,
-    MultilingualShardDataset,
-)
 from src.data.phoneme_tokenizer import PhonemeTokenizer
 from src.data.roman_tokenizer import RomanCharTokenizer
-from src.models.phono_v6_6_adaptive_decoder import (
-    AdaptivePathConfig,
-    PhonoV66AdaptiveDecoder,
+from src.data.multilingual_shard_dataset import (
+    MultilingualShardDataset,
+    MultilingualPretrainCollator,
 )
-
-
-def get_cosine_schedule_with_warmup(optimizer, warmup_steps: int, total_steps: int, min_lr: float = 1e-6):
-    def lr_lambda(current_step: int):
-        if current_step < warmup_steps:
-            return float(current_step) / float(max(1, warmup_steps))
-        progress = float(current_step - warmup_steps) / float(max(1, total_steps - warmup_steps))
-        return max(min_lr, 0.5 * (1.0 + math.cos(math.pi * progress)))
-    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+from src.models.phono_v6_7_windowed_decoder import (
+    WindowedAdaptivePathConfig,
+    PhonoV67WindowedDecoder,
+)
 
 
 def format_eta(seconds: float) -> str:
+    """Format ETA in human readable format."""
     if seconds < 0 or math.isinf(seconds) or math.isnan(seconds):
-        return "--m"
-    m, s = divmod(int(seconds), 60)
-    h, m = divmod(m, 60)
+        return "--m--s"
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
     if h > 0:
         return f"{h}h{m:02d}m"
-    return f"{m}m{s:02d}s"
+    return f"{m:02d}m{s:02d}s"
 
 
+@torch.no_grad()
 def evaluate(
-    model: PhonoV66AdaptiveDecoder,
+    model: PhonoV67WindowedDecoder,
     dataloader: DataLoader,
     device: torch.device,
-    max_batches: int = 25,
+    max_batches: int = 20,
 ) -> Dict[str, float]:
+    """Fast evaluation on held-out shards."""
     model.eval()
     total_loss = 0.0
     total_correct = 0
@@ -68,16 +61,23 @@ def evaluate(
     total_path_correct = 0
     total_path_tokens = 0
 
+    val_iter = iter(dataloader)
+    batches_run = 0
+
     with torch.no_grad():
-        for i, batch in enumerate(dataloader):
-            if i >= max_batches:
+        for _ in range(max_batches):
+            try:
+                batch = next(val_iter)
+            except StopIteration:
                 break
-            phoneme_ids = batch["phoneme_ids"].to(device)
-            phoneme_lengths = batch["phoneme_lengths"].to(device)
-            input_bytes = batch["input_byte_ids"].to(device)
-            target_bytes = batch["target_byte_ids"].to(device)
-            path_targets = batch["path_targets"].to(device)
-            num_words = batch["num_words"].to(device)
+            batches_run += 1
+
+            phoneme_ids = batch["phoneme_ids"].to(device, non_blocking=True)
+            phoneme_lengths = batch["phoneme_lengths"].to(device, non_blocking=True)
+            input_bytes = batch["input_byte_ids"].to(device, non_blocking=True)
+            target_bytes = batch["target_byte_ids"].to(device, non_blocking=True)
+            path_targets = batch["path_targets"].to(device, non_blocking=True)
+            num_words = batch["num_words"].to(device, non_blocking=True)
 
             with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
                 out = model(
@@ -104,43 +104,48 @@ def evaluate(
             total_path_correct += (path_preds[valid_pmask] == path_targets[valid_pmask]).sum().item()
             total_path_tokens += valid_pmask.sum().item()
 
-    avg_loss = total_loss / max(1, min(len(dataloader), max_batches))
+    avg_loss = total_loss / max(1, batches_run)
     char_acc = (total_correct / max(1, total_tokens)) * 100.0
     path_acc = (total_path_correct / max(1, total_path_tokens)) * 100.0
     return {"val_loss": avg_loss, "val_char_acc": char_acc, "val_path_acc": path_acc}
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Phono-V6.6 Multilingual 4-Path Adaptive Pretraining")
+    parser = argparse.ArgumentParser(description="Phono-V6.7 Windowed Multi-Word MoE Adaptive Pretraining")
     parser.add_argument("--shards_dir", type=str, default="/media/hdd/Datasets/multilingual_text/shards")
-    parser.add_argument("--save_dir", type=str, default="checkpoints/phono_v6_6_adaptive")
-    parser.add_argument("--steps", type=int, default=30000)
+    parser.add_argument("--save_dir", type=str, default="checkpoints/phono_v6_7_windowed")
+    parser.add_argument("--warmstart_ckpt", type=str, default="checkpoints/phono_v6_6_adaptive/best_checkpoint.pt")
+    parser.add_argument("--resume_ckpt", type=str, default=None)
+    parser.add_argument("--steps", type=int, default=20000)
     parser.add_argument("--batch_size", type=int, default=16)
-    parser.add_argument("--lr", type=float, default=2e-4)
+    parser.add_argument("--lr", type=float, default=1.5e-4)
     parser.add_argument("--weight_decay", type=float, default=0.01)
-    parser.add_argument("--warmup_steps", type=int, default=1000)
+    parser.add_argument("--warmup_steps", type=int, default=500)
     parser.add_argument("--micro_num_experts", type=int, default=16)
     parser.add_argument("--micro_moe_top_k", type=int, default=2)
+    parser.add_argument("--word_context_window", type=int, default=4)
+    parser.add_argument("--scheduled_sampling_prob", type=float, default=0.30)
     parser.add_argument("--eval_interval", type=int, default=500)
     parser.add_argument("--only_save_best", action="store_true", default=True)
-    parser.add_argument("--resume_ckpt", type=str, default=None)
+
     args = parser.parse_args()
 
     os.makedirs(args.save_dir, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    print("=" * 70)
-    print("🚀 Phono-V6.6: End-to-End Multilingual 4-Path Adaptive Pre-training")
+    print("=" * 72)
+    print("🚀 Phono-V6.7: Windowed Multi-Word Context MoE Pre-training")
     print(f"  Device:                 {device} ({torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'})")
     print(f"  Shards directory:       {args.shards_dir}")
     print(f"  Save directory:         {args.save_dir}")
+    print(f"  Warmstart Checkpoint:   {args.warmstart_ckpt}")
     print(f"  Total Steps:            {args.steps:,}")
     print(f"  Batch size:             {args.batch_size}")
     print(f"  Learning rate:          {args.lr}")
+    print(f"  Word Context Window:    W={args.word_context_window} preceding words")
+    print(f"  Scheduled Sampling:     {args.scheduled_sampling_prob * 100:.0f}%")
     print(f"  MoE Architecture:       {args.micro_num_experts} experts, Top-{args.micro_moe_top_k} routing")
-    print("  4-Path Adaptive Routes: Special(0 FLOPs), Short(K=5), Mid(K=9), Long(K=24)")
-    print("  Code-Switching:         Prompt-Free Dynamic Word-Level Routing")
-    print("=" * 70)
+    print("=" * 72)
 
     ph_tok = PhonemeTokenizer()
     rom_tok = RomanCharTokenizer()
@@ -166,7 +171,7 @@ def main():
         drop_last=True,
     )
 
-    cfg = AdaptivePathConfig.medium(
+    cfg = WindowedAdaptivePathConfig.medium(
         acoustic_dim=512,
         macro_dim=512,
         micro_dim=512,
@@ -174,12 +179,24 @@ def main():
         byte_vocab_size=rom_tok.vocab_size,
         micro_num_experts=args.micro_num_experts,
         micro_moe_top_k=args.micro_moe_top_k,
+        word_context_window=args.word_context_window,
+        scheduled_sampling_prob=args.scheduled_sampling_prob,
         max_bytes_per_word=24,
     )
-    model = PhonoV66AdaptiveDecoder(cfg).to(device)
+    model = PhonoV67WindowedDecoder(cfg).to(device)
 
     total_params = sum(p.numel() for p in model.parameters())
-    print(f"✅ Phono-V6.6 Model Initialized: {total_params:,} parameters.")
+    print(f"✅ Phono-V6.7 Model Initialized: {total_params:,} parameters.")
+
+    # Warmstart from V6.6 checkpoint if available
+    best_val_loss = float("inf")
+    start_step = 0
+
+    if args.warmstart_ckpt and os.path.exists(args.warmstart_ckpt) and not args.resume_ckpt:
+        print(f"🔄 Warm-starting model weights from: {args.warmstart_ckpt}")
+        res = model.load_from_v6_6_checkpoint(args.warmstart_ckpt, device=device)
+        best_val_loss = res.get("best_val_loss", float("inf"))
+        print(f"   - Inherited project record Best Val Loss: {best_val_loss:.4f}")
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -191,11 +208,8 @@ def main():
     scheduler = get_cosine_schedule_with_warmup(optimizer, args.warmup_steps, args.steps)
     scaler = torch.amp.GradScaler("cuda")
 
-    start_step = 0
-    best_val_loss = float("inf")
-
     if args.resume_ckpt and os.path.exists(args.resume_ckpt):
-        print(f"🔄 Resuming checkpoint from: {args.resume_ckpt}")
+        print(f"🔄 Resuming V6.7 checkpoint from: {args.resume_ckpt}")
         ckpt = torch.load(args.resume_ckpt, map_location=device)
         model.load_state_dict(ckpt["model_state_dict"], strict=False)
         if "optimizer_state_dict" in ckpt:
@@ -211,7 +225,7 @@ def main():
     t_last_step = time.time()
 
     model.train()
-    print("\n🚀 Beginning Phono-V6.6 4-Path Adaptive Pre-training Loop...\n")
+    print("\n🚀 Beginning Phono-V6.7 Windowed Multi-Word Pre-training Loop...\n")
 
     for step in range(start_step + 1, args.steps + 1):
         try:
@@ -263,14 +277,16 @@ def main():
             pred_word_str = rom_tok.decode_words(sample_pred_ids[:num_w])
             truth_w = batch["truth_words"][0]
             truth_p = batch["truth_phonemes"][0]
-            pred_p = truth_p
+
+        char_acc = out["char_acc"].item()
+        path_acc = out["path_acc"].item()
 
         print(
-            f"[Phono-V6.6-Pretrain Step {step}/{args.steps}] Loss: {loss.item():.4f} | "
-            f"Acc: {out['char_acc'].item():.2f}% | PathAcc: {out['path_acc'].item():.2f}% | "
+            f"[Phono-V6.7-Pretrain Step {step}/{args.steps}] Loss: {loss.item():.4f} | "
+            f"Acc: {char_acc:.2f}% | PathAcc: {path_acc:.2f}% | "
             f"LR: {current_lr:.2e} | Speed: {speed:.2f} it/s | ETA: {eta_str}\n"
             f"  - Truth phonems: {truth_p[:80]}\n"
-            f"  - Predicted phonems: {pred_p[:80]}\n"
+            f"  - Predicted phonems: {truth_p[:80]}\n"
             f"  - Predicted words: {pred_word_str[:80]}\n"
             f"  - Truth words: {truth_w[:80]}"
         )
