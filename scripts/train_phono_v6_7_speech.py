@@ -131,7 +131,8 @@ def evaluate(
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Train Phono-V6.7 Joint Speech Model with Double Loss.")
-    parser.add_argument("--batch_size", type=int, default=16, help="Total batch size across 4 languages (4 per lang)")
+    parser.add_argument("--batch_size", type=int, default=4, help="Micro batch size across 4 languages (1 per lang)")
+    parser.add_argument("--grad_accum", type=int, default=4, help="Gradient accumulation steps (effective batch size = batch_size * grad_accum = 16)")
     parser.add_argument("--encoder_lr", type=float, default=1e-5, help="Fine-tuning learning rate for PhonoV6.4 backbone")
     parser.add_argument("--decoder_lr", type=float, default=3e-4, help="Primary learning rate for PhonoV6.7 decoder")
     parser.add_argument("--ctc_loss_weight", type=float, default=0.5, help="Weight of CTC phoneme loss in double loss")
@@ -299,11 +300,13 @@ def main():
 
     best_val_loss = float("inf")
     step = 0
+    accum_step = 0
     start_time = time.time()
     train_iter = iter(train_loader)
 
     print("\n🏁 Starting Training Loop...")
     model.train()
+    optimizer.zero_grad()
 
     max_steps = 10 if args.smoke_test else args.max_steps
 
@@ -323,8 +326,6 @@ def main():
         target_bytes = batch["target_byte_ids"].to(device, non_blocking=True)
         path_targets = batch["path_targets"].to(device, non_blocking=True)
 
-        optimizer.zero_grad()
-
         with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
             out = model(
                 audio=audio,
@@ -336,36 +337,41 @@ def main():
                 target_byte_ids=target_bytes,
                 path_targets=path_targets,
             )
-            loss = out["loss"]
+            raw_loss = out["loss"]
 
-        if torch.isnan(loss):
+        if torch.isnan(raw_loss):
             print(f"⚠️ Warning: NaN loss at step {step}, skipping update.")
+            optimizer.zero_grad()
             continue
 
+        loss = raw_loss / args.grad_accum
         scaler.scale(loss).backward()
-        scaler.unscale_(optimizer)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-        scaler.step(optimizer)
-        scaler.update()
-        lr_scheduler.step()
+        accum_step += 1
 
-        step += 1
+        if accum_step % args.grad_accum == 0:
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            scaler.step(optimizer)
+            scaler.update()
+            lr_scheduler.step()
+            optimizer.zero_grad()
+            step += 1
 
-        # Logging
-        if step % args.log_every == 0 or step == 1:
-            elapsed = time.time() - start_time
-            rate = step / max(elapsed, 1e-5)
-            eta = format_eta((max_steps - step) / max(rate, 1e-5))
-            cur_enc_lr = optimizer.param_groups[0]["lr"]
-            cur_dec_lr = optimizer.param_groups[1]["lr"]
+            # Logging
+            if step % args.log_every == 0 or step == 1:
+                elapsed = time.time() - start_time
+                rate = step / max(elapsed, 1e-5)
+                eta = format_eta((max_steps - step) / max(rate, 1e-5))
+                cur_enc_lr = optimizer.param_groups[0]["lr"]
+                cur_dec_lr = optimizer.param_groups[1]["lr"]
 
-            print(
-                f"Step {step:6d}/{max_steps} | "
-                f"Loss: {loss.item():.4f} (Enc: {out['enc_loss'].item():.3f}, Dec: {out['dec_loss'].item():.3f}) | "
-                f"PathAcc: {out['path_acc'].item():5.1f}% | "
-                f"LR: [E:{cur_enc_lr:.1e}, D:{cur_dec_lr:.1e}] | "
-                f"Rate: {rate:.1f} steps/s | ETA: {eta}"
-            )
+                print(
+                    f"Step {step:6d}/{max_steps} | "
+                    f"Loss: {raw_loss.item():.4f} (Enc: {out['enc_loss'].item():.3f}, Dec: {out['dec_loss'].item():.3f}) | "
+                    f"PathAcc: {out['path_acc'].item():5.1f}% | "
+                    f"LR: [E:{cur_enc_lr:.1e}, D:{cur_dec_lr:.1e}] | "
+                    f"Rate: {rate:.2f} steps/s | ETA: {eta}"
+                )
 
         # Evaluation & Checkpointing
         if (step % args.eval_every == 0 or step == max_steps) and not args.smoke_test:
