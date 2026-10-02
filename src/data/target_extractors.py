@@ -180,10 +180,21 @@ class PhonemeTargetExtractor(BaseTargetExtractor):
             if flat_phonemes is None:
                 try:
                     phonemizer = self._get_espeak_phonemizer()
-                    espeak_lang = "fr-fr" if lang == "fr" else "en-us"
+                    espeak_lang_map = {
+                        "en": "en-us",
+                        "fr": "fr",
+                        "es": "es",
+                        "it": "it",
+                        "de": "de",
+                        "pt": "pt",
+                        "pl": "pl",
+                        "nl": "nl",
+                    }
+                    espeak_lang = espeak_lang_map.get(lang.lower(), "en-us")
                     phoneme_sentences = phonemizer.phonemize(espeak_lang, text)
                     flat_phonemes = [p for s in phoneme_sentences for p in s]
-                except Exception:
+                except Exception as e:
+                    print(f"⚠️ Phonemizer warning for [{lang}]: {e}, falling back to text")
                     flat_phonemes = list(text)
 
             # 2. Encode to token IDs
