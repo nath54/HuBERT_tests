@@ -19,6 +19,7 @@ Key Architecture Mechanics:
 import argparse
 import math
 import os
+import random
 import sys
 import time
 from pathlib import Path
@@ -31,6 +32,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from transformers import get_cosine_schedule_with_warmup
 
+from src.data.phoneme_tokenizer import PhonemeTokenizer
 from src.data.roman_tokenizer import RomanCharTokenizer
 from src.data.target_extractors import PhonemeTargetExtractor
 from src.data.multilingual_audio_dataset import (
@@ -60,10 +62,30 @@ def format_eta(seconds: float) -> str:
     return f"{m:02d}m{s:02d}s"
 
 
+def decode_ctc_phonemes(
+    logits: torch.Tensor,
+    tokenizer: PhonemeTokenizer,
+    blank_id: int = 1,
+    pad_id: int = 0,
+) -> str:
+    """Greedy CTC collapse and decode into readable IPA phonemes."""
+    preds = logits.argmax(dim=-1).cpu().tolist()
+    collapsed = []
+    prev = None
+    for p in preds:
+        if p != prev:
+            if p != blank_id and p != pad_id:
+                collapsed.append(p)
+            prev = p
+    return tokenizer.decode(collapsed, skip_special=True)
+
+
 @torch.no_grad()
 def evaluate(
     model: PhonoV67SpeechModel,
     dataloader: DataLoader,
+    roman_tok: RomanCharTokenizer,
+    ph_tokenizer: PhonemeTokenizer,
     device: torch.device,
     max_batches: int = 15,
 ) -> Dict[str, float]:
@@ -76,9 +98,10 @@ def evaluate(
     total_char_correct = 0
     total_char_tokens = 0
     batches_run = 0
+    sample_info = None
 
     val_iter = iter(dataloader)
-    for _ in range(max_batches):
+    for b_num in range(max_batches):
         try:
             batch = next(val_iter)
         except StopIteration:
@@ -120,6 +143,27 @@ def evaluate(
         total_char_correct += (preds[valid_mask] == tb_sliced[valid_mask]).sum().item()
         total_char_tokens += valid_mask.sum().item()
 
+        if sample_info is None and len(batch.get("transcripts", [])) > 0:
+            b_idx = random.randint(0, len(batch["languages"]) - 1)
+            lang = batch["languages"][b_idx]
+            lang_flag = {"en": "🇬🇧 EN", "it": "🇮🇹 IT", "es": "🇪🇸 ES", "fr": "🇫🇷 FR"}.get(lang, lang.upper())
+            gt_text = batch["transcripts"][b_idx]
+            preds_bytes = logits[b_idx].argmax(dim=-1).cpu().tolist()
+            num_w = batch["num_words"][b_idx].item()
+            pred_text = roman_tok.decode_words(preds_bytes[: min(num_w, len(preds_bytes))])
+            gt_ph_len = batch["phoneme_lengths"][b_idx].item()
+            gt_ph_tokens = batch["phoneme_targets"][b_idx, :gt_ph_len].cpu().tolist()
+            gt_phonemes = ph_tokenizer.decode(gt_ph_tokens, skip_special=True)
+            enc_log = out.get("refined_logits") if out.get("refined_logits") is not None else out.get("enc_logits")
+            pred_phonemes = decode_ctc_phonemes(enc_log[b_idx], ph_tokenizer) if enc_log is not None else "N/A"
+            sample_info = {
+                "flag": lang_flag,
+                "gt_phonemes": gt_phonemes,
+                "pred_phonemes": pred_phonemes,
+                "gt_text": gt_text,
+                "pred_text": pred_text,
+            }
+
     count = max(batches_run, 1)
     return {
         "val_loss": total_loss / count,
@@ -127,6 +171,7 @@ def evaluate(
         "val_dec_loss": total_dec_loss / count,
         "val_path_acc": total_path_acc / count,
         "val_char_acc": (total_char_correct / max(total_char_tokens, 1)) * 100.0,
+        "sample_info": sample_info,
     }
 
 
@@ -140,7 +185,7 @@ def parse_args():
     parser.add_argument("--max_steps", type=int, default=20000, help="Total training steps")
     parser.add_argument("--warmup_steps", type=int, default=500, help="LR warmup steps")
     parser.add_argument("--eval_every", type=int, default=200, help="Evaluation frequency in steps")
-    parser.add_argument("--log_every", type=int, default=20, help="Logging frequency in steps")
+    parser.add_argument("--log_every", type=int, default=1, help="Logging frequency in steps (default: 1 for every step)")
     parser.add_argument("--max_samples_per_lang", type=int, default=None, help="Cap samples per language (useful for testing)")
     parser.add_argument("--max_duration", type=float, default=10.0, help="Max audio clip duration in seconds")
     parser.add_argument("--output_dir", type=str, default="checkpoints/phono_v6_7_speech/medium")
@@ -211,7 +256,8 @@ def main():
 
     # 2. Build Datasets & Balanced Samplers
     roman_tok = RomanCharTokenizer()
-    ph_extractor = PhonemeTargetExtractor()
+    ph_tokenizer = PhonemeTokenizer()
+    ph_extractor = PhonemeTargetExtractor(tokenizer=ph_tokenizer)
 
     train_dataset = MultilingualAudioDataset(
         all_train_utterances,
@@ -371,24 +417,67 @@ def main():
                     f"Loss: {raw_loss.item():.4f} (Enc: {out['enc_loss'].item():.3f}, Dec: {out['dec_loss'].item():.3f}) | "
                     f"PathAcc: {out['path_acc'].item():5.1f}% | "
                     f"LR: [E:{cur_enc_lr:.1e}, D:{cur_dec_lr:.1e}] | "
-                    f"Rate: {rate:.2f} steps/s | ETA: {eta}"
+                    f"Rate: {rate:.2f} steps/s | ETA: {eta}",
+                    flush=True,
                 )
+
+                # Inspect a random sample from the batch
+                b_idx = random.randint(0, len(batch["languages"]) - 1)
+                lang = batch["languages"][b_idx]
+                lang_flag = {"en": "🇬🇧 EN", "it": "🇮🇹 IT", "es": "🇪🇸 ES", "fr": "🇫🇷 FR"}.get(lang, lang.upper())
+
+                # Ground truth & predicted text
+                gt_text = batch["transcripts"][b_idx]
+                preds_bytes = out["logits"][b_idx].argmax(dim=-1).cpu().tolist()
+                num_w = batch["num_words"][b_idx].item()
+                pred_text = roman_tok.decode_words(preds_bytes[: min(num_w, len(preds_bytes))])
+
+                # Ground truth & predicted phonemes
+                gt_ph_len = batch["phoneme_lengths"][b_idx].item()
+                gt_ph_tokens = batch["phoneme_targets"][b_idx, :gt_ph_len].cpu().tolist()
+                gt_phonemes = ph_tokenizer.decode(gt_ph_tokens, skip_special=True)
+
+                enc_logits = out.get("refined_logits") if out.get("refined_logits") is not None else out.get("enc_logits")
+                if enc_logits is not None:
+                    pred_phonemes = decode_ctc_phonemes(enc_logits[b_idx], ph_tokenizer)
+                else:
+                    pred_phonemes = "N/A"
+
+                print(f"  Sample [{lang_flag}]:", flush=True)
+                print(f"    • GT Phonemes:   {gt_phonemes}", flush=True)
+                print(f"    • Pred Phonemes: {pred_phonemes}", flush=True)
+                print(f"    • GT Text:       {gt_text}", flush=True)
+                print(f"    • Pred Text:     {pred_text}", flush=True)
 
             # Evaluation & Checkpointing
             if step > 0 and (step % args.eval_every == 0 or step == max_steps) and not args.smoke_test:
-                print(f"\n🧪 Evaluating at step {step}...")
-                val_metrics = evaluate(model, val_loader, device=device)
+                print(f"\n🧪 Evaluating at step {step}...", flush=True)
+                val_metrics = evaluate(
+                    model,
+                    val_loader,
+                    roman_tok=roman_tok,
+                    ph_tokenizer=ph_tokenizer,
+                    device=device,
+                )
                 v_loss = val_metrics["val_loss"]
                 print(
                     f"  Validation Loss:    {v_loss:.4f} "
                     f"(Enc: {val_metrics['val_enc_loss']:.3f}, Dec: {val_metrics['val_dec_loss']:.3f}) | "
                     f"PathAcc: {val_metrics['val_path_acc']:.1f}% | "
-                    f"CharAcc: {val_metrics['val_char_acc']:.1f}%"
+                    f"CharAcc: {val_metrics['val_char_acc']:.1f}%",
+                    flush=True,
                 )
+                v_info = val_metrics.get("sample_info")
+                if v_info:
+                    print(f"  Validation Sample [{v_info['flag']}]:", flush=True)
+                    print(f"    • GT Phonemes:   {v_info['gt_phonemes']}", flush=True)
+                    print(f"    • Pred Phonemes: {v_info['pred_phonemes']}", flush=True)
+                    print(f"    • GT Text:       {v_info['gt_text']}", flush=True)
+                    print(f"    • Pred Text:     {v_info['pred_text']}", flush=True)
 
                 if v_loss < best_val_loss:
                     best_val_loss = v_loss
-                    print(f"  ⭐ New best validation loss! Saving best checkpoint to {best_ckpt_path}...")
+                    print(f"  ⭐ New best validation loss! Saving best checkpoint to {best_ckpt_path}...", flush=True)
                     torch.save(
                         {
                             "step": step,
@@ -400,7 +489,7 @@ def main():
                         },
                         best_ckpt_path,
                     )
-                print()
+                print(flush=True)
                 model.train()
 
     print(f"\n🎉 Completed {step} steps in {time.time() - start_time:.1f}s!")
