@@ -435,6 +435,8 @@ class PhonoV67WindowedDecoder(nn.Module):
         micro_aux_loss = torch.tensor(0.0, device=device)
 
         if input_byte_ids is not None and target_byte_ids is not None:
+            input_byte_ids = input_byte_ids[:, :L]
+            target_byte_ids = target_byte_ids[:, :L]
             B_inp, L_inp, K = input_byte_ids.shape
             flat_inputs = input_byte_ids.reshape(B * L_inp, K)
             flat_windows = z_windows.reshape(B * L_inp, self.window_size, self.config.macro_dim)
