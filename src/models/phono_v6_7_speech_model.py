@@ -141,7 +141,7 @@ class PhonoV67SpeechModel(nn.Module):
 
         # 3. Double Loss Objective
         # Both the acoustic encoder and character decoder receive gradient updates
-        if phoneme_targets is not None and self.training:
+        if phoneme_targets is not None:
             total_loss = dec_loss + (self.config.ctc_loss_weight * enc_loss)
         else:
             total_loss = dec_loss

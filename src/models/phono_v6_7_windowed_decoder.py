@@ -52,7 +52,7 @@ class WindowedAdaptivePathConfig:
     macro_layers: int = 4
     macro_heads: int = 8
     macro_ffn_dim: int = 1536
-    cross_attn_band_width: int = 24
+    cross_attn_band_width: int = 0  # 0: Unconstrained global cross-attention (no linear-spacing clipping or padding blindness)
     micro_dim: int = 512
     micro_layers: int = 4
     micro_heads: int = 8
@@ -110,6 +110,7 @@ class WindowedAdaptivePathConfig:
             macro_layers=4,
             macro_heads=8,
             macro_ffn_dim=1536,
+            cross_attn_band_width=0,
             micro_dim=512,
             micro_layers=4,
             micro_heads=8,
@@ -132,6 +133,7 @@ class WindowedAdaptivePathConfig:
             macro_layers=6,
             macro_heads=12,
             macro_ffn_dim=768,
+            cross_attn_band_width=0,
             micro_dim=768,
             micro_layers=6,
             micro_heads=12,
