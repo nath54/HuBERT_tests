@@ -66,7 +66,7 @@ class WindowedAdaptivePathConfig:
     moe_loss_weight: float = 0.01
 
     # Multi-Word Window Context
-    word_context_window: int = 4  # Window of preceding words (W=4: [w_{l-3}, w_{l-2}, w_{l-1}, w_l])
+    word_context_window: int = 6  # Window of preceding words (W=6: [w_{l-5}, ..., w_l])
 
     # 4-Path Length Routing Bounds
     k_short: int = 5    # Max chars for short words (1-3 chars + bos/eow)
@@ -117,7 +117,7 @@ class WindowedAdaptivePathConfig:
             micro_ffn_dim=1536,
             micro_num_experts=16,
             micro_moe_top_k=2,
-            word_context_window=4,
+            word_context_window=6,
             scheduled_sampling_prob=0.30,
         )
         for k, v in kwargs.items():
@@ -140,7 +140,7 @@ class WindowedAdaptivePathConfig:
             micro_ffn_dim=768,
             micro_num_experts=32,
             micro_moe_top_k=4,
-            word_context_window=4,
+            word_context_window=6,
             scheduled_sampling_prob=0.30,
         )
         for k, v in kwargs.items():
@@ -420,15 +420,23 @@ class PhonoV67WindowedDecoder(nn.Module):
 
         # 5. Word Latent Diffusion Denoising Step
         diff_loss = torch.tensor(0.0, device=device)
-        if self.config.use_word_diffusion and self.training and self.word_refiner is not None:
-            noise_map, _, _ = self.noise_scheduler.compute_noise_map(B, L, device)
-            eps = torch.randn_like(z_word)
-            z_noisy = z_word + noise_map * eps
-            z_clean_est = self.word_refiner(z_noisy, noise_map)
-            diff_loss = ((z_clean_est - z_word) ** 2).mean()
+        if self.config.use_word_diffusion and self.word_refiner is not None:
+            if self.training:
+                noise_map, _, _ = self.noise_scheduler.compute_noise_map(B, L, device)
+                eps = torch.randn_like(z_word)
+                z_noisy = z_word + noise_map * eps
+                z_clean_est = self.word_refiner(z_noisy, noise_map)
+                diff_loss = ((z_clean_est - z_word) ** 2).mean()
+                # Refined latent for character decoder: blend denoised estimate with macro latent
+                z_refined = 0.5 * z_word + 0.5 * z_clean_est
+            else:
+                zero_noise = torch.zeros((B, L, 1), device=device)
+                z_refined = self.word_refiner(z_word, zero_noise)
+        else:
+            z_refined = z_word
 
         # 6. Multi-Word Context Window Extraction
-        z_windows = self.build_word_context_windows(z_word)  # [B, L, W, macro_dim]
+        z_windows = self.build_word_context_windows(z_refined)  # [B, L, W, macro_dim]
 
         # 7. Micro Character Decoding with Multi-Word Context
         logits = None
@@ -536,8 +544,15 @@ class PhonoV67WindowedDecoder(nn.Module):
         z_word = self.macro_norm(x)  # [1, L, macro_dim]
         path_logits = self.macro_path_classifier(z_word)  # [1, L, 4]
 
+        # Refined word latent via diffusion refiner with zero noise
+        if self.config.use_word_diffusion and self.word_refiner is not None:
+            zero_noise = torch.zeros((1, L, 1), device=device)
+            z_refined = self.word_refiner(z_word, zero_noise)
+        else:
+            z_refined = z_word
+
         # Extract multi-word context windows
-        z_windows = self.build_word_context_windows(z_word)  # [1, L, W, macro_dim]
+        z_windows = self.build_word_context_windows(z_refined)  # [1, L, W, macro_dim]
 
         horizon_map = {
             self.config.PATH_SPECIAL: 0,

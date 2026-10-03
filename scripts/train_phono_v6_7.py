@@ -123,7 +123,7 @@ def main():
     parser.add_argument("--warmup_steps", type=int, default=500)
     parser.add_argument("--micro_num_experts", type=int, default=16)
     parser.add_argument("--micro_moe_top_k", type=int, default=2)
-    parser.add_argument("--word_context_window", type=int, default=4)
+    parser.add_argument("--word_context_window", type=int, default=6)
     parser.add_argument("--scheduled_sampling_prob", type=float, default=0.30)
     parser.add_argument("--eval_interval", type=int, default=500)
     parser.add_argument("--only_save_best", action="store_true", default=True)

@@ -18,20 +18,20 @@ def test_windowed_adaptive_path_config():
     assert cfg.macro_dim == 512
     assert cfg.micro_dim == 512
     assert cfg.micro_num_experts == 16
-    assert cfg.word_context_window == 4
+    assert cfg.word_context_window == 6
     assert cfg.scheduled_sampling_prob == 0.30
 
     cfg_large = WindowedAdaptivePathConfig.large()
     assert cfg_large.macro_dim == 768
     assert cfg_large.micro_num_experts == 32
-    assert cfg_large.word_context_window == 4
+    assert cfg_large.word_context_window == 6
 
 
 def test_build_word_context_windows():
     cfg = WindowedAdaptivePathConfig(
         macro_dim=64,
         micro_dim=32,
-        word_context_window=4,
+        word_context_window=6,
     )
     model = PhonoV67WindowedDecoder(cfg)
 
@@ -39,7 +39,7 @@ def test_build_word_context_windows():
     z_word = torch.randn(B, L, D)
     windows = model.build_word_context_windows(z_word)
 
-    assert windows.shape == (B, L, 4, D)
+    assert windows.shape == (B, L, 6, D)
 
 
 def test_windowed_micro_recursive_head():
@@ -52,11 +52,11 @@ def test_windowed_micro_recursive_head():
         byte_vocab_size=122,
         micro_num_experts=4,
         micro_moe_top_k=1,
-        word_context_window=4,
+        word_context_window=6,
     )
     head = WindowedMicroRecursiveHead(cfg)
 
-    N, K, W = 4, 8, 4
+    N, K, W = 4, 8, 6
     input_ids = torch.randint(0, 122, (N, K))
     zw_window = torch.randn(N, W, cfg.macro_dim)
     path_bias = torch.randn(N, 1, cfg.micro_dim)
@@ -82,7 +82,7 @@ def test_phono_v6_7_forward_and_backward():
         micro_num_experts=4,
         micro_moe_top_k=1,
         max_bytes_per_word=16,
-        word_context_window=4,
+        word_context_window=6,
     )
     model = PhonoV67WindowedDecoder(cfg)
 
@@ -130,7 +130,7 @@ def test_phono_v6_7_dynamic_generate():
         k_short=4,
         k_medium=6,
         k_long=10,
-        word_context_window=4,
+        word_context_window=6,
     )
     model = PhonoV67WindowedDecoder(cfg)
 
@@ -173,7 +173,7 @@ def test_phono_v6_7_warmstart_from_v6_6():
         byte_vocab_size=122,
         micro_num_experts=4,
         micro_moe_top_k=1,
-        word_context_window=4,
+        word_context_window=6,
     )
     model_67 = PhonoV67WindowedDecoder(cfg_67)
 
