@@ -8,7 +8,7 @@ Edge-optimized, token-free multilingual speech recognition architecture:
 """
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -158,7 +158,8 @@ class MacroMoELayer(nn.Module):
         self_attn_mask: Optional[torch.Tensor] = None,
         memory_padding_mask: Optional[torch.Tensor] = None,
         expected_total_len: Optional[int] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        return_attn_weights: bool = False,
+    ) -> Union[Tuple[torch.Tensor, torch.Tensor], Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
         # 1. Masked Causal Self-Attention
         res = x
         normed = self.norm1(x)
@@ -168,12 +169,22 @@ class MacroMoELayer(nn.Module):
         # 2. Banded Acoustic Cross-Attention
         res = x
         normed = self.norm2(x)
-        ca_out = self.cross_attn(
-            normed,
-            acoustic_memory,
-            key_padding_mask=memory_padding_mask,
-            expected_total_len=expected_total_len,
-        )
+        attn_weights = None
+        if return_attn_weights:
+            ca_out, attn_weights = self.cross_attn(
+                normed,
+                acoustic_memory,
+                key_padding_mask=memory_padding_mask,
+                expected_total_len=expected_total_len,
+                return_attn_weights=True,
+            )
+        else:
+            ca_out = self.cross_attn(
+                normed,
+                acoustic_memory,
+                key_padding_mask=memory_padding_mask,
+                expected_total_len=expected_total_len,
+            )
         x = res + self.dropout(ca_out)
 
         # 3. MoE FFN
@@ -182,6 +193,8 @@ class MacroMoELayer(nn.Module):
         ffn_out, aux_loss = self.moe_ffn(normed)
         x = res + self.dropout(ffn_out)
 
+        if return_attn_weights:
+            return x, aux_loss, attn_weights
         return x, aux_loss
 
 

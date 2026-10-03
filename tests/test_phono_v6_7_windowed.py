@@ -19,12 +19,15 @@ def test_windowed_adaptive_path_config():
     assert cfg.micro_dim == 512
     assert cfg.micro_num_experts == 16
     assert cfg.word_context_window == 6
-    assert cfg.scheduled_sampling_prob == 0.30
+    assert cfg.acoustic_window_frames == 32
+    assert cfg.scheduled_sampling_prob == 0.05
 
     cfg_large = WindowedAdaptivePathConfig.large()
     assert cfg_large.macro_dim == 768
     assert cfg_large.micro_num_experts == 32
     assert cfg_large.word_context_window == 6
+    assert cfg_large.acoustic_window_frames == 32
+    assert cfg_large.scheduled_sampling_prob == 0.05
 
 
 def test_build_word_context_windows():
@@ -181,9 +184,15 @@ def test_phono_v6_7_warmstart_from_v6_6():
     sd_66 = model_66.state_dict()
     missing, unexpected = model_67.load_state_dict(sd_66, strict=False)
 
-    # Only word_bos_embedding and word_relative_pos_embedding should be missing
+    # All V6.6 parameters are transferred with zero unexpected
     assert unexpected == []
-    assert set(missing) == {"word_bos_embedding", "word_relative_pos_embedding.weight"}
+    # Missing should only be the new V6.7/V6.8 additions (BOS embed, relative pos embed, acoustic cross attn, acoustic pos embed)
+    for k in missing:
+        assert (
+            k in {"word_bos_embedding", "word_relative_pos_embedding.weight", "micro_head.acoustic_pos_emb"}
+            or "acoustic_cross_attn" in k
+            or "norm_ac" in k
+        )
 
 
 def test_phono_v6_7_registry():

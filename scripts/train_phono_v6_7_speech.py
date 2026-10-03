@@ -62,13 +62,15 @@ def format_eta(seconds: float) -> str:
     return f"{m:02d}m{s:02d}s"
 
 
-def decode_ctc_phonemes(
+import editdistance
+
+
+def decode_ctc_phoneme_ids(
     logits: torch.Tensor,
-    tokenizer: PhonemeTokenizer,
     blank_id: int = 1,
     pad_id: int = 0,
-) -> str:
-    """Greedy CTC collapse and decode into readable IPA phonemes."""
+) -> List[int]:
+    """Greedy CTC collapse into token ID list."""
     preds = logits.argmax(dim=-1).cpu().tolist()
     collapsed = []
     prev = None
@@ -77,6 +79,17 @@ def decode_ctc_phonemes(
             if p != blank_id and p != pad_id:
                 collapsed.append(p)
             prev = p
+    return collapsed
+
+
+def decode_ctc_phonemes(
+    logits: torch.Tensor,
+    tokenizer: PhonemeTokenizer,
+    blank_id: int = 1,
+    pad_id: int = 0,
+) -> str:
+    """Greedy CTC collapse and decode into readable IPA phonemes."""
+    collapsed = decode_ctc_phoneme_ids(logits, blank_id=blank_id, pad_id=pad_id)
     return tokenizer.decode(collapsed, skip_special=True)
 
 
@@ -89,7 +102,7 @@ def evaluate(
     device: torch.device,
     max_batches: int = 15,
 ) -> Dict[str, float]:
-    """Fast evaluation on held-out multilingual speech batches."""
+    """Fast evaluation on held-out multilingual speech batches with PER computation."""
     model.eval()
     total_loss = 0.0
     total_enc_loss = 0.0
@@ -97,6 +110,8 @@ def evaluate(
     total_path_acc = 0.0
     total_char_correct = 0
     total_char_tokens = 0
+    total_phoneme_ed = 0
+    total_phoneme_ref_len = 0
     batches_run = 0
     sample_info = None
 
@@ -143,6 +158,18 @@ def evaluate(
         total_char_correct += (preds[valid_mask] == tb_sliced[valid_mask]).sum().item()
         total_char_tokens += valid_mask.sum().item()
 
+        # Compute PER across batch utterances
+        enc_log = out.get("refined_logits") if out.get("refined_logits") is not None else out.get("enc_logits")
+        if enc_log is not None and phoneme_targets is not None:
+            for b_i in range(audio.shape[0]):
+                ph_len = phoneme_lengths[b_i].item()
+                gt_ids = phoneme_targets[b_i, :ph_len].cpu().tolist()
+                gt_clean = [p for p in gt_ids if p not in (0, 1)]  # skip pad & blank
+                pred_ids = decode_ctc_phoneme_ids(enc_log[b_i])
+                ed = editdistance.eval(gt_clean, pred_ids)
+                total_phoneme_ed += ed
+                total_phoneme_ref_len += max(1, len(gt_clean))
+
         if sample_info is None and len(batch.get("transcripts", [])) > 0:
             b_idx = random.randint(0, len(batch["languages"]) - 1)
             lang = batch["languages"][b_idx]
@@ -154,7 +181,6 @@ def evaluate(
             gt_ph_len = batch["phoneme_lengths"][b_idx].item()
             gt_ph_tokens = batch["phoneme_targets"][b_idx, :gt_ph_len].cpu().tolist()
             gt_phonemes = ph_tokenizer.decode(gt_ph_tokens, skip_special=True)
-            enc_log = out.get("refined_logits") if out.get("refined_logits") is not None else out.get("enc_logits")
             pred_phonemes = decode_ctc_phonemes(enc_log[b_idx], ph_tokenizer) if enc_log is not None else "N/A"
             sample_info = {
                 "flag": lang_flag,
@@ -165,10 +191,12 @@ def evaluate(
             }
 
     count = max(batches_run, 1)
+    val_per = (total_phoneme_ed / max(1, total_phoneme_ref_len)) * 100.0 if total_phoneme_ref_len > 0 else 0.0
     return {
         "val_loss": total_loss / count,
         "val_enc_loss": total_enc_loss / count,
         "val_dec_loss": total_dec_loss / count,
+        "val_per": val_per,
         "val_path_acc": total_path_acc / count,
         "val_char_acc": (total_char_correct / max(total_char_tokens, 1)) * 100.0,
         "sample_info": sample_info,
@@ -191,7 +219,14 @@ def parse_args():
     parser.add_argument("--output_dir", type=str, default="checkpoints/phono_v6_7_speech/medium")
     parser.add_argument("--only_save_best", action="store_true", default=True, help="Strictly keep only best checkpoint")
     parser.add_argument("--encoder_ckpt", type=str, default="checkpoints/phono_v6_4_gated_diffusion/medium/v6_4_960h/best_checkpoint.pt")
-    parser.add_argument("--decoder_ckpt", type=str, default="checkpoints/phono_v6_6_adaptive/best_checkpoint.pt")
+    parser.add_argument(
+        "--decoder_ckpt",
+        type=str,
+        default="checkpoints/phono_v6_7_speech/medium/best_checkpoint.pt",
+        help="Warm-start checkpoint for decoder (defaults to best checkpoint)",
+    )
+    parser.add_argument("--scheduled_sampling_prob", type=float, default=0.05, help="Scheduled sampling probability (reduced to 0.05)")
+    parser.add_argument("--acoustic_window_frames", type=int, default=32, help="Continuous speech frames per word slot (~640ms)")
     parser.add_argument("--smoke_test", action="store_true", help="Run 10 steps smoke test and exit")
     return parser.parse_args()
 
@@ -301,8 +336,10 @@ def main():
     )
 
     # 3. Build Model & Warm-Start
-    print("\n🧠 Initializing Phono-V6.7 Speech Model...")
+    print("\n🧠 Initializing Phono-V6.8 Speech Model (Dual Acoustic-Word Cross-Attention)...")
     config = PhonoV67SpeechConfig.medium(ctc_loss_weight=args.ctc_loss_weight)
+    config.decoder_config.scheduled_sampling_prob = args.scheduled_sampling_prob
+    config.decoder_config.acoustic_window_frames = args.acoustic_window_frames
     model = PhonoV67SpeechModel(config).to(device)
 
     # Count parameters
@@ -462,7 +499,7 @@ def main():
                 v_loss = val_metrics["val_loss"]
                 print(
                     f"  Validation Loss:    {v_loss:.4f} "
-                    f"(Enc: {val_metrics['val_enc_loss']:.3f}, Dec: {val_metrics['val_dec_loss']:.3f}) | "
+                    f"(Enc: {val_metrics['val_enc_loss']:.3f} [PER: {val_metrics.get('val_per', 0.0):.2f}%], Dec: {val_metrics['val_dec_loss']:.3f}) | "
                     f"PathAcc: {val_metrics['val_path_acc']:.1f}% | "
                     f"CharAcc: {val_metrics['val_char_acc']:.1f}%",
                     flush=True,

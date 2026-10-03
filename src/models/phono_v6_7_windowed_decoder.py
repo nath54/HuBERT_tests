@@ -65,8 +65,9 @@ class WindowedAdaptivePathConfig:
     micro_moe_top_k: int = 2
     moe_loss_weight: float = 0.01
 
-    # Multi-Word Window Context
+    # Multi-Word Window Context & Acoustic Window
     word_context_window: int = 6  # Window of preceding words (W=6: [w_{l-5}, ..., w_l])
+    acoustic_window_frames: int = 32  # Intra-word continuous speech frames (~640ms receptive field)
 
     # 4-Path Length Routing Bounds
     k_short: int = 5    # Max chars for short words (1-3 chars + bos/eow)
@@ -99,7 +100,7 @@ class WindowedAdaptivePathConfig:
     use_word_diffusion: bool = True
     word_noise_max: float = 0.3
     dropout: float = 0.1
-    scheduled_sampling_prob: float = 0.30  # Ramped to 30% for robust character self-correction
+    scheduled_sampling_prob: float = 0.05  # Reduced from 0.30 to ensure 95% clean prefix teacher forcing
     label_smoothing: float = 0.05
 
     @classmethod
@@ -118,7 +119,8 @@ class WindowedAdaptivePathConfig:
             micro_num_experts=16,
             micro_moe_top_k=2,
             word_context_window=6,
-            scheduled_sampling_prob=0.30,
+            acoustic_window_frames=32,
+            scheduled_sampling_prob=0.05,
         )
         for k, v in kwargs.items():
             setattr(cfg, k, v)
@@ -141,15 +143,105 @@ class WindowedAdaptivePathConfig:
             micro_num_experts=32,
             micro_moe_top_k=4,
             word_context_window=6,
-            scheduled_sampling_prob=0.30,
+            acoustic_window_frames=32,
+            scheduled_sampling_prob=0.05,
         )
         for k, v in kwargs.items():
             setattr(cfg, k, v)
         return cfg
 
 
+class DualCrossAttnMicroMoELayer(nn.Module):
+    """Transformer micro-decoder layer with Causal Self-Attention, Direct Acoustic Cross-Attention,
+    Sliding Word Context Cross-Attention, and Path-Conditioned MoE FFN.
+    """
+
+    def __init__(self, config: WindowedAdaptivePathConfig):
+        super().__init__()
+        # 1. Causal Self-Attention (character autoregressive prior)
+        self.self_attn = nn.MultiheadAttention(
+            embed_dim=config.micro_dim,
+            num_heads=config.micro_heads,
+            dropout=config.dropout,
+            batch_first=True,
+        )
+        self.norm1 = nn.LayerNorm(config.micro_dim)
+
+        # 2. Direct Acoustic Cross-Attention (intra-word continuous speech frames)
+        self.acoustic_cross_attn = nn.MultiheadAttention(
+            embed_dim=config.micro_dim,
+            kdim=config.acoustic_dim,
+            vdim=config.acoustic_dim,
+            num_heads=config.micro_heads,
+            dropout=config.dropout,
+            batch_first=True,
+        )
+        # Initialize output projection to zero for seamless 100% warm-start
+        nn.init.zeros_(self.acoustic_cross_attn.out_proj.weight)
+        if self.acoustic_cross_attn.out_proj.bias is not None:
+            nn.init.zeros_(self.acoustic_cross_attn.out_proj.bias)
+        self.norm_ac = nn.LayerNorm(config.micro_dim)
+
+        # 3. Macro Word Context Cross-Attention (sliding multi-word context)
+        self.cross_attn = nn.MultiheadAttention(
+            embed_dim=config.micro_dim,
+            kdim=config.macro_dim,
+            vdim=config.macro_dim,
+            num_heads=config.micro_heads,
+            dropout=config.dropout,
+            batch_first=True,
+        )
+        self.norm2 = nn.LayerNorm(config.micro_dim)
+
+        # 4. Path-Conditioned MoE FFN
+        self.moe_ffn = ConditionedMoEFeedForwardNetwork(
+            embed_dim=config.micro_dim,
+            ffn_dim=config.micro_ffn_dim,
+            num_experts=config.micro_num_experts,
+            top_k=config.micro_moe_top_k,
+            dropout=config.dropout,
+        )
+        self.norm3 = nn.LayerNorm(config.micro_dim)
+        self.dropout = nn.Dropout(config.dropout)
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        word_memory: torch.Tensor,
+        acoustic_memory: Optional[torch.Tensor] = None,
+        self_attn_mask: Optional[torch.Tensor] = None,
+        path_bias: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        # 1. Causal Self-Attention
+        res = x
+        normed = self.norm1(x)
+        sa_out, _ = self.self_attn(normed, normed, normed, attn_mask=self_attn_mask)
+        x = res + self.dropout(sa_out)
+
+        # 2. Direct Acoustic Cross-Attention over intra-word continuous speech frames
+        if acoustic_memory is not None:
+            res = x
+            normed = self.norm_ac(x)
+            ac_out, _ = self.acoustic_cross_attn(normed, acoustic_memory, acoustic_memory)
+            x = res + self.dropout(ac_out)
+
+        # 3. Cross-Attention over macro sliding word context
+        res = x
+        normed = self.norm2(x)
+        ca_out, _ = self.cross_attn(normed, word_memory, word_memory)
+        x = res + self.dropout(ca_out)
+
+        # 4. Path-Conditioned MoE FFN
+        res = x
+        normed = self.norm3(x)
+        ffn_out, aux_loss = self.moe_ffn(normed, path_bias=path_bias)
+        x = res + self.dropout(ffn_out)
+
+        return x, aux_loss
+
+
 class WindowedMicroRecursiveHead(nn.Module):
-    """Recursive MoE micro-decoder cross-attending to multi-word context with scheduled sampling."""
+    """Recursive MoE micro-decoder with Dual Cross-Attention (Acoustics + Multi-Word Context) and scheduled sampling."""
 
     def __init__(self, config: WindowedAdaptivePathConfig):
         super().__init__()
@@ -165,9 +257,12 @@ class WindowedMicroRecursiveHead(nn.Module):
             self.char_embedding.weight[config.pad_token_id].fill_(0.0)
 
         self.pos_emb = nn.Parameter(torch.randn(1, 64, config.micro_dim) * 0.02)
+        self.acoustic_pos_emb = nn.Parameter(
+            torch.randn(1, config.acoustic_window_frames, config.acoustic_dim) * 0.02
+        )
 
         self.layers = nn.ModuleList([
-            ConditionedMicroMoELayer(config) for _ in range(config.micro_layers)
+            DualCrossAttnMicroMoELayer(config) for _ in range(config.micro_layers)
         ])
         self.final_norm = nn.LayerNorm(config.micro_dim)
 
@@ -178,19 +273,26 @@ class WindowedMicroRecursiveHead(nn.Module):
         self,
         input_ids: torch.Tensor,
         word_window_latent: torch.Tensor,
+        acoustic_slices: Optional[torch.Tensor] = None,
         path_bias: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Forward pass through recursive micro-head with multi-word context.
+        """Forward pass through recursive micro-head with dual acoustic & multi-word context.
 
         Args:
             input_ids: [N, K] token IDs for each word instance.
             word_window_latent: [N, W, macro_dim] multi-word context vectors.
+            acoustic_slices: Optional [N, S_ac, acoustic_dim] continuous speech frame slices.
             path_bias: Optional [N, 1, micro_dim] length path bias.
         """
         N, K = input_ids.shape
         device = input_ids.device
 
-        # Ramped scheduled sampling: with 30% probability, roll out 2 predicted tokens
+        # Add acoustic positional embeddings to acoustic frame slices
+        if acoustic_slices is not None:
+            S_ac = acoustic_slices.shape[1]
+            acoustic_slices = acoustic_slices + self.acoustic_pos_emb[:, :S_ac, :]
+
+        # Ramped scheduled sampling: with 5% probability, roll out 2 predicted tokens
         if self.training and self.config.scheduled_sampling_prob > 0.0 and K > 3:
             cur_ids = input_ids.clone()
             if torch.rand(1).item() < self.config.scheduled_sampling_prob:
@@ -199,7 +301,9 @@ class WindowedMicroRecursiveHead(nn.Module):
                     h_sub1 = self.char_embedding(cur_ids[:, :2]) + self.pos_emb[:, :2, :]
                     cmask1 = torch.triu(torch.full((2, 2), float("-inf"), device=device), diagonal=1)
                     for layer in self.layers:
-                        h_sub1, _ = layer(h_sub1, word_window_latent, self_attn_mask=cmask1, path_bias=path_bias)
+                        h_sub1, _ = layer(
+                            h_sub1, word_window_latent, acoustic_slices, self_attn_mask=cmask1, path_bias=path_bias
+                        )
                     pred1 = self.lm_head(self.final_norm(h_sub1))[:, 0, :].argmax(dim=-1)
                     cur_ids[:, 1] = pred1
 
@@ -207,7 +311,9 @@ class WindowedMicroRecursiveHead(nn.Module):
                     h_sub2 = self.char_embedding(cur_ids[:, :3]) + self.pos_emb[:, :3, :]
                     cmask2 = torch.triu(torch.full((3, 3), float("-inf"), device=device), diagonal=1)
                     for layer in self.layers:
-                        h_sub2, _ = layer(h_sub2, word_window_latent, self_attn_mask=cmask2, path_bias=path_bias)
+                        h_sub2, _ = layer(
+                            h_sub2, word_window_latent, acoustic_slices, self_attn_mask=cmask2, path_bias=path_bias
+                        )
                     pred2 = self.lm_head(self.final_norm(h_sub2))[:, 1, :].argmax(dim=-1)
                     cur_ids[:, 2] = pred2
 
@@ -218,7 +324,9 @@ class WindowedMicroRecursiveHead(nn.Module):
 
         total_aux = torch.tensor(0.0, device=device)
         for layer in self.layers:
-            h, aux = layer(h, word_window_latent, self_attn_mask=causal_mask, path_bias=path_bias)
+            h, aux = layer(
+                h, word_window_latent, acoustic_slices, self_attn_mask=causal_mask, path_bias=path_bias
+            )
             total_aux = total_aux + aux
 
         h = self.final_norm(h)
@@ -333,6 +441,60 @@ class PhonoV67WindowedDecoder(nn.Module):
 
         return z_windows
 
+    def extract_guided_acoustic_slices(
+        self,
+        acoustic_memory: torch.Tensor,
+        macro_attn_weights: Optional[torch.Tensor] = None,
+        window_frames: int = 32,
+    ) -> torch.Tensor:
+        """Extract continuous acoustic frame slices [B, L, S_ac, D] centered at word attention peaks.
+
+        Args:
+            acoustic_memory: [B, T, D] continuous speech representations.
+            macro_attn_weights: Optional [B, L, T] cross-attention probabilities from macro layer.
+            window_frames: int S_ac, number of continuous frames per word slice (~32 frames = 640ms).
+
+        Returns:
+            acoustic_slices: [B, L, S_ac, D] local speech frame slices for intra-word character attention.
+        """
+        B, T, D = acoustic_memory.shape
+        L = macro_attn_weights.shape[1] if macro_attn_weights is not None else self.max_word_len
+        device = acoustic_memory.device
+        S_ac = window_frames
+
+        # Pad acoustic memory along time dimension T if shorter than S_ac
+        if T < S_ac:
+            pad_len = S_ac - T
+            acoustic_memory = F.pad(acoustic_memory, (0, 0, 0, pad_len))
+            if macro_attn_weights is not None:
+                macro_attn_weights = F.pad(macro_attn_weights, (0, pad_len))
+            T = S_ac
+
+        if macro_attn_weights is not None:
+            time_indices = torch.arange(T, device=device, dtype=torch.float32).view(1, 1, T)
+            weight_sums = macro_attn_weights.sum(dim=-1, keepdim=True)
+            valid_sums = weight_sums.clamp(min=1e-6)
+            center_t = (macro_attn_weights * time_indices).sum(dim=-1, keepdim=True) / valid_sums
+
+            # Fallback for unaligned or zero-weight slots: monotonic linear interpolation
+            linear_fallback = torch.linspace(0, max(0, T - 1), L, device=device).view(1, L, 1)
+            center_t = torch.where(weight_sums > 1e-4, center_t, linear_fallback)
+        else:
+            center_t = torch.linspace(0, max(0, T - 1), L, device=device).view(1, L, 1)
+
+        half_w = S_ac // 2
+        start_t = (center_t.squeeze(-1).round().long() - half_w).clamp(min=0, max=max(0, T - S_ac))  # [B, L]
+        offsets = torch.arange(S_ac, device=device).view(1, 1, S_ac)  # [1, 1, S_ac]
+        frame_indices = start_t.unsqueeze(-1) + offsets  # [B, L, S_ac]
+
+        # Vectorized gather along time dimension (dim=2)
+        acoustic_slices = torch.gather(
+            acoustic_memory.unsqueeze(1).expand(-1, L, -1, -1),
+            dim=2,
+            index=frame_indices.unsqueeze(-1).expand(-1, -1, -1, D),
+        )
+        return acoustic_slices
+
     def forward(
         self,
         phoneme_ids: Optional[torch.Tensor] = None,
@@ -377,14 +539,26 @@ class PhonoV67WindowedDecoder(nn.Module):
             mem_pad_mask = t_idx >= memory_lengths.unsqueeze(1)
 
         macro_aux_loss = torch.tensor(0.0, device=device)
-        for layer in self.macro_layers:
-            x, aux = layer(
-                x,
-                acoustic_memory,
-                self_attn_mask=causal_mask,
-                memory_padding_mask=mem_pad_mask,
-                expected_total_len=expected_total_len or L,
-            )
+        macro_attn_weights = None
+        for i, layer in enumerate(self.macro_layers):
+            is_last = (i == len(self.macro_layers) - 1)
+            if is_last:
+                x, aux, macro_attn_weights = layer(
+                    x,
+                    acoustic_memory,
+                    self_attn_mask=causal_mask,
+                    memory_padding_mask=mem_pad_mask,
+                    expected_total_len=expected_total_len or L,
+                    return_attn_weights=True,
+                )
+            else:
+                x, aux = layer(
+                    x,
+                    acoustic_memory,
+                    self_attn_mask=causal_mask,
+                    memory_padding_mask=mem_pad_mask,
+                    expected_total_len=expected_total_len or L,
+                )
             macro_aux_loss = macro_aux_loss + aux
 
         z_word = self.macro_norm(x)  # [B, L, macro_dim]
@@ -438,7 +612,12 @@ class PhonoV67WindowedDecoder(nn.Module):
         # 6. Multi-Word Context Window Extraction
         z_windows = self.build_word_context_windows(z_refined)  # [B, L, W, macro_dim]
 
-        # 7. Micro Character Decoding with Multi-Word Context
+        # Extract continuous acoustic frame slices [B, L, S_ac, D]
+        acoustic_slices = self.extract_guided_acoustic_slices(
+            acoustic_memory, macro_attn_weights, window_frames=self.config.acoustic_window_frames
+        )
+
+        # 7. Micro Character Decoding with Dual Acoustic + Multi-Word Context
         logits = None
         loss = None
         char_acc = torch.tensor(0.0, device=device)
@@ -450,10 +629,13 @@ class PhonoV67WindowedDecoder(nn.Module):
             B_inp, L_inp, K = input_byte_ids.shape
             flat_inputs = input_byte_ids.reshape(B * L_inp, K)
             flat_windows = z_windows.reshape(B * L_inp, self.window_size, self.config.macro_dim)
+            flat_acoustic = acoustic_slices.reshape(
+                B * L_inp, self.config.acoustic_window_frames, self.config.acoustic_dim
+            )
             flat_bias = path_bias.reshape(B * L_inp, 1, self.config.micro_dim)
 
             flat_logits, micro_aux = self.micro_head(
-                flat_inputs, flat_windows, path_bias=flat_bias
+                flat_inputs, flat_windows, flat_acoustic, path_bias=flat_bias
             )
             micro_aux_loss = micro_aux
             logits = flat_logits.view(B, L_inp, K, self.config.byte_vocab_size)
@@ -538,8 +720,15 @@ class PhonoV67WindowedDecoder(nn.Module):
             t_idx = torch.arange(T, device=device).unsqueeze(0)
             mem_pad_mask = t_idx >= memory_lengths.unsqueeze(1)
 
-        for layer in self.macro_layers:
-            x, _ = layer(x, acoustic_memory, self_attn_mask=causal_mask, memory_padding_mask=mem_pad_mask)
+        macro_attn_weights = None
+        for i, layer in enumerate(self.macro_layers):
+            is_last = (i == len(self.macro_layers) - 1)
+            if is_last:
+                x, _, macro_attn_weights = layer(
+                    x, acoustic_memory, self_attn_mask=causal_mask, memory_padding_mask=mem_pad_mask, return_attn_weights=True
+                )
+            else:
+                x, _ = layer(x, acoustic_memory, self_attn_mask=causal_mask, memory_padding_mask=mem_pad_mask)
 
         z_word = self.macro_norm(x)  # [1, L, macro_dim]
         path_logits = self.macro_path_classifier(z_word)  # [1, L, 4]
@@ -554,6 +743,11 @@ class PhonoV67WindowedDecoder(nn.Module):
         # Extract multi-word context windows
         z_windows = self.build_word_context_windows(z_refined)  # [1, L, W, macro_dim]
 
+        # Extract continuous acoustic frame slices
+        acoustic_slices = self.extract_guided_acoustic_slices(
+            acoustic_memory, macro_attn_weights, window_frames=self.config.acoustic_window_frames
+        )  # [1, L, S_ac, D]
+
         horizon_map = {
             self.config.PATH_SPECIAL: 0,
             self.config.PATH_SHORT: self.config.k_short,
@@ -564,6 +758,7 @@ class PhonoV67WindowedDecoder(nn.Module):
         generated_words: List[List[int]] = []
         for l in range(L):
             zw_window = z_windows[:, l, :, :]  # [1, W, macro_dim]
+            w_acoustic = acoustic_slices[:, l, :, :]  # [1, S_ac, D]
             pred_path = path_logits[0, l].argmax(dim=-1).item()
 
             if pred_path == self.config.PATH_SPECIAL:
@@ -577,7 +772,7 @@ class PhonoV67WindowedDecoder(nn.Module):
             cur_tokens = [self.config.bos_token_id]
             for step in range(max_k):
                 inp = torch.tensor([cur_tokens], dtype=torch.long, device=device)
-                logits, _ = self.micro_head(inp, zw_window, path_bias=p_bias)
+                logits, _ = self.micro_head(inp, zw_window, acoustic_slices=w_acoustic, path_bias=p_bias)
                 next_logits = logits[0, -1, :]
 
                 if temperature > 0.0:

@@ -10,7 +10,7 @@ and performs non-autoregressive or semi-autoregressive word token decoding using
 """
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -77,13 +77,15 @@ class BandedCrossAttention(nn.Module):
         key_value: torch.Tensor,
         key_padding_mask: Optional[torch.Tensor] = None,
         expected_total_len: Optional[int] = None,
-    ) -> torch.Tensor:
+        return_attn_weights: bool = False,
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """
         Args:
             query: [B, L_words, D] text token queries
             key_value: [B, T_audio, D_audio] acoustic representations
             key_padding_mask: [B, T_audio] boolean mask where True indicates padding
             expected_total_len: Optional estimated full word length (for autoregressive generation)
+            return_attn_weights: If True, return (output, attn_weights [B, L, T])
         """
         B, L, _ = query.shape
         _, T, _ = key_value.shape
@@ -114,7 +116,10 @@ class BandedCrossAttention(nn.Module):
         attn_dropped = self.dropout(attn_probs)
 
         out = torch.matmul(attn_dropped, v).transpose(1, 2).contiguous().view(B, L, -1)
-        return self.out_proj(out)
+        proj_out = self.out_proj(out)
+        if return_attn_weights:
+            return proj_out, attn_probs.mean(dim=1)
+        return proj_out
 
 
 class MoEWordDecoderLayer(nn.Module):
