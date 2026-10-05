@@ -38,7 +38,7 @@ class AudioUtterance:
     duration: float = 0.0
 
 
-def load_librispeech_manifest(json_path: str, max_samples: Optional[int] = None) -> List[AudioUtterance]:
+def load_librispeech_manifest(json_path: str, max_samples: Optional[int] = None, max_duration_seconds: float = 20.0) -> List[AudioUtterance]:
     """Load LibriSpeech English JSON manifest."""
     with open(json_path, "r", encoding="utf-8") as f:
         data = json.load(f)
@@ -46,6 +46,9 @@ def load_librispeech_manifest(json_path: str, max_samples: Optional[int] = None)
     for item in data:
         p = item.get("audio_path", "")
         t = item.get("transcript", "").strip()
+        dur = float(item.get("duration", 0.0))
+        if dur > max_duration_seconds:
+            continue
         if p and t and os.path.exists(p):
             samples.append(
                 AudioUtterance(
@@ -53,7 +56,7 @@ def load_librispeech_manifest(json_path: str, max_samples: Optional[int] = None)
                     audio_path=p,
                     transcript=t,
                     lang="en",
-                    duration=item.get("duration", 0.0),
+                    duration=dur,
                 )
             )
             if max_samples and len(samples) >= max_samples:
@@ -151,10 +154,13 @@ class MultilingualAudioDataset(Dataset):
         utterances: List[AudioUtterance],
         roman_tokenizer: Optional[RomanCharTokenizer] = None,
         phoneme_extractor: Optional[PhonemeTargetExtractor] = None,
-        max_duration_seconds: float = 12.0,
+        max_duration_seconds: float = 20.0,
         sample_rate: int = 16000,
     ):
-        self.utterances = utterances
+        # Filter utterances exceeding max duration when duration is known
+        self.utterances = [
+            u for u in utterances if u.duration <= 0 or u.duration <= max_duration_seconds
+        ]
         self.roman_tok = roman_tokenizer or RomanCharTokenizer()
         self.ph_extractor = phoneme_extractor or PhonemeTargetExtractor()
         self.max_duration = max_duration_seconds
@@ -215,7 +221,7 @@ class MultilingualAudioDataset(Dataset):
 class MultilingualBalancedBatchSampler(Sampler[List[int]]):
     """Yields balanced batches containing an equal number of samples per language.
 
-    Example: Batch size 16 -> 4 English, 4 Italian, 4 Spanish, 4 French per step.
+    Supports arbitrary batch sizes (e.g., 2, 4, 8, 16) while keeping language representation balanced.
     """
 
     def __init__(
@@ -232,7 +238,6 @@ class MultilingualBalancedBatchSampler(Sampler[List[int]]):
         self.rng = random.Random(seed)
 
         self.languages = languages or ["en", "it", "es", "fr"]
-        self.per_lang = max(1, batch_size // len(self.languages))
 
         # Index dataset by language
         self.lang_indices: Dict[str, List[int]] = {lang: [] for lang in self.languages}
@@ -240,11 +245,9 @@ class MultilingualBalancedBatchSampler(Sampler[List[int]]):
             if u.lang in self.lang_indices:
                 self.lang_indices[u.lang].append(idx)
 
-        # Determine number of batches: capped by largest pool with repetition, or average
-        min_pool = min((len(idxs) for idxs in self.lang_indices.values()), default=1)
-        max_pool = max((len(idxs) for idxs in self.lang_indices.values()), default=1)
-        # We cycle smaller pools so training covers the full dataset
-        self.num_batches = max_pool // self.per_lang if max_pool >= self.per_lang else 1
+        # Determine number of batches: proportional to total available data
+        total_items = sum(len(idxs) for idxs in self.lang_indices.values())
+        self.num_batches = max(1, total_items // batch_size)
 
     def __len__(self) -> int:
         return self.num_batches
@@ -261,25 +264,46 @@ class MultilingualBalancedBatchSampler(Sampler[List[int]]):
             shuffled_pools[lang] = pool
             pool_iters[lang] = 0
 
-        for _ in range(self.num_batches):
-            batch = []
-            for lang in self.languages:
-                pool = shuffled_pools.get(lang, [])
-                if not pool:
-                    continue
-                k = self.per_lang
-                start = pool_iters[lang]
-                if start + k > len(pool):
-                    self.rng.shuffle(pool)
-                    start = 0
-                    pool_iters[lang] = 0
+        if self.batch_size < len(self.languages):
+            # Interleave languages across micro-batches
+            lang_cycle = list(self.languages)
+            self.rng.shuffle(lang_cycle)
+            lang_idx = 0
+            for _ in range(self.num_batches):
+                batch = []
+                for _ in range(self.batch_size):
+                    lang = lang_cycle[lang_idx % len(lang_cycle)]
+                    lang_idx += 1
+                    pool = shuffled_pools.get(lang, [])
+                    if not pool:
+                        continue
+                    if pool_iters[lang] >= len(pool):
+                        self.rng.shuffle(pool)
+                        pool_iters[lang] = 0
+                    batch.append(pool[pool_iters[lang]])
+                    pool_iters[lang] += 1
+                if len(batch) == self.batch_size:
+                    yield batch
+        else:
+            per_lang = self.batch_size // len(self.languages)
+            for _ in range(self.num_batches):
+                batch = []
+                for lang in self.languages:
+                    pool = shuffled_pools.get(lang, [])
+                    if not pool:
+                        continue
+                    start = pool_iters[lang]
+                    if start + per_lang > len(pool):
+                        self.rng.shuffle(pool)
+                        start = 0
+                        pool_iters[lang] = 0
 
-                batch.extend(pool[start : start + k])
-                pool_iters[lang] = start + k
+                    batch.extend(pool[start : start + per_lang])
+                    pool_iters[lang] = start + per_lang
 
-            if len(batch) >= len(self.languages):
-                self.rng.shuffle(batch)
-                yield batch
+                if len(batch) >= len(self.languages):
+                    self.rng.shuffle(batch)
+                    yield batch
 
 
 class MultilingualSpeechCollator:
@@ -289,9 +313,11 @@ class MultilingualSpeechCollator:
         self,
         roman_tokenizer: RomanCharTokenizer,
         max_bytes_per_word: int = 24,
+        lexicon: Optional[Any] = None,
     ):
         self.rom_tok = roman_tokenizer
         self.max_bytes_per_word = max_bytes_per_word
+        self.lexicon = lexicon
 
     def __call__(self, batch: List[Dict[str, Any]]) -> Dict[str, Any]:
         B = len(batch)
@@ -313,18 +339,24 @@ class MultilingualSpeechCollator:
             padded_phonemes[i, : len(ph)] = ph if isinstance(ph, torch.Tensor) else torch.tensor(ph, dtype=torch.long)
 
         # 3. Collate Character Word Sequences (for Model 2 Decoder)
-        num_words_list = [len(s["words"]) for s in batch]
+        num_words_list = [min(len(s["words"]), 64) for s in batch]
         max_words = max(num_words_list)
-        max_word_slots = max(max_words, 2)
+        max_word_slots = min(max(max_words, 2), 64)
 
         input_bytes = torch.zeros(B, max_word_slots, K, dtype=torch.long)
         target_bytes = torch.full((B, max_word_slots, K), -100, dtype=torch.long)
-        path_targets = torch.zeros(B, max_word_slots, dtype=torch.long)  # 0: Special
+        path_targets = torch.full((B, max_word_slots), -100, dtype=torch.long)
+        target_lengths = torch.full((B, max_word_slots), -100.0, dtype=torch.float32)
+
+        pad_id = getattr(self.lexicon, "PAD_ID", 0) if self.lexicon is not None else 0
+        target_word_ids = torch.full((B, max_word_slots), pad_id, dtype=torch.long) if self.lexicon is not None else None
 
         for b_idx, sample in enumerate(batch):
-            words = sample["words"]
+            words = sample["words"][:max_word_slots]
+            text_words = [w.strip().lower() for w in sample["transcript"].strip().split() if w.strip()]
             for w_idx, w_tokens in enumerate(words):
                 char_len = len(w_tokens) - 1 if (w_tokens and w_tokens[-1] == self.rom_tok.eow_id) else len(w_tokens)
+                target_lengths[b_idx, w_idx] = float(max(1, char_len))
                 if char_len <= 3:
                     path_targets[b_idx, w_idx] = 1  # SHORT
                 elif char_len <= 7:
@@ -337,7 +369,11 @@ class MultilingualSpeechCollator:
                 input_bytes[b_idx, w_idx, 1 : seq_len + 1] = torch.tensor(w_tokens[:seq_len], dtype=torch.long)
                 target_bytes[b_idx, w_idx, :seq_len] = torch.tensor(w_tokens[:seq_len], dtype=torch.long)
 
-        return {
+                if self.lexicon is not None and w_idx < len(text_words):
+                    w_str = text_words[w_idx]
+                    target_word_ids[b_idx, w_idx] = self.lexicon.word_to_id.get(w_str, self.lexicon.UNK_ID)
+
+        res = {
             "audio": padded_audio,
             "audio_lengths": audio_lengths,
             "phoneme_targets": padded_phonemes,
@@ -346,6 +382,10 @@ class MultilingualSpeechCollator:
             "input_byte_ids": input_bytes,
             "target_byte_ids": target_bytes,
             "path_targets": path_targets,
+            "target_lengths": target_lengths,
             "transcripts": [s["transcript"] for s in batch],
             "languages": [s["lang"] for s in batch],
         }
+        if target_word_ids is not None:
+            res["target_word_ids"] = target_word_ids
+        return res
