@@ -140,6 +140,31 @@ class PhonoV71SpeechConfig:
     decoder_learning_rate: float = 3e-4
 
     @classmethod
+    def small(cls, **kwargs) -> "PhonoV71SpeechConfig":
+        enc_cfg = PhonoV64GatedDiffusionConfig(
+            encoder_layers=4,
+            encoder_heads=4,
+            encoder_embed_dim=256,
+            encoder_ffn_dim=1024,
+            vocab_size=64,
+            num_experts=4,
+            moe_top_k=2,
+            use_deep_refiner=False,
+            learnable_gating=False,
+        )
+        dec_cfg = WindowedAdaptivePathConfig.small()
+        cfg = cls(
+            encoder_config=enc_cfg,
+            decoder_config=dec_cfg,
+            encoder_learning_rate=2e-4,
+            decoder_learning_rate=5e-4,
+        )
+        for k, v in kwargs.items():
+            if hasattr(cfg, k):
+                setattr(cfg, k, v)
+        return cfg
+
+    @classmethod
     def medium(cls, **kwargs) -> "PhonoV71SpeechConfig":
         enc_cfg = PhonoV64GatedDiffusionConfig(
             encoder_layers=8,

@@ -104,6 +104,32 @@ class WindowedAdaptivePathConfig:
     label_smoothing: float = 0.05
 
     @classmethod
+    def small(cls, **kwargs) -> "WindowedAdaptivePathConfig":
+        """Small tier: 16 experts, Top-2 routing, d=256 (~24M parameters)."""
+        cfg = cls(
+            acoustic_dim=256,
+            macro_dim=256,
+            macro_layers=2,
+            macro_heads=4,
+            macro_ffn_dim=768,
+            cross_attn_band_width=0,
+            micro_dim=256,
+            micro_layers=2,
+            micro_heads=4,
+            micro_ffn_dim=768,
+            macro_num_experts=4,
+            macro_moe_top_k=2,
+            micro_num_experts=16,
+            micro_moe_top_k=2,
+            word_context_window=6,
+            acoustic_window_frames=32,
+            scheduled_sampling_prob=0.05,
+        )
+        for k, v in kwargs.items():
+            setattr(cfg, k, v)
+        return cfg
+
+    @classmethod
     def medium(cls, **kwargs) -> "WindowedAdaptivePathConfig":
         """Medium tier: 16 experts, Top-2 routing, d=512 (~146M parameters)."""
         cfg = cls(

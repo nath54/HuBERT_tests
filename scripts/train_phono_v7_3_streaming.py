@@ -278,18 +278,19 @@ def main():
     parser.add_argument("--mls_french", type=str, default="/media/hdd/Datasets/mls/mls_french")
     parser.add_argument("--cv_french", type=str, default="/media/hdd/Datasets/common_voice/french/cv-corpus-27.0-2026-09-11/fr")
 
+    parser.add_argument("--tier", type=str, choices=["small", "medium"], default="medium", help="Model size tier: small (20M) or medium (246M)")
     parser.add_argument("--batch_size", type=int, default=2, help="Micro batch size across languages (e.g. 2)")
     parser.add_argument("--grad_accum", type=int, default=8, help="Gradient accumulation steps (effective BS = 16)")
     parser.add_argument("--max_steps", type=int, default=15000)
     parser.add_argument("--eval_every", type=int, default=200)
     parser.add_argument("--log_every", type=int, default=10)
-    parser.add_argument("--encoder_lr", type=float, default=1e-5)
-    parser.add_argument("--decoder_lr", type=float, default=3e-4)
+    parser.add_argument("--encoder_lr", type=float, default=None)
+    parser.add_argument("--decoder_lr", type=float, default=None)
     parser.add_argument("--band_window", type=int, default=8, help="Sliding band causal attention window in words")
     parser.add_argument("--warmup_steps", type=int, default=300)
     parser.add_argument("--seed", type=int, default=42)
 
-    parser.add_argument("--checkpoint_dir", type=str, default="checkpoints/phono_v7_3/streaming")
+    parser.add_argument("--checkpoint_dir", type=str, default=None)
     parser.add_argument("--warm_start_v7_2", type=str, default="checkpoints/phono_v7_2/streaming/best_checkpoint.pt")
     parser.add_argument("--warm_start_v7_1", type=str, default="checkpoints/phono_v7_1/streaming/best_checkpoint.pt")
     parser.add_argument("--resume_from", type=str, default=None)
@@ -390,13 +391,22 @@ def main():
     )
 
     # 3. Model Configuration & Warm-Start
-    config = PhonoV71SpeechConfig.medium()
+    if args.tier == "small":
+        config = PhonoV71SpeechConfig.small()
+    else:
+        config = PhonoV71SpeechConfig.medium()
+
+    enc_lr = args.encoder_lr if args.encoder_lr is not None else config.encoder_learning_rate
+    dec_lr = args.decoder_lr if args.decoder_lr is not None else config.decoder_learning_rate
     config.band_window_words = args.band_window
-    config.encoder_learning_rate = args.encoder_lr
-    config.decoder_learning_rate = args.decoder_lr
+    config.encoder_learning_rate = enc_lr
+    config.decoder_learning_rate = dec_lr
 
     model = PhonoV73SpeechModel(config)
     model = model.to(device)
+
+    total_params = sum(p.numel() for p in model.parameters())
+    print(f"  • Model tier: {args.tier.upper()} ({total_params / 1e6:.1f}M parameters)", flush=True)
 
     start_step = 0
     best_val_loss = float("inf")
@@ -410,14 +420,16 @@ def main():
         best_val_loss = ckpt.get("val_loss", float("inf"))
         optimizer_state = ckpt.get("optimizer_state_dict")
         print(f"  • Successfully resumed from step {start_step} (best_val_loss={best_val_loss:.4f})", flush=True)
-    elif args.warm_start_v7_2 and Path(args.warm_start_v7_2).is_file():
+    elif args.tier != "small" and args.warm_start_v7_2 and Path(args.warm_start_v7_2).is_file():
         print(f"\n🔄 Warm-starting Phono-V7.3 from V7.2 record: {args.warm_start_v7_2}...", flush=True)
         ws_res = model.warm_start_from_v7_2(args.warm_start_v7_2)
         print(f"  • Transferred {ws_res['transferred']} tensors (skipped: {ws_res['skipped']}, missing: {ws_res['missing']})", flush=True)
-    elif args.warm_start_v7_1 and Path(args.warm_start_v7_1).is_file():
+    elif args.tier != "small" and args.warm_start_v7_1 and Path(args.warm_start_v7_1).is_file():
         print(f"\n🔄 Warm-starting Phono-V7.3 from V7.1 record: {args.warm_start_v7_1}...", flush=True)
         ws_res = model.warm_start_from_v7_2(args.warm_start_v7_1)
         print(f"  • Transferred {ws_res['transferred']} tensors (skipped: {ws_res['skipped']}, missing: {ws_res['missing']})", flush=True)
+    else:
+        print(f"  • Initialized {args.tier.upper()} model with 7-layer pretrained acoustic filters", flush=True)
 
     # 4. Optimization Setup
     encoder_params = [p for p in model.encoder.parameters() if p.requires_grad]
@@ -425,8 +437,8 @@ def main():
 
     optimizer = torch.optim.AdamW(
         [
-            {"params": encoder_params, "lr": args.encoder_lr, "weight_decay": 0.01},
-            {"params": decoder_params, "lr": args.decoder_lr, "weight_decay": 0.01},
+            {"params": encoder_params, "lr": enc_lr, "weight_decay": 0.01},
+            {"params": decoder_params, "lr": dec_lr, "weight_decay": 0.01},
         ],
         betas=(0.9, 0.98),
         eps=1e-8,
@@ -451,7 +463,8 @@ def main():
 
     scaler = torch.amp.GradScaler("cuda", enabled=device.type == "cuda")
 
-    ckpt_dir = Path(args.checkpoint_dir)
+    ckpt_dir_path = args.checkpoint_dir or f"checkpoints/phono_v7_3_{args.tier}/streaming"
+    ckpt_dir = Path(ckpt_dir_path)
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     best_ckpt_path = ckpt_dir / "best_checkpoint.pt"
 
