@@ -198,7 +198,7 @@ class PhonoV73AcousticBackbone(PhonoV64GatedDiffusionForPreTraining):
             T_common = min(T_cur, T_bt)
             bg_sliced = boundary_logits[:, :T_common]
             bt_sliced = boundary_targets[:, :T_common]
-            weights = torch.tensor([1.0, 4.0, 1.0], device=audio.device)  # 4x penalty for missed/false spaces
+            weights = torch.tensor([1.0, 10.0, 1.0], device=audio.device)  # 10x heavy penalty for missed/false spaces
             boundary_loss = F.cross_entropy(
                 bg_sliced.reshape(-1, 3),
                 bt_sliced.reshape(-1),
@@ -206,7 +206,7 @@ class PhonoV73AcousticBackbone(PhonoV64GatedDiffusionForPreTraining):
                 ignore_index=-100,
             )
 
-        total_enc_loss = ctc_loss + 0.3 * boundary_loss
+        total_enc_loss = ctc_loss + 1.0 * boundary_loss
 
         return {
             "loss": total_enc_loss,
@@ -296,21 +296,34 @@ class PhonoV73SpeechModel(PhonoV72SpeechModel):
                 )
                 if aligned_tokens is not None:
                     # Ground-truth boundary targets from alignment (class 1 for space, 0 for phoneme, 2 for blank)
+                    is_space_token = (aligned_tokens == 8)
+                    is_blank_token = (aligned_tokens == 1)
+                    is_speech_token = (aligned_tokens > 8)
+
                     if boundary_targets is None:
-                        is_space_token = (aligned_tokens == 8)
-                        is_blank_token = (aligned_tokens == 1)
                         auto_boundary = torch.zeros_like(aligned_tokens)
                         auto_boundary[is_space_token] = 1
                         auto_boundary[is_blank_token] = 2
-                        weights = torch.tensor([1.0, 4.0, 1.0], device=audio.device)
+                        weights = torch.tensor([1.0, 10.0, 1.0], device=audio.device)  # 10x heavy penalty for space errors
                         b_loss = F.cross_entropy(
                             boundary_logits.reshape(-1, 3),
                             auto_boundary.reshape(-1),
                             weight=weights,
                             ignore_index=-100,
                         )
-                        enc_loss = enc_loss + 0.3 * b_loss
+                        enc_loss = enc_loss + 1.0 * b_loss
                         boundary_loss = b_loss
+
+                    # Direct CTC Space Peak & False Insertion Penalty:
+                    # Heavily penalize omission of spaces at true word boundaries,
+                    # and penalize false space hallucinations inside words
+                    spc_ctc_loss = torch.tensor(0.0, device=audio.device)
+                    if is_space_token.any():
+                        loss_missed_spc = -log_probs[:, :, 8][is_space_token].mean()
+                        p_spc = log_probs[:, :, 8].exp()
+                        loss_false_spc = -torch.log((1.0 - p_spc[is_speech_token]).clamp(min=1e-6)).mean()
+                        spc_ctc_loss = loss_missed_spc + 0.5 * loss_false_spc
+                        enc_loss = enc_loss + 0.5 * spc_ctc_loss
 
                     centers = self.aligner.get_word_centers(aligned_tokens, space_id=8)
                     if centers is not None and num_words is not None:

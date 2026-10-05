@@ -11,6 +11,7 @@ Features:
 """
 
 import argparse
+import difflib
 import json
 import math
 import os
@@ -73,6 +74,50 @@ def decode_ctc_phonemes(logits: torch.Tensor, tokenizer: PhonemeTokenizer, blank
     return tokenizer.decode(collapsed, skip_special=True)
 
 
+def compute_spacing_errors(gt_tokens: List[int], pred_tokens: List[int], space_token: int = 8) -> Dict[str, Any]:
+    """Computes phoneme spacing error breakdown:
+    - total_gt: number of true space delimiters in GT
+    - correct: correctly predicted spaces
+    - missed: omitted spaces (causing word mergers)
+    - extra: falsely inserted spaces (causing word splits/fractures)
+    - total_errors: missed + extra
+    - acc: space accuracy percentage
+    """
+    matcher = difflib.SequenceMatcher(None, gt_tokens, pred_tokens)
+    missed_spaces = 0
+    extra_spaces = 0
+    correct_spaces = 0
+    total_gt_spaces = sum(1 for t in gt_tokens if t == space_token)
+
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        gt_chunk = gt_tokens[i1:i2]
+        pred_chunk = pred_tokens[j1:j2]
+        if tag == "equal":
+            correct_spaces += sum(1 for t in gt_chunk if t == space_token)
+        elif tag == "delete":
+            missed_spaces += sum(1 for t in gt_chunk if t == space_token)
+        elif tag == "insert":
+            extra_spaces += sum(1 for t in pred_chunk if t == space_token)
+        elif tag == "replace":
+            gt_sp = sum(1 for t in gt_chunk if t == space_token)
+            pred_sp = sum(1 for t in pred_chunk if t == space_token)
+            matched = min(gt_sp, pred_sp)
+            correct_spaces += matched
+            missed_spaces += max(0, gt_sp - pred_sp)
+            extra_spaces += max(0, pred_sp - gt_sp)
+
+    total_errors = missed_spaces + extra_spaces
+    acc = (correct_spaces / max(1, total_gt_spaces)) * 100.0 if total_gt_spaces > 0 else 100.0
+    return {
+        "total_gt": total_gt_spaces,
+        "correct": correct_spaces,
+        "missed": missed_spaces,
+        "extra": extra_spaces,
+        "total_errors": total_errors,
+        "acc": acc,
+    }
+
+
 @torch.no_grad()
 def evaluate(
     model: PhonoV73SpeechModel,
@@ -93,6 +138,10 @@ def evaluate(
     total_char_tokens = 0
     total_phoneme_ed = 0
     total_phoneme_ref_len = 0
+    total_spc_gt = 0
+    total_spc_correct = 0
+    total_spc_missed = 0
+    total_spc_extra = 0
     batches_run = 0
     sample_info = None
 
@@ -153,7 +202,7 @@ def evaluate(
             total_char_correct += (preds[valid_mask] == tb_sliced[valid_mask]).sum().item()
             total_char_tokens += valid_mask.sum().item()
 
-        # Compute PER
+        # Compute PER and spacing errors
         enc_log = out.get("ctc_logits")
         if enc_log is not None and phoneme_targets is not None:
             for b_i in range(audio.shape[0]):
@@ -164,6 +213,12 @@ def evaluate(
                 ed = editdistance.eval(gt_clean, pred_ids)
                 total_phoneme_ed += ed
                 total_phoneme_ref_len += max(1, len(gt_clean))
+
+                spc_stat = compute_spacing_errors(gt_clean, pred_ids, space_token=8)
+                total_spc_gt += spc_stat["total_gt"]
+                total_spc_correct += spc_stat["correct"]
+                total_spc_missed += spc_stat["missed"]
+                total_spc_extra += spc_stat["extra"]
 
         if sample_info is None and len(batch.get("transcripts", [])) > 0 and logits is not None:
             b_idx = random.randint(0, len(batch["languages"]) - 1)
@@ -179,17 +234,24 @@ def evaluate(
             gt_phonemes = ph_tokenizer.decode(gt_ph_tokens, skip_special=True)
             pred_phonemes = decode_ctc_phonemes(enc_log[b_idx], ph_tokenizer) if enc_log is not None else "N/A"
 
+            sample_spc = compute_spacing_errors(
+                [t for t in gt_ph_tokens if t not in (0, 1)],
+                decode_ctc_phoneme_ids(enc_log[b_idx]) if enc_log is not None else [],
+                space_token=8,
+            )
             sample_info = {
                 "flag": lang_flag,
                 "gt_phonemes": gt_phonemes,
                 "pred_phonemes": pred_phonemes,
                 "gt_text": gt_text,
                 "pred_text": pred_text,
+                "spc_info": sample_spc,
             }
 
     n = max(1, batches_run)
     val_char_acc = (total_char_correct / max(1, total_char_tokens)) * 100.0
     val_per = (total_phoneme_ed / max(1, total_phoneme_ref_len)) * 100.0
+    val_spc_acc = (total_spc_correct / max(1, total_spc_gt)) * 100.0 if total_spc_gt > 0 else 100.0
 
     return {
         "val_loss": total_loss / n,
@@ -199,6 +261,10 @@ def evaluate(
         "val_path_acc": total_path_acc / n,
         "val_char_acc": val_char_acc,
         "val_per": val_per,
+        "val_spc_acc": val_spc_acc,
+        "val_spc_missed": total_spc_missed,
+        "val_spc_extra": total_spc_extra,
+        "val_spc_gt": total_spc_gt,
         "sample_info": sample_info,
     }
 
@@ -372,7 +438,7 @@ def main():
         except Exception as e:
             print(f"  ⚠️ Could not restore optimizer state: {e}", flush=True)
 
-    max_steps = 10 if args.smoke_test else args.max_steps
+    max_steps = (start_step + 10) if args.smoke_test else args.max_steps
     sched_max_steps = (start_step + 500) if args.smoke_test else args.max_steps
     lr_scheduler = get_cosine_schedule_with_warmup(
         optimizer,
@@ -467,8 +533,12 @@ def main():
                 cur_enc_lr = optimizer.param_groups[0]["lr"]
                 cur_dec_lr = optimizer.param_groups[1]["lr"]
 
-                # Real-time batch PER
+                # Real-time batch PER & spacing errors
                 step_per = 0.0
+                batch_gt_spc = 0
+                batch_spc_miss = 0
+                batch_spc_ext = 0
+                batch_spc_corr = 0
                 if out.get("ctc_logits") is not None and phoneme_targets is not None:
                     batch_ed = 0
                     batch_ref = 0
@@ -479,7 +549,17 @@ def main():
                         pred_ids = decode_ctc_phoneme_ids(out["ctc_logits"][b_i])
                         batch_ed += editdistance.eval(gt_clean, pred_ids)
                         batch_ref += max(1, len(gt_clean))
+
+                        spc = compute_spacing_errors(gt_clean, pred_ids, space_token=8)
+                        batch_gt_spc += spc["total_gt"]
+                        batch_spc_miss += spc["missed"]
+                        batch_spc_ext += spc["extra"]
+                        batch_spc_corr += spc["correct"]
+
                     step_per = (batch_ed / max(1, batch_ref)) * 100.0
+
+                total_spc_err = batch_spc_miss + batch_spc_ext
+                spc_acc = (batch_spc_corr / max(1, batch_gt_spc)) * 100.0 if batch_gt_spc > 0 else 100.0
 
                 lev_val = out["lev_loss"].item() if "lev_loss" in out else 0.0
                 align_val = out["align_loss"].item() if "align_loss" in out else 0.0
@@ -491,6 +571,8 @@ def main():
                     f"Loss: {raw_loss.item():.4f} (Enc: {out['enc_loss'].item():.3f}, Dec: {out['dec_loss'].item():.3f}, Bnd: {bnd_val:.3f}, Lev: {lev_val:.3f}, Len: {len_val:.3f}) | "
                     f"CharAcc: {out['char_acc'].item():5.1f}% | "
                     f"PER: {step_per:5.1f}% | "
+                    f"SpcErr: {total_spc_err:2d} (M:{batch_spc_miss}, E:{batch_spc_ext}) | "
+                    f"SpcAcc: {spc_acc:5.1f}% | "
                     f"Headroom: {headroom_val:+.2f}c | "
                     f"Cover: {out['path_acc'].item():5.1f}% | "
                     f"LR: [E:{cur_enc_lr:.1e}, D:{cur_dec_lr:.1e}] | "
@@ -513,9 +595,21 @@ def main():
                 gt_phonemes = ph_tokenizer.decode(gt_ph_tokens, skip_special=True)
                 pred_phonemes = decode_ctc_phonemes(out["ctc_logits"][b_idx], ph_tokenizer) if out.get("ctc_logits") is not None else "N/A"
 
+                sample_spc = compute_spacing_errors(
+                    [t for t in gt_ph_tokens if t not in (0, 1)],
+                    decode_ctc_phoneme_ids(out["ctc_logits"][b_idx]) if out.get("ctc_logits") is not None else [],
+                    space_token=8,
+                )
+
                 print(f"  Sample [{lang_flag}]:", flush=True)
                 print(f"    • GT Phonemes:   {gt_phonemes}", flush=True)
                 print(f"    • Pred Phonemes: {pred_phonemes}", flush=True)
+                print(
+                    f"    • Spacing Stats: GT Spaces: {sample_spc['total_gt']} | "
+                    f"Errors: {sample_spc['total_errors']} (Missed: {sample_spc['missed']} merges, Extra: {sample_spc['extra']} splits) | "
+                    f"Space Accuracy: {sample_spc['acc']:.1f}%",
+                    flush=True,
+                )
                 print(f"    • GT Text:       {gt_text}", flush=True)
                 print(f"    • Pred Text:     {pred_text}", flush=True)
 
@@ -534,14 +628,23 @@ def main():
                     f"  Validation Loss:    {v_loss:.4f} "
                     f"(Enc: {val_metrics['val_enc_loss']:.3f} [PER: {val_metrics['val_per']:.2f}%], Dec: {val_metrics['val_dec_loss']:.3f}, Bnd: {val_metrics['val_bnd_loss']:.3f}) | "
                     f"PathAcc: {val_metrics['val_path_acc']:.1f}% | "
-                    f"CharAcc: {val_metrics['val_char_acc']:.1f}%",
+                    f"CharAcc: {val_metrics['val_char_acc']:.1f}% | "
+                    f"SpcAcc: {val_metrics.get('val_spc_acc', 0.0):.1f}% (Missed: {val_metrics.get('val_spc_missed', 0)}, Extra: {val_metrics.get('val_spc_extra', 0)})",
                     flush=True,
                 )
                 v_info = val_metrics.get("sample_info")
                 if v_info is not None:
+                    v_spc = v_info.get("spc_info", {})
                     print(f"  Val Sample [{v_info['flag']}]:", flush=True)
                     print(f"    • GT Phonemes:   {v_info['gt_phonemes']}", flush=True)
                     print(f"    • Pred Phonemes: {v_info['pred_phonemes']}", flush=True)
+                    if v_spc:
+                        print(
+                            f"    • Spacing Stats: GT Spaces: {v_spc.get('total_gt', 0)} | "
+                            f"Errors: {v_spc.get('total_errors', 0)} (Missed: {v_spc.get('missed', 0)}, Extra: {v_spc.get('extra', 0)}) | "
+                            f"Space Accuracy: {v_spc.get('acc', 0.0):.1f}%",
+                            flush=True,
+                        )
                     print(f"    • GT Text:       {v_info['gt_text']}", flush=True)
                     print(f"    • Pred Text:     {v_info['pred_text']}", flush=True)
 
