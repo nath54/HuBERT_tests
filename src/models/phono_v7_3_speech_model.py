@@ -325,14 +325,14 @@ class PhonoV73SpeechModel(PhonoV72SpeechModel):
                         spc_ctc_loss = loss_missed_spc + 0.5 * loss_false_spc
                         enc_loss = enc_loss + 0.5 * spc_ctc_loss
 
-                    centers = self.aligner.get_word_centers(aligned_tokens, space_id=8)
-                    if centers is not None and num_words is not None:
-                        L_req = int(num_words.max().item())
+                    L_req = int(num_words.max().item()) if num_words is not None else 64
+                    centers = self.aligner.get_word_centers(aligned_tokens, space_id=8, max_words=L_req)
+                    if centers is not None:
                         pad_w = L_req - centers.shape[1]
                         if pad_w > 0:
                             centers = F.pad(centers, (0, pad_w), value=0)
                         word_centers = centers[:, :L_req]
-            except Exception:
+            except Exception as e:
                 word_centers = None
 
         # 3. Micro Character Decoder Forward Pass with Boundary-Guided Slicing

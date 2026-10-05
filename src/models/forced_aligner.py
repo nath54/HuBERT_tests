@@ -161,6 +161,43 @@ class ForcedAligner:
 
         return word_centers, word_valid
 
+    def get_word_centers(
+        self,
+        aligned_tokens: torch.Tensor,
+        space_id: Optional[int] = None,
+        max_words: int = 64,
+    ) -> torch.Tensor:
+        """Extract word centers directly from aligned tokens sequence using space delimiters."""
+        B, T = aligned_tokens.shape
+        device = aligned_tokens.device
+        sp_id = space_id if space_id is not None else self.space_id
+        word_centers = torch.zeros((B, max_words), dtype=torch.long, device=device)
+        aligned_cpu = aligned_tokens.cpu()
+
+        for b in range(B):
+            tokens = aligned_cpu[b].tolist()
+            current_w = 0
+            w_frames: Dict[int, List[int]] = {0: []}
+            for t, tok in enumerate(tokens):
+                if tok == self.blank_id or tok == self.pad_id:
+                    continue
+                if tok == sp_id:
+                    current_w += 1
+                    w_frames[current_w] = []
+                else:
+                    if current_w not in w_frames:
+                        w_frames[current_w] = []
+                    w_frames[current_w].append(t)
+
+            num_detected = min(len(w_frames), max_words)
+            for w in range(num_detected):
+                frames = w_frames.get(w, [])
+                if frames:
+                    center = int(sum(frames) / len(frames))
+                    word_centers[b, w] = min(center, T - 1)
+
+        return word_centers
+
     def compute_frame_alignment_loss(
         self,
         logits: torch.Tensor,
