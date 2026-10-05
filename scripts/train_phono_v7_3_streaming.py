@@ -681,6 +681,22 @@ def main():
                     )
                     print(f"  💾 Saved best checkpoint to: {best_ckpt_path}", flush=True)
 
+                # Always save latest checkpoint
+                latest_ckpt_path = ckpt_dir / "latest_checkpoint.pt"
+                torch.save(
+                    {
+                        "step": step,
+                        "val_loss": v_loss,
+                        "val_per": val_metrics["val_per"],
+                        "val_char_acc": val_metrics["val_char_acc"],
+                        "val_path_acc": val_metrics["val_path_acc"],
+                        "model_state_dict": model.state_dict(),
+                        "optimizer_state_dict": optimizer.state_dict(),
+                        "config": config,
+                    },
+                    latest_ckpt_path,
+                )
+
                 model.train()
 
     if args.smoke_test:
