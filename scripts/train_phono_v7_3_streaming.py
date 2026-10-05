@@ -155,8 +155,8 @@ def evaluate(
         phoneme_targets = batch.get("phoneme_targets")
         phoneme_lengths = batch.get("phoneme_lengths")
         num_words = batch.get("num_words")
-        input_bytes = batch.get("input_bytes")
-        target_bytes = batch.get("target_bytes")
+        input_bytes = batch.get("input_byte_ids")
+        target_bytes = batch.get("target_byte_ids")
         path_targets = batch.get("path_targets")
         target_lengths = batch.get("target_lengths")
 
@@ -475,8 +475,8 @@ def main():
         phoneme_targets = batch.get("phoneme_targets")
         phoneme_lengths = batch.get("phoneme_lengths")
         num_words = batch.get("num_words")
-        input_bytes = batch.get("input_bytes")
-        target_bytes = batch.get("target_bytes")
+        input_bytes = batch.get("input_byte_ids")
+        target_bytes = batch.get("target_byte_ids")
         path_targets = batch.get("path_targets")
         target_lengths = batch.get("target_lengths")
 
@@ -589,6 +589,8 @@ def main():
                 preds_bytes = out["logits"][b_idx].argmax(dim=-1).cpu().tolist() if out.get("logits") is not None else []
                 num_w = batch["num_words"][b_idx].item()
                 pred_text = roman_tok.decode_words(preds_bytes[: min(num_w, len(preds_bytes))]) if preds_bytes else "N/A"
+                if not pred_text and preds_bytes:
+                    pred_text = "<empty>"
 
                 gt_ph_len = batch["phoneme_lengths"][b_idx].item()
                 gt_ph_tokens = batch["phoneme_targets"][b_idx, :gt_ph_len].cpu().tolist()
