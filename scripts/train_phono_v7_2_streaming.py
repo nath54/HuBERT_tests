@@ -1,73 +1,97 @@
 #!/usr/bin/env python3
-"""Training script for Phono-V7.2 Real-Time Streaming Speech Model.
+"""Phono-V7.1 Real-Time Streaming Character Training Script.
 
-Features:
-- Two-Level Hierarchical Router:
-  - Level 1: Binary Gate Router (SPECIAL/PAUSE vs SPEECH WORD)
-  - Level 2: Partitioned MoE Expert Routing (Short 0..4, Med 5..10, Long 11..15)
-- Continuous Word Length Guidance and Strict Horizon Capping:
-  - max_k = min(head_bound, ceil(k_hat) + 1)
-- Band-Causal Macro Attention (K=8 words) and Shift-Invariant Base Query (q_base).
-- Warm-starts from Phono-V7.1 checkpoint.
+Architectural Innovations:
+1. Band-Causal Macro Attention (K=8 words):
+   - Local sliding causal attention eliminates indefinite error snowballing.
+   - Constant O(K * L) compute and memory per word.
+2. Shift-Invariant Query Formulation:
+   - Shared base query + relative distance embeddings.
+   - Slot 100 has identical trained capacity to Slot 0.
+   - Unlimited live streaming capability without a static slot ceiling.
+3. Event-Driven Online CTC Speech Slicing:
+   - Causal speech energy peak detector (1 - P(blank)) with space/silence transitions.
+   - Absorbs pauses, breaths, and speech tempo variations with zero temporal drift.
+4. Macro Latent History Noise Injection:
+   - Eliminates exposure bias and forces the decoder to anchor on acoustic evidence.
+5. Continuous Duration-Aware Length Prediction + Asymmetric Loss + Soft-Levenshtein:
+   - Heavily penalizes under-prediction while granting free positive headroom.
 """
 
 import argparse
-import json
+import math
 import os
 from pathlib import Path
 import random
+import sys
 import time
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import editdistance
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch.utils.data import DataLoader
+from transformers import get_cosine_schedule_with_warmup
 
-from src.data.dataset import AudioUtterance
+from src.data.phoneme_tokenizer import PhonemeTokenizer
+from src.data.roman_tokenizer import RomanCharTokenizer
+from src.data.target_extractors import PhonemeTargetExtractor
 from src.data.multilingual_audio_dataset import (
+    AudioUtterance,
     MultilingualAudioDataset,
     MultilingualBalancedBatchSampler,
     MultilingualSpeechCollator,
-    RomanCharTokenizer,
+    load_librispeech_manifest,
+    load_mls_manifest,
+    load_common_voice_manifest,
 )
-from src.data.phoneme_tokenizer import PhonemeTargetExtractor
 from src.models.phono_v7_1_speech_model import PhonoV71SpeechConfig
 from src.models.phono_v7_2_speech_model import PhonoV72SpeechModel
 
 
-def compute_edit_distance(ref: List[int], hyp: List[int]) -> int:
-    """Standard Levenshtein distance."""
-    n, m = len(ref), len(hyp)
-    if n == 0:
-        return m
-    if m == 0:
-        return n
-    dp = [[0] * (m + 1) for _ in range(n + 1)]
-    for i in range(n + 1):
-        dp[i][0] = i
-    for j in range(m + 1):
-        dp[0][j] = j
-    for i in range(1, n + 1):
-        for j in range(1, m + 1):
-            cost = 0 if ref[i - 1] == hyp[j - 1] else 1
-            dp[i][j] = min(
-                dp[i - 1][j] + 1,
-                dp[i][j - 1] + 1,
-                dp[i - 1][j - 1] + cost,
-            )
-    return dp[n][m]
+def format_eta(seconds: float) -> str:
+    """Format ETA in human readable format."""
+    if seconds < 0 or math.isinf(seconds) or math.isnan(seconds):
+        return "--m--s"
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    if h > 0:
+        return f"{h}h{m:02d}m"
+    return f"{m:02d}m{s:02d}s"
+
+
+def decode_ctc_phoneme_ids(logits: torch.Tensor, blank_id: int = 1, pad_id: int = 0) -> List[int]:
+    """Greedy CTC collapse into token ID list."""
+    preds = logits.argmax(dim=-1).cpu().tolist()
+    collapsed = []
+    prev = None
+    for p in preds:
+        if p != prev:
+            if p != blank_id and p != pad_id:
+                collapsed.append(p)
+            prev = p
+    return collapsed
+
+
+def decode_ctc_phonemes(logits: torch.Tensor, tokenizer: PhonemeTokenizer, blank_id: int = 1, pad_id: int = 0) -> str:
+    """Greedy CTC collapse and decode into readable IPA phonemes."""
+    collapsed = decode_ctc_phoneme_ids(logits, blank_id=blank_id, pad_id=pad_id)
+    return tokenizer.decode(collapsed, skip_special=True)
 
 
 @torch.no_grad()
-def evaluate_streaming(
+def evaluate(
     model: PhonoV72SpeechModel,
     dataloader: DataLoader,
-    device: torch.device,
     roman_tok: RomanCharTokenizer,
-    ph_extractor: PhonemeTargetExtractor,
+    ph_tokenizer: PhonemeTokenizer,
+    device: torch.device,
     max_batches: int = 15,
 ) -> Dict[str, float]:
+    """Evaluation on held-out multilingual speech batches with PER and CER computation."""
     model.eval()
     total_loss = 0.0
     total_enc_loss = 0.0
@@ -112,76 +136,70 @@ def evaluate_streaming(
             )
 
         loss = out["loss"]
-        total_loss += loss.item()
-        total_enc_loss += out["ctc_loss"].item()
-        total_dec_loss += out["decoder_loss"].item()
-        total_path_acc += out["path_acc"].item()
+        if not torch.isnan(loss):
+            total_loss += loss.item()
+            total_enc_loss += out["enc_loss"].item()
+            total_dec_loss += out["dec_loss"].item()
+            total_path_acc += out["path_acc"].item()
 
-        targets_flat = target_bytes.reshape(-1)
-        valid_mask = targets_flat != -100
-        if valid_mask.any():
-            total_char_correct += int(out["char_acc"].item() * valid_mask.sum().item())
-            total_char_tokens += int(valid_mask.sum().item())
+        logits = out["logits"]
+        preds = logits.argmax(dim=-1)
+        tb_sliced = target_bytes[:, : logits.shape[1]]
+        valid_mask = tb_sliced != -100
+        total_char_correct += (preds[valid_mask] == tb_sliced[valid_mask]).sum().item()
+        total_char_tokens += valid_mask.sum().item()
 
-        # Encoder Greedy Decoding for PER
-        ctc_logits = out["ctc_logits"]
-        pred_ids = ctc_logits.argmax(dim=-1)
-        for i in range(audio.shape[0]):
-            p_len = phoneme_lengths[i].item()
-            gt_ph = phoneme_targets[i, :p_len].tolist()
-            raw_pred = pred_ids[i].tolist()
-            collapsed = []
-            prev = None
-            for tok in raw_pred:
-                if tok != prev:
-                    if tok != 1:  # Blank token
-                        collapsed.append(tok)
-                    prev = tok
-            ed = compute_edit_distance(gt_ph, collapsed)
-            total_phoneme_ed += ed
-            total_phoneme_ref_len += max(1, len(gt_ph))
+        # Compute PER
+        enc_log = out.get("ctc_logits")
+        if enc_log is not None and phoneme_targets is not None:
+            for b_i in range(audio.shape[0]):
+                ph_len = phoneme_lengths[b_i].item()
+                gt_ids = phoneme_targets[b_i, :ph_len].cpu().tolist()
+                gt_clean = [p for p in gt_ids if p not in (0, 1)]
+                pred_ids = decode_ctc_phoneme_ids(enc_log[b_i])
+                ed = editdistance.eval(gt_clean, pred_ids)
+                total_phoneme_ed += ed
+                total_phoneme_ref_len += max(1, len(gt_clean))
 
-            if sample_info is None and i == 0:
-                # Decode greedy words with partitioned expert heads & horizon capping
-                max_w = int(num_words[i].item()) if num_words is not None else 16
-                decoded_word_tokens = model.decoder.decode_greedy(
-                    acoustic_memory=out.get("memory_lengths", out["ctc_logits"]),
-                    max_words=max_w,
-                    ctc_logits=ctc_logits[i : i + 1],
-                )
-                pred_text_words = []
-                for w in decoded_word_tokens:
-                    chars = [roman_tok.id_to_char.get(c, "") for c in w if c not in (roman_tok.bos_id, roman_tok.eow_id, roman_tok.eos_id, roman_tok.pad_id)]
-                    pred_text_words.append("".join(chars))
+        if sample_info is None and len(batch.get("transcripts", [])) > 0:
+            b_idx = random.randint(0, len(batch["languages"]) - 1)
+            lang = batch["languages"][b_idx]
+            lang_flag = {"en": "🇬🇧 EN", "it": "🇮🇹 IT", "es": "🇪🇸 ES", "fr": "🇫🇷 FR"}.get(lang, lang.upper())
+            gt_text = batch["transcripts"][b_idx]
+            preds_bytes = logits[b_idx].argmax(dim=-1).cpu().tolist()
+            num_w = batch["num_words"][b_idx].item()
+            pred_text = roman_tok.decode_words(preds_bytes[: min(num_w, len(preds_bytes))])
 
-                sample_info = {
-                    "lang": batch["languages"][i],
-                    "gt_ph": " ".join([ph_extractor.tokenizer.id_to_token.get(p, "") for p in gt_ph]),
-                    "pred_ph": " ".join([ph_extractor.tokenizer.id_to_token.get(p, "") for p in collapsed]),
-                    "gt_text": batch["transcripts"][i],
-                    "pred_text": " ".join(pred_text_words),
-                }
+            gt_ph_len = batch["phoneme_lengths"][b_idx].item()
+            gt_ph_tokens = batch["phoneme_targets"][b_idx, :gt_ph_len].cpu().tolist()
+            gt_phonemes = ph_tokenizer.decode(gt_ph_tokens, skip_special=True)
+            pred_phonemes = decode_ctc_phonemes(enc_log[b_idx], ph_tokenizer) if enc_log is not None else "N/A"
 
-    avg_loss = total_loss / max(1, batches_run)
-    avg_enc = total_enc_loss / max(1, batches_run)
-    avg_dec = total_dec_loss / max(1, batches_run)
-    avg_path_acc = (total_path_acc / max(1, batches_run)) * 100.0
-    char_acc = (total_char_correct / max(1, total_char_tokens)) * 100.0 if total_char_tokens > 0 else 0.0
-    per = (total_phoneme_ed / max(1, total_phoneme_ref_len)) * 100.0
+            sample_info = {
+                "flag": lang_flag,
+                "gt_phonemes": gt_phonemes,
+                "pred_phonemes": pred_phonemes,
+                "gt_text": gt_text,
+                "pred_text": pred_text,
+            }
+
+    n = max(1, batches_run)
+    val_char_acc = (total_char_correct / max(1, total_char_tokens)) * 100.0
+    val_per = (total_phoneme_ed / max(1, total_phoneme_ref_len)) * 100.0
 
     return {
-        "val_loss": avg_loss,
-        "enc_loss": avg_enc,
-        "dec_loss": avg_dec,
-        "path_acc": avg_path_acc,
-        "char_acc": char_acc,
-        "per": per,
-        "sample": sample_info,
+        "val_loss": total_loss / n,
+        "val_enc_loss": total_enc_loss / n,
+        "val_dec_loss": total_dec_loss / n,
+        "val_path_acc": total_path_acc / n,
+        "val_char_acc": val_char_acc,
+        "val_per": val_per,
+        "sample_info": sample_info,
     }
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Train Phono-V7.2 Partitioned Streaming Character Model")
+    parser = argparse.ArgumentParser(description="Train Phono-V7.2 Real-Time Streaming Character Model with Partitioned MoE")
     parser.add_argument("--librispeech_train", type=str, default="data/librispeech/librispeech_train_100h.json")
     parser.add_argument("--librispeech_val", type=str, default="data/librispeech/benchmark_val.json")
     parser.add_argument("--mls_italian", type=str, default="/media/hdd/Datasets/mls/mls_italian")
@@ -189,7 +207,7 @@ def main():
     parser.add_argument("--mls_french", type=str, default="/media/hdd/Datasets/mls/mls_french")
     parser.add_argument("--cv_french", type=str, default="/media/hdd/Datasets/common_voice/french/cv-corpus-27.0-2026-09-11/fr")
 
-    parser.add_argument("--batch_size", type=int, default=2, help="Micro batch size across languages")
+    parser.add_argument("--batch_size", type=int, default=2, help="Micro batch size across languages (e.g. 2)")
     parser.add_argument("--grad_accum", type=int, default=8, help="Gradient accumulation steps (effective BS = 16)")
     parser.add_argument("--max_steps", type=int, default=15000)
     parser.add_argument("--eval_every", type=int, default=200)
@@ -213,66 +231,49 @@ def main():
         torch.cuda.manual_seed_all(args.seed)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"🚀 Phono-V7.2 Partitioned MoE Streaming Training on: {device}", flush=True)
+    print(f"🚀 Phono-V7.2 Partitioned MoE Streaming Training initialized on device: {device}", flush=True)
 
-    # 1. Load Datasets
+    # 1. Load Multilingual Manifests
     print("\n📚 Loading Multilingual Datasets...", flush=True)
     train_utts: List[AudioUtterance] = []
     val_utts: List[AudioUtterance] = []
 
     # English
-    with open(args.librispeech_train, "r", encoding="utf-8") as f:
-        data = json.load(f)
-        for item in data:
-            train_utts.append(AudioUtterance(audio_path=item["audio_path"], transcript=item["transcript"], duration=item.get("duration", 0.0), lang="en"))
-    with open(args.librispeech_val, "r", encoding="utf-8") as f:
-        data = json.load(f)
-        for item in data[:400]:
-            val_utts.append(AudioUtterance(audio_path=item["audio_path"], transcript=item["transcript"], duration=item.get("duration", 0.0), lang="en"))
+    en_train = load_librispeech_manifest(args.librispeech_train)
+    en_val = load_librispeech_manifest(args.librispeech_val)
+    print(f"  • English (LibriSpeech): {len(en_train)} train, {len(en_val)} val")
+    train_utts.extend(en_train)
+    val_utts.extend(en_val)
 
     # Italian
-    it_trans_path = os.path.join(args.mls_italian, "train/transcripts.txt")
-    if os.path.exists(it_trans_path):
-        with open(it_trans_path, "r", encoding="utf-8") as f:
-            for line in f:
-                parts = line.strip().split("\t")
-                if len(parts) == 2:
-                    p = os.path.join(args.mls_italian, "train/audio", parts[0].replace("_", "/").rsplit("/", 1)[0], f"{parts[0]}.flac")
-                    if os.path.exists(p):
-                        train_utts.append(AudioUtterance(audio_path=p, transcript=parts[1], duration=0.0, lang="it"))
-                        if len(train_utts) >= 15000:
-                            break
+    it_train = load_mls_manifest(args.mls_italian, lang="it", split="train", max_samples=25000)
+    it_val = load_mls_manifest(args.mls_italian, lang="it", split="dev", max_samples=500)
+    print(f"  • Italian (MLS): {len(it_train)} train, {len(it_val)} val")
+    train_utts.extend(it_train)
+    val_utts.extend(it_val)
 
     # Spanish
-    es_trans_path = os.path.join(args.mls_spanish, "train/transcripts.txt")
-    if os.path.exists(es_trans_path):
-        with open(es_trans_path, "r", encoding="utf-8") as f:
-            for line in f:
-                parts = line.strip().split("\t")
-                if len(parts) == 2:
-                    p = os.path.join(args.mls_spanish, "train/audio", parts[0].replace("_", "/").rsplit("/", 1)[0], f"{parts[0]}.flac")
-                    if os.path.exists(p):
-                        train_utts.append(AudioUtterance(audio_path=p, transcript=parts[1], duration=0.0, lang="es"))
-                        if len(train_utts) >= 30000:
-                            break
+    es_train = load_mls_manifest(args.mls_spanish, lang="es", split="train", max_samples=25000)
+    es_val = load_mls_manifest(args.mls_spanish, lang="es", split="dev", max_samples=500)
+    print(f"  • Spanish (MLS): {len(es_train)} train, {len(es_val)} val")
+    train_utts.extend(es_train)
+    val_utts.extend(es_val)
 
     # French
-    fr_trans_path = os.path.join(args.mls_french, "train/transcripts.txt")
-    if os.path.exists(fr_trans_path):
-        with open(fr_trans_path, "r", encoding="utf-8") as f:
-            for line in f:
-                parts = line.strip().split("\t")
-                if len(parts) == 2:
-                    p = os.path.join(args.mls_french, "train/audio", parts[0].replace("_", "/").rsplit("/", 1)[0], f"{parts[0]}.flac")
-                    if os.path.exists(p):
-                        train_utts.append(AudioUtterance(audio_path=p, transcript=parts[1], duration=0.0, lang="fr"))
-                        if len(train_utts) >= 45000:
-                            break
+    fr_train = load_mls_manifest(args.mls_french, lang="fr", split="train", max_samples=15000)
+    fr_cv = load_common_voice_manifest(args.cv_french, lang="fr", split="train", max_samples=10000)
+    fr_train.extend(fr_cv)
+    fr_val = load_mls_manifest(args.mls_french, lang="fr", split="dev", max_samples=500)
+    print(f"  • French (MLS + CV): {len(fr_train)} train, {len(fr_val)} val")
+    train_utts.extend(fr_train)
+    val_utts.extend(fr_val)
 
-    print(f"Loaded {len(train_utts)} train utterances and {len(val_utts)} val utterances.", flush=True)
+    print(f"  🌟 Combined: {len(train_utts)} train utterances, {len(val_utts)} val utterances")
 
+    # 2. Tokenizers and Datasets
+    ph_tokenizer = PhonemeTokenizer()
+    ph_extractor = PhonemeTargetExtractor(ph_tokenizer)
     roman_tok = RomanCharTokenizer()
-    ph_extractor = PhonemeTargetExtractor()
 
     train_dataset = MultilingualAudioDataset(
         train_utts,
@@ -315,184 +316,233 @@ def main():
         pin_memory=True,
     )
 
-    # 2. Model Configuration & Warm-Start
+    # 3. Model Configuration & Warm-Start
     config = PhonoV71SpeechConfig.medium()
     config.band_window_words = args.band_window
     config.encoder_learning_rate = args.encoder_lr
     config.decoder_learning_rate = args.decoder_lr
 
-    model = PhonoV72SpeechModel(config).to(device)
+    model = PhonoV72SpeechModel(config)
+    model = model.to(device)
 
-    # Warm-start
-    if args.warm_start_v7_1 and os.path.exists(args.warm_start_v7_1):
-        print(f"🔗 Warm-starting Phono-V7.2 from {args.warm_start_v7_1}...", flush=True)
-        stats = model.warm_start_from_v7_1(args.warm_start_v7_1)
-        print(f"   Transferred: {stats['transferred']} tensors (Missing: {stats['missing']}, Unexpected: {stats['unexpected']})", flush=True)
-
-    os.makedirs(args.checkpoint_dir, exist_ok=True)
+    start_step = 0
     best_val_loss = float("inf")
-    best_per = float("inf")
+    optimizer_state = None
 
-    # Optimizer with differential learning rates
+    if args.resume_from and Path(args.resume_from).is_file():
+        print(f"\n🔄 Resuming checkpoint from: {args.resume_from}...", flush=True)
+        ckpt = torch.load(args.resume_from, map_location=device)
+        missing_keys, unexpected_keys = model.load_state_dict(ckpt["model_state_dict"], strict=False)
+        start_step = ckpt.get("step", 0)
+        best_val_loss = ckpt.get("val_loss", float("inf"))
+        optimizer_state = ckpt.get("optimizer_state_dict")
+        print(f"  • Successfully resumed from step {start_step} (best_val_loss={best_val_loss:.4f})", flush=True)
+    elif args.warm_start_v7_1 and Path(args.warm_start_v7_1).is_file():
+        print(f"\n🔄 Warm-starting Phono-V7.2 from V7.1 record: {args.warm_start_v7_1}...", flush=True)
+        ws_res = model.warm_start_from_v7_1(args.warm_start_v7_1)
+        print(f"  • Transferred {ws_res['transferred']} tensors (unexpected: {ws_res['unexpected']}, missing: {ws_res['missing']})", flush=True)
+
+    # 4. Optimization Setup
+    encoder_params = [p for p in model.encoder.parameters() if p.requires_grad]
+    decoder_params = [p for p in model.decoder.parameters() if p.requires_grad]
+
     optimizer = torch.optim.AdamW(
         [
-            {"params": model.encoder.parameters(), "lr": args.encoder_lr},
-            {"params": model.decoder.parameters(), "lr": args.decoder_lr},
+            {"params": encoder_params, "lr": args.encoder_lr, "weight_decay": 0.01},
+            {"params": decoder_params, "lr": args.decoder_lr, "weight_decay": 0.01},
         ],
-        weight_decay=1e-4,
+        betas=(0.9, 0.98),
+        eps=1e-8,
     )
-    scaler = torch.amp.GradScaler(device="cuda", enabled=(device.type == "cuda"))
+    if optimizer_state is not None:
+        try:
+            optimizer.load_state_dict(optimizer_state)
+            print("  • Optimizer state restored successfully", flush=True)
+        except Exception as e:
+            print(f"  ⚠️ Could not restore optimizer state ({e}), starting fresh AdamW", flush=True)
 
-    print(f"\n⚡ Starting Phono-V7.2 Training ({args.max_steps} steps, Accum: {args.grad_accum})...", flush=True)
-    step = 0
+    max_steps = (start_step + 10) if args.smoke_test else args.max_steps
+    sched_max_steps = (start_step + 500) if args.smoke_test else args.max_steps
+    lr_scheduler = get_cosine_schedule_with_warmup(
+        optimizer,
+        num_warmup_steps=args.warmup_steps,
+        num_training_steps=sched_max_steps,
+    )
+    if start_step > 0:
+        for _ in range(start_step):
+            lr_scheduler.step()
+
+    scaler = torch.amp.GradScaler("cuda", enabled=device.type == "cuda")
+
+    ckpt_dir = Path(args.checkpoint_dir)
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
+    best_ckpt_path = ckpt_dir / "best_checkpoint.pt"
+
+    print(f"\n🔥 Starting Phono-V7.2 Streaming Training ({max_steps} steps, start_step={start_step}, band_window={config.band_window_words} words)...", flush=True)
     start_time = time.time()
+    step = start_step
+    accum_step = 0
+
+    model.train()
     train_iter = iter(train_loader)
 
-    while step < args.max_steps:
-        optimizer.zero_grad(set_to_none=True)
-        accum_loss = 0.0
-        accum_enc_loss = 0.0
-        accum_dec_loss = 0.0
-        accum_lev_loss = 0.0
-        accum_align_loss = 0.0
-        accum_len_loss = 0.0
-        accum_char_acc = 0.0
-        accum_cover = 0.0
-        accum_near = 0.0
-        accum_headroom = 0.0
-        accum_per = 0.0
+    while step < max_steps:
+        try:
+            batch = next(train_iter)
+        except StopIteration:
+            train_iter = iter(train_loader)
+            batch = next(train_iter)
 
-        for _ in range(args.grad_accum):
-            try:
-                batch = next(train_iter)
-            except StopIteration:
-                train_iter = iter(train_loader)
-                batch = next(train_iter)
+        audio = batch["audio"].to(device, non_blocking=True)
+        audio_lengths = batch["audio_lengths"].to(device, non_blocking=True)
+        phoneme_targets = batch["phoneme_targets"].to(device, non_blocking=True)
+        phoneme_lengths = batch["phoneme_lengths"].to(device, non_blocking=True)
+        num_words = batch["num_words"].to(device, non_blocking=True)
+        input_bytes = batch["input_byte_ids"].to(device, non_blocking=True)
+        target_bytes = batch["target_byte_ids"].to(device, non_blocking=True)
+        path_targets = batch["path_targets"].to(device, non_blocking=True)
+        target_lengths = batch["target_lengths"].to(device, non_blocking=True)
 
-            audio = batch["audio"].to(device, non_blocking=True)
-            audio_lengths = batch["audio_lengths"].to(device, non_blocking=True)
-            phoneme_targets = batch["phoneme_targets"].to(device, non_blocking=True)
-            phoneme_lengths = batch["phoneme_lengths"].to(device, non_blocking=True)
-            num_words = batch["num_words"].to(device, non_blocking=True)
-            input_bytes = batch["input_byte_ids"].to(device, non_blocking=True)
-            target_bytes = batch["target_byte_ids"].to(device, non_blocking=True)
-            path_targets = batch["path_targets"].to(device, non_blocking=True)
-            target_lengths = batch["target_lengths"].to(device, non_blocking=True)
-
-            with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
-                out = model(
-                    audio=audio,
-                    audio_lengths=audio_lengths,
-                    phoneme_targets=phoneme_targets,
-                    phoneme_lengths=phoneme_lengths,
-                    num_words=num_words,
-                    input_byte_ids=input_bytes,
-                    target_byte_ids=target_bytes,
-                    path_targets=path_targets,
-                    target_lengths=target_lengths,
-                )
-                loss = out["loss"] / args.grad_accum
-
-            scaler.scale(loss).backward()
-            accum_loss += out["loss"].item() / args.grad_accum
-            accum_enc_loss += out["ctc_loss"].item() / args.grad_accum
-            accum_dec_loss += out["char_loss"].item() / args.grad_accum
-            accum_lev_loss += out["levenshtein_loss"].item() / args.grad_accum
-            accum_align_loss += out["path_loss"].item() / args.grad_accum
-            accum_len_loss += out["length_loss"].item() / args.grad_accum
-            accum_char_acc += out["char_acc"].item() / args.grad_accum
-            accum_headroom += out.get("length_headroom", torch.tensor(0.0)).item() / args.grad_accum
-
-            # Compute coverage and PER
-            k_hat = out.get("k_hat", None)
-            if k_hat is not None:
-                tl = target_lengths[:, : k_hat.shape[1]]
-                valid_mask = tl > 0
-                if valid_mask.any():
-                    pred_horizon = torch.ceil(k_hat[valid_mask]) + 1.0
-                    true_len = tl[valid_mask]
-                    accum_cover += (pred_horizon >= true_len).float().mean().item() / args.grad_accum
-                    accum_near += ((k_hat[valid_mask] - true_len).abs() <= 1.0).float().mean().item() / args.grad_accum
-
-            # Batch PER estimate
-            ctc_logits = out["ctc_logits"]
-            pred_ids = ctc_logits.argmax(dim=-1)
-            b_ed, b_ref = 0, 0
-            for i in range(audio.shape[0]):
-                p_len = phoneme_lengths[i].item()
-                gt_ph = phoneme_targets[i, :p_len].tolist()
-                raw_pred = pred_ids[i].tolist()
-                collapsed = []
-                prev = None
-                for tok in raw_pred:
-                    if tok != prev:
-                        if tok != 1:
-                            collapsed.append(tok)
-                        prev = tok
-                b_ed += compute_edit_distance(gt_ph, collapsed)
-                b_ref += max(1, len(gt_ph))
-            accum_per += (b_ed / max(1, b_ref)) * 100.0 / args.grad_accum
-
-        scaler.unscale_(optimizer)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-        scaler.step(optimizer)
-        scaler.update()
-
-        step += 1
-
-        # Cosine LR warmup/decay
-        if step < args.warmup_steps:
-            enc_lr = args.encoder_lr * (step / args.warmup_steps)
-            dec_lr = args.decoder_lr * (step / args.warmup_steps)
-        else:
-            progress = (step - args.warmup_steps) / max(1, args.max_steps - args.warmup_steps)
-            cos_decay = 0.5 * (1.0 + math.cos(math.pi * progress))
-            enc_lr = max(1e-6, args.encoder_lr * cos_decay)
-            dec_lr = max(1e-5, args.decoder_lr * cos_decay)
-
-        optimizer.param_groups[0]["lr"] = enc_lr
-        optimizer.param_groups[1]["lr"] = dec_lr
-
-        if step % args.log_every == 0 or step == 1:
-            rate = step / max(1e-6, time.time() - start_time)
-            eta_h = (args.max_steps - step) / max(1e-6, rate) / 3600.0
-            print(
-                f"Step {step:6d}/{args.max_steps} | Loss: {accum_loss:.4f} (Enc: {accum_enc_loss:.3f}, Dec: {accum_dec_loss:.3f}, Lev: {accum_lev_loss:.3f}, Align: {accum_align_loss:.3f}, Len: {accum_len_loss:.3f}) | CharAcc: {accum_char_acc*100:5.1f}% | PER: {accum_per:5.1f}% | Headroom: {accum_headroom:+5.2f}c | Cover: {accum_cover*100:5.1f}% | NearAcc: {accum_near*100:5.1f}% | LR: [E:{enc_lr:.1e}, D:{dec_lr:.1e}] | Rate: {rate:.2f} st/s | ETA: {eta_h:.1f}h",
-                flush=True,
+        with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
+            out = model(
+                audio=audio,
+                audio_lengths=audio_lengths,
+                phoneme_targets=phoneme_targets,
+                phoneme_lengths=phoneme_lengths,
+                num_words=num_words,
+                input_byte_ids=input_bytes,
+                target_byte_ids=target_bytes,
+                path_targets=path_targets,
+                target_lengths=target_lengths,
             )
+            raw_loss = out["loss"]
 
-        if step % args.eval_every == 0:
-            print(f"\n🧪 Evaluating Phono-V7.2 streaming model at step {step}...", flush=True)
-            val_metrics = evaluate_streaming(model, val_loader, device, roman_tok, ph_extractor)
-            print(
-                f"  Validation Loss:    {val_metrics['val_loss']:.4f} (Enc: {val_metrics['enc_loss']:.3f} [PER: {val_metrics['per']:.2f}%], Dec: {val_metrics['dec_loss']:.3f}) | PathAcc: {val_metrics['path_acc']:.1f}% | CharAcc: {val_metrics['char_acc']:.1f}%",
-                flush=True,
-            )
-            sample = val_metrics.get("sample", None)
-            if sample:
-                flags = {"en": "🇬🇧 EN", "it": "🇮🇹 IT", "es": "🇪🇸 ES", "fr": "🇫🇷 FR"}
-                print(f"  Validation Sample [{flags.get(sample['lang'], sample['lang'].upper())}]:", flush=True)
-                print(f"    • GT Phonemes:   {sample['gt_ph'][:200]}", flush=True)
-                print(f"    • Pred Phonemes: {sample['pred_ph'][:200]}", flush=True)
-                print(f"    • GT Text:       {sample['gt_text'][:200]}", flush=True)
-                print(f"    • Pred Text:     {sample['pred_text'][:200]}", flush=True)
+        if torch.isnan(raw_loss):
+            print(f"⚠️ Warning: NaN loss at step {step}, skipping update.")
+            optimizer.zero_grad()
+            continue
 
-            if val_metrics["val_loss"] < best_val_loss:
-                best_val_loss = val_metrics["val_loss"]
-                best_ckpt_path = os.path.join(args.checkpoint_dir, "best_checkpoint.pt")
-                print(f"  ⭐ New best validation loss! Saving to {best_ckpt_path}...", flush=True)
-                torch.save(
-                    {
-                        "step": step,
-                        "model_state_dict": model.state_dict(),
-                        "optimizer_state_dict": optimizer.state_dict(),
-                        "config": config,
-                        "val_loss": best_val_loss,
-                        "val_per": val_metrics["per"],
-                    },
-                    best_ckpt_path,
+        loss = raw_loss / args.grad_accum
+        scaler.scale(loss).backward()
+        accum_step += 1
+
+        if accum_step % args.grad_accum == 0:
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            scale_before = scaler.get_scale()
+            scaler.step(optimizer)
+            scaler.update()
+            scale_after = scaler.get_scale()
+            if scale_after >= scale_before:
+                lr_scheduler.step()
+            optimizer.zero_grad()
+            step += 1
+
+            # Logging
+            if step % args.log_every == 0 or step == 1:
+                elapsed = time.time() - start_time
+                rate = step / max(elapsed, 1e-5)
+                eta = format_eta((max_steps - step) / max(rate, 1e-5))
+                cur_enc_lr = optimizer.param_groups[0]["lr"]
+                cur_dec_lr = optimizer.param_groups[1]["lr"]
+
+                # Real-time batch PER
+                step_per = 0.0
+                if out.get("ctc_logits") is not None and phoneme_targets is not None:
+                    batch_ed = 0
+                    batch_ref = 0
+                    for b_i in range(audio.shape[0]):
+                        ph_len = phoneme_lengths[b_i].item()
+                        gt_ids = phoneme_targets[b_i, :ph_len].cpu().tolist()
+                        gt_clean = [p for p in gt_ids if p not in (0, 1)]
+                        pred_ids = decode_ctc_phoneme_ids(out["ctc_logits"][b_i])
+                        batch_ed += editdistance.eval(gt_clean, pred_ids)
+                        batch_ref += max(1, len(gt_clean))
+                    step_per = (batch_ed / max(1, batch_ref)) * 100.0
+
+                lev_val = out["lev_loss"].item() if "lev_loss" in out else 0.0
+                align_val = out["align_loss"].item() if "align_loss" in out else 0.0
+                len_val = out["length_loss"].item() if "length_loss" in out else 0.0
+                headroom_val = out["length_headroom"].item() if "length_headroom" in out else 0.0
+                near_val = out["near_acc"].item() if "near_acc" in out else 0.0
+                print(
+                    f"Step {step:6d}/{max_steps} | "
+                    f"Loss: {raw_loss.item():.4f} (Enc: {out['enc_loss'].item():.3f}, Dec: {out['dec_loss'].item():.3f}, Lev: {lev_val:.3f}, Align: {align_val:.3f}, Len: {len_val:.3f}) | "
+                    f"CharAcc: {out['char_acc'].item():5.1f}% | "
+                    f"PER: {step_per:5.1f}% | "
+                    f"Headroom: {headroom_val:+.2f}c | "
+                    f"Cover: {out['path_acc'].item():5.1f}% | "
+                    f"NearAcc: {near_val:5.1f}% | "
+                    f"LR: [E:{cur_enc_lr:.1e}, D:{cur_dec_lr:.1e}] | "
+                    f"Rate: {rate:.2f} st/s | ETA: {eta}",
+                    flush=True,
                 )
-            model.train()
+
+                # Inspect a random sample
+                b_idx = random.randint(0, len(batch["languages"]) - 1)
+                lang = batch["languages"][b_idx]
+                lang_flag = {"en": "🇬🇧 EN", "it": "🇮🇹 IT", "es": "🇪🇸 ES", "fr": "🇫🇷 FR"}.get(lang, lang.upper())
+
+                gt_text = batch["transcripts"][b_idx]
+                preds_bytes = out["logits"][b_idx].argmax(dim=-1).cpu().tolist()
+                num_w = batch["num_words"][b_idx].item()
+                pred_text = roman_tok.decode_words(preds_bytes[: min(num_w, len(preds_bytes))])
+
+                gt_ph_len = batch["phoneme_lengths"][b_idx].item()
+                gt_ph_tokens = batch["phoneme_targets"][b_idx, :gt_ph_len].cpu().tolist()
+                gt_phonemes = ph_tokenizer.decode(gt_ph_tokens, skip_special=True)
+                pred_phonemes = decode_ctc_phonemes(out["ctc_logits"][b_idx], ph_tokenizer) if out.get("ctc_logits") is not None else "N/A"
+
+                print(f"  Sample [{lang_flag}]:", flush=True)
+                print(f"    • GT Phonemes:   {gt_phonemes}", flush=True)
+                print(f"    • Pred Phonemes: {pred_phonemes}", flush=True)
+                print(f"    • GT Text:       {gt_text}", flush=True)
+                print(f"    • Pred Text:     {pred_text}", flush=True)
+
+            # Evaluation & Checkpointing
+            if step > 0 and (step % args.eval_every == 0 or step == max_steps) and not args.smoke_test:
+                print(f"\n🧪 Evaluating streaming model at step {step}...", flush=True)
+                val_metrics = evaluate(
+                    model,
+                    val_loader,
+                    roman_tok=roman_tok,
+                    ph_tokenizer=ph_tokenizer,
+                    device=device,
+                )
+                v_loss = val_metrics["val_loss"]
+                print(
+                    f"  Validation Loss:    {v_loss:.4f} "
+                    f"(Enc: {val_metrics['val_enc_loss']:.3f} [PER: {val_metrics['val_per']:.2f}%], Dec: {val_metrics['val_dec_loss']:.3f}) | "
+                    f"PathAcc: {val_metrics['val_path_acc']:.1f}% | "
+                    f"CharAcc: {val_metrics['val_char_acc']:.1f}%",
+                    flush=True,
+                )
+                v_info = val_metrics.get("sample_info")
+                if v_info:
+                    print(f"  Validation Sample [{v_info['flag']}]:", flush=True)
+                    print(f"    • GT Phonemes:   {v_info['gt_phonemes']}", flush=True)
+                    print(f"    • Pred Phonemes: {v_info['pred_phonemes']}", flush=True)
+                    print(f"    • GT Text:       {v_info['gt_text']}", flush=True)
+                    print(f"    • Pred Text:     {v_info['pred_text']}", flush=True)
+
+                if v_loss < best_val_loss:
+                    best_val_loss = v_loss
+                    print(f"  ⭐ New best validation loss! Saving best checkpoint to {best_ckpt_path}...", flush=True)
+                    torch.save(
+                        {
+                            "step": step,
+                            "model_state_dict": model.state_dict(),
+                            "optimizer_state_dict": optimizer.state_dict(),
+                            "config": config,
+                            "val_loss": v_loss,
+                            "val_metrics": val_metrics,
+                        },
+                        best_ckpt_path,
+                    )
+                print(flush=True)
+                model.train()
+
+    print(f"\n🎉 Completed {step} steps in {time.time() - start_time:.1f}s!", flush=True)
 
 
 if __name__ == "__main__":

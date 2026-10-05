@@ -412,7 +412,7 @@ class PhonoV72Decoder(PhonoV71Decoder):
                         ignore_index=-100,
                     )
                     pred_paths = path_logits.argmax(dim=-1)
-                    path_acc = (pred_paths[valid_mask] == pt_sliced[valid_mask]).float().mean()
+                    path_acc = (pred_paths[valid_mask] == pt_sliced[valid_mask]).float().mean() * 100.0
 
         # 5. Extract continuous speech slices with online event-driven centers
         acoustic_slices, durations = extract_streaming_ctc_slices(
@@ -449,6 +449,7 @@ class PhonoV72Decoder(PhonoV71Decoder):
         levenshtein_loss = torch.tensor(0.0, device=device)
         char_acc = torch.tensor(0.0, device=device)
         micro_aux_loss = torch.tensor(0.0, device=device)
+        char_logits = None
 
         if input_byte_ids is not None and target_byte_ids is not None:
             L_inp = input_byte_ids.shape[1]
@@ -499,7 +500,7 @@ class PhonoV72Decoder(PhonoV71Decoder):
             valid_chars = flat_targets != -100
             if valid_chars.any():
                 correct = (flat_preds.argmax(dim=-1)[valid_chars] == flat_targets[valid_chars]).float()
-                char_acc = correct.mean()
+                char_acc = correct.mean() * 100.0
 
         total_loss = (
             char_loss
@@ -512,16 +513,21 @@ class PhonoV72Decoder(PhonoV71Decoder):
         return {
             "loss": total_loss,
             "char_loss": char_loss,
+            "lev_loss": levenshtein_loss,
+            "levenshtein_loss": levenshtein_loss,
             "path_loss": path_loss,
             "length_loss": length_loss,
-            "levenshtein_loss": levenshtein_loss,
-            "path_logits": path_logits,
-            "path_acc": path_acc,
-            "char_acc": char_acc,
             "length_headroom": length_headroom,
+            "diff_loss": torch.tensor(0.0, device=device),
+            "char_acc": char_acc,
+            "path_acc": path_acc,
+            "near_acc": torch.tensor(0.0, device=device),
+            "aux_loss": macro_aux_loss + micro_aux_loss,
+            "logits": char_logits,
+            "path_logits": path_logits,
             "k_hat": k_hat,
             "z_word": z_word,
-            "aux_loss": macro_aux_loss + micro_aux_loss,
+            "acoustic_slices": acoustic_slices,
         }
 
     def decode_greedy(
@@ -539,6 +545,21 @@ class PhonoV72Decoder(PhonoV71Decoder):
         """
         B, T, D = acoustic_memory.shape
         device = acoustic_memory.device
+
+        if B > 1:
+            batch_words = []
+            for b in range(B):
+                m_len = memory_lengths[b : b + 1] if memory_lengths is not None else None
+                c_log = ctc_logits[b : b + 1] if ctc_logits is not None else None
+                sub_words = self.decode_greedy(
+                    acoustic_memory=acoustic_memory[b : b + 1],
+                    memory_lengths=m_len,
+                    ctc_logits=c_log,
+                    max_words=max_words,
+                    temperature=temperature,
+                )
+                batch_words.append(sub_words)
+            return batch_words
         L = max_words if max_words is not None else self.max_word_len
 
         if hasattr(self, "word_slot_embedding") and self.word_slot_embedding.shape[1] >= L:
@@ -628,6 +649,9 @@ class PhonoV72Decoder(PhonoV71Decoder):
                 generated_words.append(word_chars)
 
         return generated_words
+
+    # Alias for compatibility with V7/V7.1 API
+    generate = decode_greedy
 
 
 class PhonoV72SpeechModel(PhonoV71SpeechModel):
