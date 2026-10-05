@@ -15,26 +15,30 @@ def detect_online_word_peaks(
     ctc_logits: torch.Tensor,
     blank_id: int = 1,
     space_id: int = 8,
-    min_frames_per_word: int = 3,
+    min_frames_per_word: int = 4,
     energy_threshold: float = 0.35,
     silence_threshold: float = 0.15,
     max_words: int = 64,
+    boundary_logits: Optional[torch.Tensor] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Detect word acoustic centers incrementally from CTC emissions in temporal order.
+    """Detect word acoustic centers incrementally from CTC emissions or boundary gate in temporal order.
 
-    Operates causally frame-by-frame:
-    - Identifies non-blank speech bursts: E(t) = 1.0 - P_t(blank).
-    - Detects word transitions via CTC space token peaks or silence valleys.
-    - Computes exact center of mass for each speech burst.
+    Operates causally frame-by-frame with multi-frame hysteresis:
+    - If boundary_logits is provided (from dedicated boundary gate):
+      Uses direct 3-class distribution [SPEECH, WORD_SPACE, SILENCE_BLANK].
+    - Otherwise uses CTC blank / space probabilities.
+    - Word boundary requires confirmed space or >= 2 consecutive silence frames.
+    - Minimum word burst duration: 4 frames (80ms) to prevent stop consonant fracturing.
 
     Args:
         ctc_logits: [B, T, V] CTC emission logits.
         blank_id: Token ID for CTC blank.
         space_id: Token ID for word delimiter space.
-        min_frames_per_word: Minimum frame span for a valid word burst.
+        min_frames_per_word: Minimum frame span for a valid word burst (default 4 = 80ms).
         energy_threshold: Non-blank threshold to trigger word onset.
         silence_threshold: Threshold to trigger word boundary / silence.
         max_words: Maximum word slots to return.
+        boundary_logits: Optional [B, T, 3] dedicated boundary gate logits.
 
     Returns:
         word_centers: [B, max_words] frame indices for each detected word center.
@@ -42,11 +46,16 @@ def detect_online_word_peaks(
     """
     B, T, V = ctc_logits.shape
     device = ctc_logits.device
-    probs = F.softmax(ctc_logits, dim=-1)
 
-    blank_probs = probs[:, :, blank_id] if V > blank_id else torch.zeros((B, T), device=device)
-    speech_energy = (1.0 - blank_probs).clamp(min=0.0, max=1.0)  # [B, T]
-    space_probs = probs[:, :, space_id] if V > space_id else torch.zeros((B, T), device=device)
+    if boundary_logits is not None:
+        bg_probs = F.softmax(boundary_logits, dim=-1)
+        speech_energy = bg_probs[:, :, 0]
+        space_probs = bg_probs[:, :, 1]
+    else:
+        probs = F.softmax(ctc_logits, dim=-1)
+        blank_probs = probs[:, :, blank_id] if V > blank_id else torch.zeros((B, T), device=device)
+        speech_energy = (1.0 - blank_probs).clamp(min=0.0, max=1.0)  # [B, T]
+        space_probs = probs[:, :, space_id] if V > space_id else torch.zeros((B, T), device=device)
 
     word_centers = torch.zeros((B, max_words), dtype=torch.long, device=device)
     word_mask = torch.zeros((B, max_words), dtype=torch.bool, device=device)
@@ -59,10 +68,17 @@ def detect_online_word_peaks(
         in_word = False
         current_burst_frames: List[int] = []
         current_burst_weights: List[float] = []
+        silence_run = 0
 
         for t in range(T):
             e_t = energy[t]
-            is_space = sp_probs[t] > 0.4
+            is_space = sp_probs[t] > 0.45
+            is_silence = e_t < silence_threshold
+
+            if is_silence:
+                silence_run += 1
+            else:
+                silence_run = 0
 
             if not in_word:
                 if e_t >= energy_threshold and not is_space:
@@ -71,8 +87,11 @@ def detect_online_word_peaks(
                     current_burst_weights = [e_t]
             else:
                 # Word continuation or transition
-                if is_space or e_t < silence_threshold:
-                    # Word boundary reached
+                # Confirmed boundary requires:
+                # 1. Clear space transition AND current burst >= min_frames_per_word
+                # 2. Confirmed silence run of at least 2 consecutive frames (40ms)
+                is_boundary = (is_space and len(current_burst_frames) >= min_frames_per_word) or (silence_run >= 2)
+                if is_boundary:
                     if len(current_burst_frames) >= min_frames_per_word:
                         w_sum = sum(current_burst_weights)
                         if w_sum > 1e-4:
@@ -112,6 +131,7 @@ def extract_streaming_ctc_slices(
     memory_lengths: Optional[torch.Tensor] = None,
     num_words: Optional[torch.Tensor] = None,
     ctc_logits: Optional[torch.Tensor] = None,
+    boundary_logits: Optional[torch.Tensor] = None,
     forced_word_centers: Optional[torch.Tensor] = None,
     max_word_slots: int = 64,
     window_frames: int = 32,
@@ -130,6 +150,7 @@ def extract_streaming_ctc_slices(
         memory_lengths: [B] valid frames per batch item.
         num_words: [B] number of word slots.
         ctc_logits: Optional [B, T, V] CTC emission logits.
+        boundary_logits: Optional [B, T, 3] dedicated word boundary gate logits.
         forced_word_centers: Optional [B, L] ground-truth word centers.
         max_word_slots: Maximum word slots L.
         window_frames: Continuous window size (32 frames = 640ms).
@@ -151,6 +172,8 @@ def extract_streaming_ctc_slices(
         acoustic_memory = F.pad(acoustic_memory, (0, 0, 0, pad_len))
         if ctc_logits is not None:
             ctc_logits = F.pad(ctc_logits, (0, 0, 0, pad_len))
+        if boundary_logits is not None:
+            boundary_logits = F.pad(boundary_logits, (0, 0, 0, pad_len))
         T = S_ac
 
     # Determine L
@@ -168,10 +191,12 @@ def extract_streaming_ctc_slices(
     # 1. Obtain Word Centers
     if forced_word_centers is not None:
         t_center = forced_word_centers[:, :L].clamp(min=0, max=T - 1).float()
-    elif ctc_logits is not None:
-        # Online event-driven word peak detection
+    elif ctc_logits is not None or boundary_logits is not None:
+        # Online event-driven word peak detection with hysteresis
+        eff_logits = ctc_logits if ctc_logits is not None else torch.zeros((B, T, 10), device=device)
         online_centers, online_mask = detect_online_word_peaks(
-            ctc_logits=ctc_logits,
+            ctc_logits=eff_logits,
+            boundary_logits=boundary_logits,
             blank_id=blank_id,
             space_id=space_id,
             max_words=L,
