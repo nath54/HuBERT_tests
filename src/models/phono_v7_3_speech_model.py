@@ -160,8 +160,9 @@ class PhonoV73AcousticBackbone(PhonoV64GatedDiffusionForPreTraining):
         boundary_targets: Optional[torch.Tensor] = None,
         **kwargs,
     ) -> Dict[str, Any]:
-        # 1. CNN acoustic feature extraction
-        features = self.feature_extractor(audio)
+        # 1. CNN acoustic feature extraction & projection
+        cnn_features = self.feature_extractor(audio)
+        features = self.feature_projection(cnn_features)
         input_lengths = self._get_feat_extract_output_lengths(audio_lengths) if audio_lengths is not None else None
 
         # 2. Multi-Scale Conformer Encoding
@@ -172,7 +173,11 @@ class PhonoV73AcousticBackbone(PhonoV64GatedDiffusionForPreTraining):
         boundary_logits = self.boundary_gate_head(hidden_state)  # [B, T, 3]
 
         # 4. Recursive Phoneme Emissions
-        refined_logits, base_logits = self.phoneme_head(hidden_state)
+        refined_p_logits, base_p_logits = self.phoneme_head(hidden_state)  # [B, T, 56]
+        state_logits = self.state_router(hidden_state)  # [B, T, 4]
+
+        refined_logits = self.compute_composite_log_probs(state_logits, refined_p_logits)  # [B, T, 64]
+        base_logits = self.compute_composite_log_probs(state_logits, base_p_logits)  # [B, T, 64]
 
         # 5. CTC Loss computation
         ctc_loss = torch.tensor(0.0, device=audio.device)
@@ -180,7 +185,7 @@ class PhonoV73AcousticBackbone(PhonoV64GatedDiffusionForPreTraining):
 
         if targets is not None:
             B_cur, T_cur, _ = refined_logits.shape
-            log_probs = refined_logits.log_softmax(dim=-1).transpose(0, 1)  # (T, B, V)
+            log_probs = refined_logits.transpose(0, 1).float()  # (T, B, 64)
             i_lens = input_lengths if input_lengths is not None else torch.full((B_cur,), T_cur, device=audio.device, dtype=torch.long)
             t_lens = target_lengths if target_lengths is not None else torch.full((B_cur,), targets.shape[1], device=audio.device, dtype=torch.long)
 
@@ -275,10 +280,11 @@ class PhonoV73SpeechModel(PhonoV72SpeechModel):
         # 2. Forced Alignment (during training)
         word_centers = None
         align_loss = torch.tensor(0.0, device=audio.device)
+        boundary_loss = enc_out.get("boundary_loss", torch.tensor(0.0, device=audio.device))
         if self.config.use_forced_alignment and phoneme_targets is not None and refined_logits is not None:
             try:
                 B_cur, T_frames, _ = refined_logits.shape
-                log_probs = refined_logits.log_softmax(dim=-1)
+                log_probs = refined_logits
                 i_lens = input_lengths if input_lengths is not None else torch.full((B_cur,), T_frames, device=audio.device)
                 p_lens = phoneme_lengths if phoneme_lengths is not None else torch.full((B_cur,), phoneme_targets.shape[1], device=audio.device)
 
@@ -304,6 +310,7 @@ class PhonoV73SpeechModel(PhonoV72SpeechModel):
                             ignore_index=-100,
                         )
                         enc_loss = enc_loss + 0.3 * b_loss
+                        boundary_loss = b_loss
 
                     centers = self.aligner.get_word_centers(aligned_tokens, space_id=8)
                     if centers is not None and num_words is not None:
@@ -336,7 +343,7 @@ class PhonoV73SpeechModel(PhonoV72SpeechModel):
             "total_loss": total_loss,
             "dec_loss": dec_loss,
             "enc_loss": enc_loss,
-            "boundary_loss": enc_out.get("boundary_loss", torch.tensor(0.0, device=audio.device)),
+            "boundary_loss": boundary_loss,
             "char_loss": dec_out["char_loss"],
             "lev_loss": dec_out.get("lev_loss", torch.tensor(0.0)),
             "align_loss": align_loss,
@@ -382,13 +389,16 @@ class PhonoV73SpeechModel(PhonoV72SpeechModel):
             else:
                 skipped += 1
 
+        self.load_state_dict(model_dict)
+
         missing_keys = [
             k for k in model_dict.keys()
             if k not in state_dict
             and "base_head" not in k
             and "refiner" not in k
             and "boundary_gate" not in k
-            and "conv_b" not in k
+            and "conv_d" not in k
+            and "dilated_proj" not in k
         ]
         return {
             "transferred": transferred,

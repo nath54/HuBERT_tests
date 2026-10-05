@@ -24,14 +24,24 @@ from src.models.phono_v7_3_speech_model import (
 
 
 def test_multi_scale_dilated_conformer_conv():
+    from src.models.conformer_layers import ConformerConvModule
     B, T, D = 2, 40, 64
-    conv = MultiScaleDilatedConformerConvModule(embed_dim=D, dropout=0.0)
-    x = torch.randn(B, T, D)
+    base_conv = ConformerConvModule(embed_dim=D, dropout=0.0)
+    multi_conv = MultiScaleDilatedConformerConvModule(embed_dim=D, dropout=0.0)
 
-    # Initial output should be zero because pointwise_conv2 is zero-initialized
-    out = conv(x)
-    assert out.shape == (B, T, D)
-    assert torch.allclose(out, torch.zeros_like(out)), "Multi-scale conv must be zero-initialized for warm-start"
+    # Load base weights into multi_conv
+    multi_conv.load_state_dict(base_conv.state_dict(), strict=False)
+
+    x = torch.randn(B, T, D)
+    base_conv.eval()
+    multi_conv.eval()
+
+    with torch.no_grad():
+        out_base = base_conv(x)
+        out_multi = multi_conv(x)
+
+    assert out_multi.shape == (B, T, D)
+    assert torch.allclose(out_base, out_multi, atol=1e-5), "Multi-scale dilated conv must match base conv identically on step 0"
 
 
 def test_decoupled_boundary_gate():

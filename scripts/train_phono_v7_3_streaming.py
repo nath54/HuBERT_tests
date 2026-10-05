@@ -284,21 +284,17 @@ def main():
     train_dataset = MultilingualAudioDataset(
         train_utts,
         roman_tokenizer=roman_tok,
-        phoneme_tokenizer=ph_tokenizer,
         phoneme_extractor=ph_extractor,
-        sample_rate=16000,
         max_duration_seconds=20.0,
     )
     val_dataset = MultilingualAudioDataset(
         val_utts,
         roman_tokenizer=roman_tok,
-        phoneme_tokenizer=ph_tokenizer,
         phoneme_extractor=ph_extractor,
-        sample_rate=16000,
         max_duration_seconds=20.0,
     )
 
-    collator = MultilingualSpeechCollator(pad_id=0, pad_byte_id=0)
+    collator = MultilingualSpeechCollator(roman_tok)
 
     train_sampler = MultilingualBalancedBatchSampler(
         train_utts,

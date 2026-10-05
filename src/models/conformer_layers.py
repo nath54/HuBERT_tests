@@ -97,37 +97,64 @@ class ConformerConvModule(nn.Module):
 class MultiScaleDilatedConformerConvModule(nn.Module):
     """Multi-Scale Dilated Depthwise Separable Convolution for Phono-V7.3.
 
-    Expands temporal receptive field from 620ms to 2,420ms without increasing parameters:
-    - Branch 1: kernel=15, dilation=1 -> 300ms (sharp phone transitions)
+    Expands temporal receptive field from 620ms to 2,420ms:
+    - Base Depthwise Conv: kernel=31, dilation=1 -> 620ms (inherits 100% of V7.2 trained weights)
     - Branch 2: kernel=31, dilation=2 -> 1,220ms (intra-word coarticulation)
     - Branch 3: kernel=31, dilation=4 -> 2,420ms (inter-word cadence & prosody)
+    - Zero-initialized dilated projection guarantees EXACT 0.0000 perturbation at step 0!
     """
 
     def __init__(
         self,
         embed_dim: int,
+        kernel_size: int = 31,
         dropout: float = 0.1,
     ):
         super().__init__()
+        assert kernel_size % 2 == 1, "kernel_size must be odd for symmetric padding"
         self.embed_dim = embed_dim
-        self.layer_norm = nn.LayerNorm(embed_dim)
+        self.kernel_size = kernel_size
+        padding = (kernel_size - 1) // 2
 
+        self.layer_norm = nn.LayerNorm(embed_dim)
         # Pointwise Conv 1: D -> 2*D
         self.pointwise_conv1 = nn.Conv1d(embed_dim, 2 * embed_dim, kernel_size=1)
         self.glu = nn.GLU(dim=1)
 
-        # Split embed_dim into 3 branches
-        d1 = embed_dim // 3
-        d2 = embed_dim // 3
-        d3 = embed_dim - (d1 + d2)
-        self.branch_dims = (d1, d2, d3)
+        # Base Depthwise Conv: D -> D (100% parameter match with V7.1/V7.2)
+        self.depthwise_conv = nn.Conv1d(
+            embed_dim,
+            embed_dim,
+            kernel_size=kernel_size,
+            padding=padding,
+            groups=embed_dim,
+            bias=False,
+        )
 
-        # Branch 1: k=15, d=1 (pad = 7)
-        self.conv_b1 = nn.Conv1d(d1, d1, kernel_size=15, padding=7, dilation=1, groups=d1, bias=False)
-        # Branch 2: k=31, d=2 (pad = 30)
-        self.conv_b2 = nn.Conv1d(d2, d2, kernel_size=31, padding=30, dilation=2, groups=d2, bias=False)
-        # Branch 3: k=31, d=4 (pad = 60)
-        self.conv_b3 = nn.Conv1d(d3, d3, kernel_size=31, padding=60, dilation=4, groups=d3, bias=False)
+        # Dilated acoustic branches (d=2 -> 1,220ms, d=4 -> 2,420ms)
+        self.conv_d2 = nn.Conv1d(
+            embed_dim,
+            embed_dim,
+            kernel_size=kernel_size,
+            padding=(kernel_size - 1),
+            dilation=2,
+            groups=embed_dim,
+            bias=False,
+        )
+        self.conv_d4 = nn.Conv1d(
+            embed_dim,
+            embed_dim,
+            kernel_size=kernel_size,
+            padding=(kernel_size - 1) * 2,
+            dilation=4,
+            groups=embed_dim,
+            bias=False,
+        )
+        self.dilated_proj = nn.Conv1d(2 * embed_dim, embed_dim, kernel_size=1)
+        # Zero-initialize the dilated projection so step 0 is 100% bitwise identical to V7.2
+        nn.init.zeros_(self.dilated_proj.weight)
+        if self.dilated_proj.bias is not None:
+            nn.init.zeros_(self.dilated_proj.bias)
 
         self.batch_norm = nn.BatchNorm1d(embed_dim)
         self.activation = nn.SiLU()
@@ -136,24 +163,20 @@ class MultiScaleDilatedConformerConvModule(nn.Module):
         self.pointwise_conv2 = nn.Conv1d(embed_dim, embed_dim, kernel_size=1)
         self.dropout = nn.Dropout(dropout)
 
-        # Zero-initialize final projection for seamless warm-start!
-        nn.init.zeros_(self.pointwise_conv2.weight)
-        if self.pointwise_conv2.bias is not None:
-            nn.init.zeros_(self.pointwise_conv2.bias)
-
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        h = self.layer_norm(x)
-        h = h.transpose(1, 2)  # (B, D, T)
-        h = self.pointwise_conv1(h)
-        h = self.glu(h)  # (B, D, T)
+        # 1. Pre-LN
+        h = self.layer_norm(x).transpose(1, 2)  # (B, D, T)
 
-        # Multi-scale branch split & conv
-        d1, d2, d3 = self.branch_dims
-        h1 = self.conv_b1(h[:, :d1, :])
-        h2 = self.conv_b2(h[:, d1 : d1 + d2, :])
-        h3 = self.conv_b3(h[:, d1 + d2 :, :])
-        h = torch.cat([h1, h2, h3], dim=1)
+        # 2. Pointwise Conv 1 + GLU
+        h = self.glu(self.pointwise_conv1(h))  # (B, D, T)
 
+        # 3. Base depthwise + multi-scale dilated residual
+        h_d2 = self.conv_d2(h)
+        h_d4 = self.conv_d4(h)
+        h_dilated = self.dilated_proj(torch.cat([h_d2, h_d4], dim=1))
+        h = self.depthwise_conv(h) + h_dilated
+
+        # 4. BatchNorm + Activation + Pointwise Conv 2 + Dropout
         h = self.batch_norm(h)
         h = self.activation(h)
         h = self.pointwise_conv2(h)
