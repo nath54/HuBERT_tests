@@ -141,7 +141,7 @@ class OverlappingLengthMoEDecoder(PhonoV72Decoder):
         # Overlapping Length Experts Router: z_word -> 7 expert logits
         self.macro_expert_router = nn.Linear(config.macro_dim, num_experts)
         # Expert Conditioning Embeddings
-        self.expert_embeddings = nn.Embedding(num_experts, config.macro_dim)
+        self.expert_embeddings = nn.Embedding(num_experts, config.micro_dim)
 
     def forward(
         self,
@@ -240,8 +240,8 @@ class OverlappingLengthMoEDecoder(PhonoV72Decoder):
                 path_acc = is_valid.float().mean() * 100.0
 
         # Expert Conditioning Vector
-        expert_cond = self.expert_embeddings(top1_experts)  # [B, L, macro_dim]
-        z_conditioned = z_word + 0.1 * expert_cond
+        expert_cond = self.expert_embeddings(top1_experts)  # [B, L, micro_dim]
+        z_conditioned = z_word
 
         # 5. Extract continuous speech slices with forced word centers
         acoustic_slices, durations = extract_streaming_ctc_slices(
@@ -289,7 +289,7 @@ class OverlappingLengthMoEDecoder(PhonoV72Decoder):
             flat_slices = acoustic_slices[:, :L_inp].reshape(B * L_inp, self.config.acoustic_window_frames, -1)
             flat_windows = z_windows[:, :L_inp].reshape(B * L_inp, self.window_size, -1)
             flat_bytes = input_byte_ids.reshape(B * L_inp, K_inp)
-            flat_path_bias = path_bias.reshape(B * L_inp, -1)
+            flat_path_bias = path_bias.reshape(B * L_inp, 1, self.config.micro_dim)
             flat_path_id = top1_experts[:, :L_inp].reshape(B * L_inp).clamp(0, self.config.num_paths - 1)
 
             flat_logits, micro_aux = self.micro_head(
@@ -353,6 +353,125 @@ class OverlappingLengthMoEDecoder(PhonoV72Decoder):
         self.last_dec_out = res
         return res
 
+    def forward_text(
+        self,
+        z_word: torch.Tensor,
+        input_byte_ids: torch.Tensor,
+        target_byte_ids: torch.Tensor,
+        target_lengths: torch.Tensor,
+    ) -> Dict[str, Any]:
+        """Forward pass for pure Text Middle-Training without acoustic encoder."""
+        B, L, _ = z_word.shape
+        device = z_word.device
+
+        # 1. Overlapping Length Experts Classification & Anti-Collapse MoE Routing
+        expert_logits = self.macro_expert_router(z_word)  # [B, L, 7]
+        if self.training and self.routing_jitter_std > 0.0:
+            router_noise = torch.randn_like(expert_logits) * self.routing_jitter_std
+            routed_logits = expert_logits + router_noise
+        else:
+            routed_logits = expert_logits
+
+        expert_probs = F.softmax(routed_logits, dim=-1)
+        top1_experts = routed_logits.argmax(dim=-1)
+
+        valid_len_mask = target_lengths > 0
+        valid_mask_all = compute_interval_validity_mask(target_lengths)
+
+        flat_valid_lens = valid_len_mask.reshape(-1)
+        flat_logits = expert_logits.reshape(-1, self.num_experts)[flat_valid_lens]
+        flat_targets = valid_mask_all.reshape(-1, self.num_experts)[flat_valid_lens]
+        flat_probs = expert_probs.reshape(-1, self.num_experts)[flat_valid_lens]
+        flat_top1 = top1_experts.reshape(-1)[flat_valid_lens]
+
+        bce_loss = F.binary_cross_entropy_with_logits(flat_logits, flat_targets)
+        balance_loss = compute_load_balancing_loss(flat_probs, flat_top1, self.num_experts)
+        path_loss = bce_loss + self.load_balance_weight * balance_loss
+
+        is_valid = flat_targets.gather(-1, flat_top1.unsqueeze(-1)).squeeze(-1) > 0.5
+        path_acc = is_valid.float().mean() * 100.0
+
+        # Expert Conditioning Vector
+        expert_cond = self.expert_embeddings(top1_experts)
+        z_conditioned = z_word
+
+        # Continuous Length Guidance
+        durations = torch.zeros((B, L), device=device)
+        k_hat = self.length_predictor(z_conditioned, durations)
+        length_loss, length_headroom = asymmetric_length_loss(
+            k_hat=k_hat,
+            k_true=target_lengths,
+            beta_under=self.asymmetric_beta_under,
+            beta_over=self.asymmetric_beta_over,
+            delta=self.asymmetric_delta,
+        )
+
+        # Sliding Multi-Word Context Windows
+        z_windows = self.build_word_context_windows(z_conditioned)
+
+        # Micro Character Decoding
+        K_inp = input_byte_ids.shape[2]
+        flat_windows = z_windows.reshape(B * L, self.window_size, self.config.macro_dim)
+        flat_bytes = input_byte_ids.reshape(B * L, K_inp)
+        flat_path_bias = expert_cond.reshape(B * L, 1, self.config.micro_dim)
+        flat_path_id = top1_experts.reshape(B * L).clamp(0, self.config.num_paths - 1)
+
+        flat_logits, micro_aux = self.micro_head(
+            flat_bytes,
+            flat_windows,
+            acoustic_slices=None,
+            path_bias=flat_path_bias,
+            path_id=flat_path_id,
+        )
+        char_logits = flat_logits.view(B, L, K_inp, -1)
+
+        targets = target_byte_ids[:, :L, :K_inp]
+        flat_targets = targets.reshape(-1)
+        flat_preds = flat_logits.reshape(-1, self.config.byte_vocab_size)
+
+        char_loss = F.cross_entropy(
+            flat_preds,
+            flat_targets,
+            ignore_index=-100,
+            label_smoothing=self.config.label_smoothing,
+        )
+
+        levenshtein_loss = torch.tensor(0.0, device=device)
+        if self.levenshtein_loss_weight > 0.0:
+            flat_prob_logits = flat_logits.view(B * L, K_inp, -1)
+            flat_char_targets = targets.reshape(B * L, K_inp)
+            levenshtein_loss = self.levenshtein_loss_fn(flat_prob_logits, flat_char_targets)
+
+        valid_chars = flat_targets != -100
+        char_acc = torch.tensor(0.0, device=device)
+        if valid_chars.any():
+            correct = (flat_preds.argmax(dim=-1)[valid_chars] == flat_targets[valid_chars]).float()
+            char_acc = correct.mean() * 100.0
+
+        aux_moe = torch.nan_to_num(micro_aux, nan=0.0, posinf=0.0, neginf=0.0)
+        total_loss = (
+            char_loss
+            + self.config.macro_path_loss_weight * path_loss
+            + self.length_loss_weight * length_loss
+            + self.levenshtein_loss_weight * levenshtein_loss
+            + self.config.moe_loss_weight * aux_moe
+        )
+
+        return {
+            "loss": total_loss,
+            "char_loss": char_loss,
+            "path_loss": path_loss,
+            "balance_loss": balance_loss,
+            "length_loss": length_loss,
+            "length_headroom": length_headroom,
+            "lev_loss": levenshtein_loss,
+            "char_acc": char_acc,
+            "path_acc": path_acc,
+            "logits": char_logits,
+            "k_hat": k_hat,
+            "z_word": z_word,
+        }
+
 
 @dataclass
 class PhonoV75SpeechConfig(PhonoV71SpeechConfig):
@@ -392,6 +511,20 @@ class PhonoV75SpeechModel(PhonoV73SpeechModel):
             out['balance_loss'] = self.decoder.last_dec_out.get('balance_loss', torch.tensor(0.0))
             out['z_word'] = self.decoder.last_dec_out.get('z_word')
         return out
+
+    def forward_text(
+        self,
+        z_word: torch.Tensor,
+        input_byte_ids: torch.Tensor,
+        target_byte_ids: torch.Tensor,
+        target_lengths: torch.Tensor,
+    ) -> Dict[str, Any]:
+        return self.decoder.forward_text(
+            z_word=z_word,
+            input_byte_ids=input_byte_ids,
+            target_byte_ids=target_byte_ids,
+            target_lengths=target_lengths,
+        )
 
     def warm_start_from_v7_3(self, ckpt_path: Union[str, Path]) -> Dict[str, int]:
         """Loads weights from Phono-V7.3 checkpoint with zero perturbation."""
