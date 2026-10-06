@@ -132,13 +132,22 @@ class FastTextPhonemeWordEncoder(nn.Module):
         h = emb + pos_emb + mod_emb
         pad_mask = tokens == pad_id
 
+        # Check for all-padding words to prevent PyTorch MultiheadAttention all-masked row NaN
+        non_pad_counts = (tokens != pad_id).sum(dim=1)
+        is_all_pad = non_pad_counts == 0
+        safe_pad_mask = pad_mask.clone()
+        if is_all_pad.any():
+            safe_pad_mask[is_all_pad, 0] = False
+
         # Transformer encoding
-        h = self.transformer(h, src_key_padding_mask=pad_mask)
+        h = self.transformer(h, src_key_padding_mask=safe_pad_mask)
         h = self.norm(h)
 
         # Sequence-level pooling into a single vector per word
-        word_h = self.pooling(h, pad_mask=pad_mask)
+        word_h = self.pooling(h, pad_mask=safe_pad_mask)
 
         # Project to target latent dimension (z_word)
         z_pred = self.proj(word_h)
+        if is_all_pad.any():
+            z_pred[is_all_pad] = 0.0
         return z_pred

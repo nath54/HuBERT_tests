@@ -234,13 +234,12 @@ def main():
 
     max_steps = 20 if args.smoke_test else args.max_steps
     scheduler = get_cosine_schedule_with_warmup(optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=max_steps)
-    scaler = torch.amp.GradScaler("cuda", enabled=device.type == "cuda")
 
     save_dir = Path(args.save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
     best_val_loss = float("inf")
 
-    print(f"\n🔥 Starting Fast Text Middle-Training ({max_steps} steps, BS={args.batch_size * args.grad_accum})...", flush=True)
+    print(f"\n🔥 Starting Fast Text Middle-Training in Pure FP32 ({max_steps} steps, BS={args.batch_size * args.grad_accum})...", flush=True)
     start_time = time.time()
     step = 0
     accum_step = 0
@@ -261,33 +260,27 @@ def main():
         B, L, K = input_bytes.shape
         flat_bytes = input_bytes.reshape(B * L, K)
 
-        # 1. Encode words with frozen distilled FastTextPhonemeWordEncoder
+        # 1. Encode words with frozen distilled FastTextPhonemeWordEncoder (Pure FP32)
         with torch.no_grad():
             z_words = text_encoder(byte_ids=flat_bytes).view(B, L, -1)
 
-        # 2. Decoder Forward with Overlapping Length Experts MoE
-        with torch.amp.autocast("cuda", enabled=device.type == "cuda"):
-            out = model.forward_text(
-                z_word=z_words,
-                input_byte_ids=input_bytes,
-                target_byte_ids=target_bytes,
-                target_lengths=target_lengths,
-            )
-            loss = out["loss"] / args.grad_accum
+        # 2. Decoder Forward with Overlapping Length Experts MoE (Pure FP32)
+        out = model.forward_text(
+            z_word=z_words,
+            input_byte_ids=input_bytes,
+            target_byte_ids=target_bytes,
+            target_lengths=target_lengths,
+        )
+        loss = out["loss"] / args.grad_accum
 
-        scaler.scale(loss).backward()
+        loss.backward()
         accum_step += 1
 
         if accum_step % args.grad_accum == 0:
-            scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(decoder_params, 1.0)
-            scale_before = scaler.get_scale()
-            scaler.step(optimizer)
-            scaler.update()
-            scale_after = scaler.get_scale()
-            if scale_before <= scale_after:
-                scheduler.step()
+            optimizer.step()
             optimizer.zero_grad()
+            scheduler.step()
             step += 1
 
             if step % args.log_every == 0 or step == 1 or args.smoke_test:
@@ -322,13 +315,12 @@ def main():
                         v_flat = v_inp.reshape(v_B * v_L, v_K)
                         v_z = text_encoder(byte_ids=v_flat).view(v_B, v_L, -1)
 
-                        with torch.amp.autocast("cuda", enabled=device.type == "cuda"):
-                            v_out = model.forward_text(
-                                z_word=v_z,
-                                input_byte_ids=v_inp,
-                                target_byte_ids=v_tgt,
-                                target_lengths=v_lens,
-                            )
+                        v_out = model.forward_text(
+                            z_word=v_z,
+                            input_byte_ids=v_inp,
+                            target_byte_ids=v_tgt,
+                            target_lengths=v_lens,
+                        )
                         val_losses.append(v_out["loss"].item())
                         val_char_accs.append(v_out["char_acc"].item())
                         val_path_accs.append(v_out["path_acc"].item())
