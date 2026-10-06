@@ -373,6 +373,7 @@ class PhonoV73SpeechModel(PhonoV72SpeechModel):
             "k_hat": dec_out.get("k_hat"),
             "ctc_logits": refined_logits,
             "boundary_logits": boundary_logits,
+            "z_word": dec_out.get("z_word"),
         }
 
     def warm_start_from_v7_2(self, checkpoint_path: str) -> Dict[str, int]:
