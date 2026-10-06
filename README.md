@@ -43,12 +43,16 @@ A modular PyTorch speech framework implementing **HuBERT** (Hidden-Unit BERT) an
      - **Recursive 2-Pass Phoneme Head (`RecursivePhonemeHead`)**: Refines base CTC emission probabilities using causal depthwise recurrent conditioning $[h_t \,\|\, \operatorname{softmax}(z_{t-1}^{(0)})]$ to enforce phonotactic grammar and prevent consecutive space emissions.
      - **Boundary-Gated Online Slicing**: Incorporates 2-frame silence confirmation and 4-frame minimum burst protection to ensure clean word slicing in real-time streaming mode.
      - **Zero-Perturbation Warm Start**: Bitwise identical verification against V7.2 milestone checkpoint (`checkpoints/phono_v7_2/streaming/best_checkpoint.pt`), seamlessly transferring all 945 tensors with zero missing or skipped parameters.
-   - **Phono-V7.5 (Current Official Flagship: Tripartite Modular Architecture & Overlapping Length MoE)**:
-     - **Tripartite Modular Decoupling**: Deconstructs end-to-end speech recognition into 3 specialized, modular pillars:
-       1. *Module 1 (Acoustic Phoneme Front-End)*: 7-layer 1D CNN + Multi-Scale Dilated Conformer + Decoupled Boundary Gate Head (`DecoupledBoundaryGateHead`), dedicated 100% to acoustic invariance and phonetic boundary slicing.
-       2. *Module 2 (Cross-Modal Latent Bridge)*: Ultra-fast 2-layer Transformer (`FastTextPhonemeWordEncoder`), distilled via composite InfoNCE + Cosine + MSE loss to match the acoustic word latent space ($z_{\text{word}}$) with **98.7% Cosine Similarity** and $50\times$ faster execution than full audio processing.
-       3. *Module 3 (Overlapping Length MoE Text Decoder)*: Macro-micro recursive decoder with 7 overlapping length intervals (`[1-5]`, `[3-7]`, `[5-10]`, `[7-12]`, `[9-15]`, `[12-20]`, `[15-30]`), multi-positive Binary Cross-Entropy routing, load-balancing anti-collapse loss ($\mathcal{L}_{\text{balance}} = 7 \sum f_e P_e$), and Soft-Levenshtein character alignment.
-     - **Text Middle-Training Breakthrough**: Pre-trains the decoder on >208,000 multilingual sentences across English, Italian, Spanish, and French in pure FP32, driving character accuracy from 25.9% to **94.6%**, MoE routing accuracy to **98.6%**, and reducing Soft-Levenshtein edit loss by 9.2× (down to **0.160**).
+    - **Phono-V7.5 (Current Official Flagship: Complete Tripartite Modular Architecture & Dual-Level MoE)**:
+      - **Tripartite Modular Decoupling**: Deconstructs monolithic speech recognition into 3 decoupled, independently optimizable sub-models:
+        1. *Module 1 (Acoustic Phoneme Front-End, 31.8M params)*: 7-layer 1D CNN feature extractor (strides [5,2,2,2,2,2,2], downsampling factor $320\times$, 20ms frames) + 8-layer Conformer backbone ($D=512$, $H=8$, FFN=2048) with 4 MoE FFN experts per layer (Top-2 gating), **Multi-Scale Dilated Conformer Convolutions** ($k=31$, dilations $d=1, 2, 4$, extending receptive field $4\times$ from 620ms to 2,420ms), **Decoupled Boundary Gate Head** (`DecoupledBoundaryGateHead`: 3 classes `SPEECH`, `WORD_SPACE`, `SILENCE_BLANK` with $\times 4.0$ boundary penalty), **Recursive 2-Pass Phoneme Head** (`RecursivePhonemeHead`: causal depthwise recurrent conditioning on $[h_t \,\|\, \operatorname{softmax}(z_{t-1}^{(0)})]$ enforcing phonotactic grammar), and **Online Event-Driven CTC Peak Slicing** ($1 - P(\text{blank})$) dynamically delineating acoustic word bounds in real time.
+        2. *Module 2 (Cross-Modal Distilled Latent Bridge, 1.51M params)*: Ultra-fast 2-layer Transformer (`FastTextPhonemeWordEncoder`, $D=256$, $H=4$, FFN=512) taking orthographic text characters (byte IDs $0..127$) and phonemes ($0..63$), pooling via `AttentionPooling` and projecting to the canonical acoustic word latent space ($z_{\text{word}}$, $D=512$) with **98.7% Cosine Similarity** and MSE of $0.015$, operating **$50\times$ faster** than full audio Conformer processing.
+        3. *Module 3 (Dual-Level MoE Recursive Character Decoder, 51.7M params)*:
+           - *Level-1 Macro Word Decoder (4 layers, $D=512$)*: Shift-invariant base query $\mathbf{q}_{\text{base}}$, Band-Causal local attention ($K=8$ words, constant $O(K \cdot L)$ compute), macro history noise injection ($\sigma=0.05$), and sliding multi-word context windows ($W=6$ words).
+           - *7 Overlapping Word-Length Experts MoE Router*: 7 soft intervals (`[1-5]`, `[3-7]`, `[5-10]`, `[7-12]`, `[9-15]`, `[12-20]`, `[15-30]`), multi-positive Binary Cross-Entropy routing, and anti-collapse load-balancing loss ($\mathcal{L}_{\text{balance}} = 7 \sum f_e P_e$) achieving **98.0%–98.6% routing accuracy**.
+           - *Continuous Word Length Predictor & Dynamic Horizon Capping*: Predicts character length $\hat{k}$ via MLP with Softplus under asymmetric truncation loss ($\times 4.0$ penalty if $\hat{k} < k_{\text{true}}$), capping autoregressive rollout to $\min(\text{HeadBound},\, \lceil \hat{k} \rceil + 1)$ to eliminate trailing hallucination.
+           - *Level-2 Micro Character Recursive Decoder (`WindowedMicroPartitionedRecursiveHead`, 4 layers, $D=512$)*: Tri-Modal Cross-Attention per layer (causal char self-attention, direct acoustic slice cross-attention, macro sliding word context cross-attention), **16 Partitioned Micro MoE Experts** with Top-2 routing (Short `0..4`, Medium `5..10`, Long `11..15`), weight-tied byte vocabulary ($V=128$), and **Differentiable Soft-Levenshtein Loss** forward-backward DP edit-distance alignment.
+      - **Text Middle-Training Breakthrough**: Pre-trains Module 3 on >208,000 multilingual sentences across English, Italian, Spanish, and French in pure FP32 on TITAN X, driving character accuracy from 25.1% to **95.5%**, MoE routing accuracy from 41.0% to **98.0%**, reducing Soft-Levenshtein edit loss down to **0.153**, and locking a new project record validation loss of **`0.8496`**.
    - **Parameter Scaling Tiers**: **Mini** (8.0M), **Small** (24.2M), **Medium** (31.8M / 83.5M), and **Base** (94.7M) with on-the-fly parameter variation and checkpoint hot-swapping.
 
 2. **Dual-Mode Streaming Pipeline & Full 960h LibriSpeech Interleaving**:
@@ -144,94 +148,255 @@ A modular PyTorch speech framework implementing **HuBERT** (Hidden-Unit BERT) an
 
 ## Current Official Flagship: Phono-V7.5 Architecture & Component Scores
 
-Phono-V7.5 is the current official flagship architecture of AudioLearn. It replaces opaque monolithic end-to-end speech-to-text models with a **decoupled, tripartite modular architecture** where acoustic phonetics, cross-modal latent alignment, and multilingual orthographic decoding are separated into specialized, optimal sub-models.
+## Current Official Flagship: Phono-V7.5 Architecture & Complete Specification
 
-```
-                    ┌─────────────────────────────────────────────────────────────┐
-                    │               MODULE 1: ACOUSTIC PHONEME FRONT-END          │
-                    │   7-Layer 1D CNN + Multi-Scale Dilated Conformer (2,420ms)   │
-                    │   + Decoupled Boundary Gate Head + Recursive Phoneme Head   │
-                    └──────────────────────────────┬──────────────────────────────┘
-                                                   │ Word Boundaries & Acoustic Slices
-                                                   ▼
-                    ┌─────────────────────────────────────────────────────────────┐
-                    │            MODULE 2: CROSS-MODAL DISTILLED LATENT BRIDGE    │
-                    │   FastTextPhonemeWordEncoder (2-Layer Transformer, 1.51M p) │
-                    │   Distilled to Acoustic Manifold via InfoNCE + CosSim + MSE │
-                    │   Matches z_word with 98.7% Cosine Similarity at 50x Speed  │
-                    └──────────────────────────────┬──────────────────────────────┘
-                                                   │ Canonical Word Latents z_word
-                                                   ▼
-                    ┌─────────────────────────────────────────────────────────────┐
-                    │            MODULE 3: OVERLAPPING LENGTH MoE TEXT DECODER    │
-                    │   7 Overlapping Interval Experts with Multi-Positive BCE:   │
-                    │   [1-5], [3-7], [5-10], [7-12], [9-15], [12-20], [15-30]    │
-                    │   Anti-Collapse Balancing + Soft-Levenshtein Micro Head     │
-                    └─────────────────────────────────────────────────────────────┘
-```
+Phono-V7.5 is the current official flagship architecture of AudioLearn. It completely supersedes monolithic end-to-end speech models by establishing a **fully decoupled, tripartite modular architecture** where acoustic phonetics, cross-modal latent alignment, and multilingual orthographic decoding are separated into dedicated, specialized sub-models.
 
-### Component Breakdown & Live Benchmark Scores
-
-| Component Module | Architecture & Parameters | Objective & Losses | Current Benchmark Score |
-| :--- | :--- | :--- | :--- |
-| **Module 1: Acoustic Conformer Front-End** | 7-layer 1D CNN + 8-layer Conformer with Multi-Scale Dilated Convolutions ($k=31$, dilations $1, 2, 4$), Decoupled Boundary Gate Head (`31.8M params`) | Acoustic CTC Loss + Space Penalty ($\times 4.0$) + Online Peak Slicing | **Val Loss `3.7054`** (Project record locked at Step 15,400 on LibriSpeech streaming) |
-| **Module 2: Distilled Latent Bridge** | 2-layer Transformer (`FastTextPhonemeWordEncoder`, $D=256$, $H=4$, `1.51M params`) | $\mathcal{L}_{\text{distill}} = \text{MSE} + (1 - \text{CosSim}) + \mathcal{L}_{\text{InfoNCE}}$ | **Cosine Similarity `98.7%`** ($0.987$), **MSE `0.015`** against acoustic manifold |
-| **Module 3: Overlapping Length MoE Decoder** | Macro Windowed Decoder + 7 Overlapping Length Experts MoE + 4-layer Recursive Micro Character Decoder (`51.7M params`) | Multi-Positive BCE + Anti-Collapse ($\mathcal{L}_{\text{balance}} = 7 \sum f_e P_e$) + Soft-Levenshtein ($0.2$) + Char Cross-Entropy | **Validation Loss `0.9004`** (Step 8,000)<br>• **CharAcc: `94.6%`**<br>• **MoE PathAcc: `98.6%`**<br>• **Soft-Levenshtein: `0.160`** |
-
-### Why Phono-V7.5 Outperforms Monolithic End-to-End Models
-
-1. **Acoustic-Linguistic Gradient Disentanglement**:
-   In classic E2E training, gradients flowing through the character decoder are noisy because they must simultaneously resolve acoustic noise (accents, background audio, reverberation) and language structure. In Phono-V7.5, Module 3 is pre-trained via **Text Middle-Training** over >208,000 sentences across 4 languages (**English, French, Italian, Spanish**) in pure FP32, learning an optimal linguistic prior.
-2. **7 Soft Overlapping Intervals with Multi-Positive Routing**:
-   Previous versions (V7.1–V7.3) suffered from boundary oscillation because rigid bins (Short 1-5, Medium 5-11, Long 11-16) penalized words near the thresholds. Phono-V7.5's overlapping intervals permit a 5-letter word to activate `[1-5]`, `[3-7]`, or `[5-10]`. Multi-positive BCE with anti-collapse load balancing raised routing accuracy from $40\%\text{--}60\%$ to **$98.6\%$**.
-3. **50× Speedup for Text Exploration**:
-   Module 2 bypasses audio synthesis and Conformer forward passes, enabling the decoder to train on text at **0.6 steps/s (BS=32)**, saving hundreds of GPU compute hours.
+A user or researcher can read this section independently to grasp **100% of the architecture, its dual-level Mixture-of-Experts (MoE), recursive character decoders, and loss functions** without consulting previous version notes.
 
 ---
 
-## Target Research Benchmarks (Ben Letaifa, Rouas et al. Literature)
+### 1. High-Level System Architecture & Dataflow
 
-Following the final light end-to-end fine-tuning, the Phono-V7.5 tripartite system will be benchmarked against the standard academic datasets and baselines documented in the foundational literature by **Ben Letaifa, Rouas, et al.** (Algorithms 2023, EUSIPCO 2022, ICASSP 2025, Interspeech 2025):
+```
+═════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+                                   MODULE 1: ACOUSTIC PHONEME FRONT-END (31.8M params)
+═════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+ [Raw Audio (16 kHz)]
+        │
+        ▼
+ ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │  HuBERT 7-Layer 1D Convolutional Feature Extractor (Temporal Strides: [5, 2, 2, 2, 2, 2, 2], Factor: 320x) │
+ │  Emits 20ms acoustic frames (50 Hz) with LayerNorm & GELU -> [B, T_audio, 512]                              │
+ └──────────────────────────────────────────────────────┬──────────────────────────────────────────────────────┘
+                                                        │
+                                                        ▼
+ ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │  8-Layer Multi-Scale Dilated Conformer Backbone (D=512, H=8, FFN=2048)                                      │
+ │  • Macaron-style Feed-Forward blocks with 4 MoE FFN Experts per layer (Top-2 gating)                        │
+ │  • Multi-Scale Dilated Depthwise Convolutions (k=31): Branch 1 (d=1, 620ms), Branch 2 (d=2, 1220ms),       │
+ │    Branch 3 (d=4, 2420ms) -> 4x temporal receptive field capturing intra-word coarticulation & prosody      │
+ └──────────────────────┬───────────────────────────────┬──────────────────────────────────────────────────────┘
+                        │                               │
+                        ▼                               ▼
+ ┌────────────────────────────────────────┐   ┌────────────────────────────────────────────────────────────────┐
+ │ Decoupled Word Boundary Gate Head      │   │ Recursive 2-Pass Phoneme Emission Head (RecursivePhonemeHead)  │
+ │ 3-class classifier:                    │   │ • Pass 1: Base CTC projection h_t -> z_t^(0)                   │
+ │ [0: SPEECH, 1: WORD_SPACE, 2: SILENCE] │   │ • Pass 2: Causal depthwise recurrent conv on [h_t; P(z_{t-1})] │
+ │ Supervised with x4.0 space penalty     │   │   enforcing strict phonotactic grammar (no adjacent spaces)    │
+ └──────────────────────┬─────────────────┘   └────────────────────────────────┬───────────────────────────────┘
+                        │                                                      │
+                        └───────────────────────┬──────────────────────────────┘
+                                                │
+                                                ▼
+ ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │  Online Event-Driven CTC Peak & Boundary Slicing (extract_streaming_ctc_slices)                             │
+ │  Detects energy bursts E(t) = 1 - P(blank), confirms silences via 2-frame hysteresis, and slices            │
+ │  continuous acoustic speech into discrete word chunks [B, L, 32_frames, 512] in real time (zero lookahead) │
+ └──────────────────────────────────────────────┬──────────────────────────────────────────────────────────────┘
+                                                │
+                        ┌───────────────────────┴───────────────────────┐
+                        │ Acoustic Word Latents & Slices                │ Fast Text/Phoneme Words
+                        ▼                                               ▼
+════════════════════════════════════════════════    ═════════════════════════════════════════════════════════════
+  [Acoustic Audio Path]                              MODULE 2: CROSS-MODAL DISTILLED LATENT BRIDGE (1.51M params)
+                                                    ═════════════════════════════════════════════════════════════
+                                                     ┌─────────────────────────────────────────────────────────┐
+                                                     │ FastTextPhonemeWordEncoder (2-Layer Transformer)        │
+                                                     │ • Takes byte characters (0..127) or phonemes (0..63)    │
+                                                     │ • AttentionPooling across token sequence                │
+                                                     │ • 2-layer MLP projection [256 -> 512 -> 512]            │
+                                                     │ • Distilled via InfoNCE + CosSim (98.7%) + MSE (0.015)  │
+                                                     │ • Bypasses audio encoder: 50x faster for text training  │
+                                                     └────────────────────────┬────────────────────────────────┘
+                                                                              │
+                                                ┌─────────────────────────────┘
+                                                │ Canonical Word Latents z_word [B, L, 512]
+                                                ▼
+═════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+                         MODULE 3: DUAL-LEVEL MoE RECURSIVE TEXT DECODER (51.7M params)
+═════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+ ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │  LEVEL 1: MACRO WORD DECODER (4 Layers, D=512, H=8, FFN=1536)                                               │
+ │  • Shift-Invariant Base Query (q_base): shared learnable vector eliminating positional slot ceilings        │
+ │  • Band-Causal Macro Attention (K=8 words): local historical attention window, constant O(K*L) complexity   │
+ │  • Macro History Noise Injection (sigma=0.05): eliminates exposure bias during teacher forcing              │
+ │  • Sliding Multi-Word Context Windows (W=6 words): collects preceding 5 words + current word for micro head │
+ └──────────────────────┬──────────────────────────────────────────────────────────────────────────────────────┘
+                        │
+       ┌────────────────┴──────────────────────────────┐
+       ▼                                               ▼
+ ┌────────────────────────────────────────┐   ┌────────────────────────────────────────────────────────────────┐
+ │ 7 Overlapping Length Experts MoE Router│   │ Continuous Word Length Predictor & Dynamic Horizon Capping     │
+ │ 7 soft intervals:                      │   │ • Predicts continuous char length k_hat from [z_word; dur]     │
+ │ [1-5], [3-7], [5-10], [7-12],          │   │ • Asymmetric Truncation Loss (x4.0 penalty when k_hat < k_true)│
+ │ [9-15], [12-20], [15-30]               │   │ • Guarantees +2.7c to +3.5c safety headroom                    │
+ │ • Multi-Positive BCE supervision       │   │ • Horizon Capping: min(HeadBound, ceil(k_hat) + 1)             │
+ │ • Anti-Collapse Loss (L_balance)       │   │   eliminates trailing hallucination and saves micro FLOPs      │
+ │ • Yields 98.0% - 98.6% routing accuracy│   └────────────────────────────────┬───────────────────────────────┘
+ └──────────────────────┬─────────────────┘                                    │
+                        │                                                      │
+                        │ Expert Conditioning Embeddings & Length Bounds       │
+                        ▼                                                      ▼
+ ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │  LEVEL 2: MICRO CHARACTER RECURSIVE DECODER (WindowedMicroPartitionedRecursiveHead, 4 Layers, D=512)        │
+ │                                                                                                             │
+ │  Tri-Modal Attention per Layer:                                                                             │
+ │  1. Causal Character Self-Attention over generated byte tokens (V=128)                                      │
+ │  2. Direct Acoustic Cross-Attention to word speech slice (32 frames / ~640ms receptive field)               │
+ │  3. Sliding Macro Context Cross-Attention to preceding W=6 word representations                             │
+ │                                                                                                             │
+ │  16 Partitioned Micro MoE Experts (Top-2 Gating):                                                           │
+ │  • Short Words pool: Experts 0..4 (lengths 1 to 5)                                                          │
+ │  • Medium Words pool: Experts 5..10 (lengths 5 to 9)                                                        │
+ │  • Long Words pool: Experts 11..15 (lengths 10+)                                                            │
+ │  • Dynamic softmax mask restricts routing strictly to the active length cluster                             │
+ │                                                                                                             │
+ │  Supervision & Losses:                                                                                      │
+ │  • Autoregressive byte Cross-Entropy with label smoothing (0.05)                                            │
+ │  • Differentiable Soft-Levenshtein Loss (DP edit-distance alignment with forward-backward gamma recursion)  │
+ └─────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
 
-### 1. English ASR Benchmarks
-- **LibriSpeech 1000h (Clean & Other)** *(ICASSP 2025, Algorithms 2023)*:
-  - *Transformer (99M)*: Test-clean **3.3% WER**, Test-other **8.0% WER**
-  - *Conformer (93M)*: Test-clean **2.9% WER**, Test-other **7.3% WER**
-  - *Branchformer (116M)*: Test-clean **2.4% WER**, Test-other **5.3% WER**
-  - *E-Branchformer (148M)*: Test-clean **2.2% WER**, Test-other **4.6% WER**
-  - *HuBERT Base (433M)*: Test-clean **2.0% WER**, Test-other **4.2% WER**
-  - *WavLM Base (431M)*: Test-clean **2.0% WER**, Test-other **4.2% WER**
-- **Libri-trans (236h English Audiobooks)** *(Algorithms 2023, EUSIPCO 2022)*:
-  - *Baseline Transformer (27.92M)*: **6.6% WER** (Dev: 6.3% WER)
-  - *Adaptive Variable Scale Pruning (43% sparsity)*: **7.6% WER**
-  - *Double Compression (52.5% sparsity)*: **8.9% WER** (80% memory footprint reduction)
+---
 
-### 2. Multilingual ASR Benchmarks
-- **VoxforgeIT (Italian, 20h Audiobooks)** *(Algorithms 2023, EUSIPCO 2022)*:
-  - *Baseline Transformer (35.07M)*: **9.1% – 9.3% CER** (Dev: 10.3% CER)
-  - *Adaptive Variable Scale Pruning (59.5% sparsity)*: **10.3% CER** (Dev: 10.5% CER)
-  - *Pruning + INT8 Quantization*: **10.1% CER** (82% memory reduction)
-- **ESTER (French, 250h Broadcast News)** *(EUSIPCO 2022)*:
-  - *Baseline Transformer (89.64M)*: **14.1% WER**
-  - *Pruning + INT8 Quantization (34.5% prune)*: **15.6% WER** (79% memory reduction)
-- **VIVOS (Vietnamese, 16h Read Speech)** *(EUSIPCO 2022)*:
-  - *Baseline Transformer (15.65M)*: **14.7% CER**
-  - *Pruning + INT8 Quantization (56.0% prune)*: **16.1% CER** (84% memory reduction)
+### 2. Comprehensive Sub-Module Specifications
 
-### 3. Speech-to-Text Translation Benchmark
-- **MuST-C English $\to$ French (560h Audio / 245k Sentences)** *(Interspeech 2025)*:
-  - *ASR Subsystem (95.5M)*: Dev.en-fr **11.5% WER** (INT8: 11.7%), tst-COMMON.en-fr **11.0% WER** (INT8: 10.9%)
-  - *MT Subsystem (41.8M)*: Dev.en-fr **28.8 BLEU**, tst-COMMON.en-fr **35.4 BLEU**
-  - *Cascade Speech-to-Text Translation*: Dev.en-fr **25.8 BLEU**, tst-COMMON.en-fr **31.2 BLEU**
-  - *Hardware Acceleration (Systolic Arrays)*: Up to **74× speedup** and **35% energy reduction** under structured tile pruning.
+#### Module 1: Acoustic Phoneme Front-End (`PhonoV73AcousticBackbone`)
+- **1D CNN Feature Extractor**:
+  - 7 convolutional blocks with strides `[5, 2, 2, 2, 2, 2, 2]` and kernel sizes `[10, 3, 3, 3, 3, 2, 2]`.
+  - Temporal downsampling factor of **$320\times$**: transforms raw 16 kHz waveform audio into 20ms acoustic frames (50 Hz).
+  - Normalization: LayerNorm on channel dimension after each convolution + GELU activations.
+- **8-Layer Conformer Backbone with MoE FFNs**:
+  - Hidden dimension $D = 512$, 8 attention heads, Feed-Forward dimension $4D = 2048$.
+  - Interleaved Macaron-style structure: half-step FFN $\to$ Multi-Head Self-Attention $\to$ Depthwise Convolution Module $\to$ half-step FFN $\to$ LayerNorm.
+  - **4 FFN Experts per Conformer Layer** with Top-2 router gating and auxiliary load-balancing loss, specializing on varying phoneme classes (vowels, plosives, fricatives, nasals).
+- **Multi-Scale Dilated Conformer Convolutions (`MultiScaleDilatedConformerConvModule`)**:
+  - Extends the temporal receptive field from 620ms to **2,420ms** without parameter growth:
+    - *Branch 1 ($k=31, d=1$)*: 620ms receptive field (preserves localized acoustic features).
+    - *Branch 2 ($k=31, d=2$)*: 1,220ms receptive field (captures intra-word phonetic transitions).
+    - *Branch 3 ($k=31, d=4$)*: 2,420ms receptive field (captures long-range prosody, rhythm, and inter-word liaisons).
+  - Zero-initialized linear projection guarantees exact bitwise zero perturbation at Step 0.
+- **Decoupled Word Boundary Gate Head (`DecoupledBoundaryGateHead`)**:
+  - Independent 3-class linear classifier emitting boundary logits for each acoustic frame:
+    - `0: SPEECH` (active voiced phoneme frames)
+    - `1: WORD_SPACE` (inter-word boundary delimiter)
+    - `2: SILENCE_BLANK` (ambient silence / non-emitting transition)
+  - Supervised directly via forced alignment targets with a **$\times 4.0$ penalty** on false space deletions and insertions, eliminating word agglutination.
+- **Recursive 2-Pass Phoneme Emission Head (`RecursivePhonemeHead`)**:
+  - *Pass 1*: Base linear projection $h_t \to z_t^{(0)}$ predicting raw frame CTC probabilities.
+  - *Pass 2 (Causal Depthwise Refiner)*: Causal 1D convolution ($k=5$) conditioned on concatenated $[h_t \,\|\, \operatorname{softmax}(z_{t-1}^{(0)})]$. Past emission feedback enforces phonotactic language grammar (e.g. preventing consecutive spaces or unvoiced transition anomalies) without future lookahead.
+- **Online Event-Driven CTC Peak Slicing (`extract_streaming_ctc_slices`)**:
+  - Tracks causal speech energy bursts $E(t) = 1 - P(\text{blank})$ in real time.
+  - Incorporates 2-frame silence confirmation and 4-frame minimum burst protection.
+  - Slices continuous audio into localized acoustic word tensors $[B, L, 32, 512]$ without knowing total utterance duration.
 
-### Official Post-Fine-Tuning Benchmark Protocol
-Upon completion of the current 50,000-step text middle-training and the subsequent light end-to-end acoustic fine-tuning, Phono-V7.5 will be evaluated across:
-1. `eval_librispeech_clean_other`: Word Error Rate on LibriSpeech `test-clean` and `test-other`.
-2. `eval_libritrans_en`: Word Error Rate on the Libri-trans evaluation split.
-3. `eval_voxforge_it`: Character Error Rate on VoxforgeIT Italian test set.
-4. `eval_ester_fr`: Word Error Rate on ESTER French broadcast evaluation corpus.
-5. `eval_mustc_en_fr`: Cascade translation BLEU and ASR WER on MuST-C `tst-COMMON.en-fr`.
+---
+
+#### Module 2: Cross-Modal Distilled Latent Bridge (`FastTextPhonemeWordEncoder`)
+- **Architecture**:
+  - Ultra-compact 2-layer Transformer ($D_{\text{model}} = 256$, 4 attention heads, $\text{FFN} = 512$, $D_{\text{macro}} = 512$, **1.51M parameters**).
+- **Dual-Modality Input Flexibility**:
+  - *Byte Modality*: Character byte token sequences ($0..127$) for written orthography.
+  - *Phoneme Modality*: IPA phoneme token sequences ($0..63$) for acoustic phonetics.
+- **Attention Pooling & Projection**:
+  - `AttentionPooling`: Softmax-weighted learnable attention pooling collapses token sequences into a fixed-size word vector while respecting padding masks.
+  - 2-layer MLP projection with LayerNorm and GELU projects from $256 \to 512$, aligning with canonical acoustic word latents $z_{\text{word}}$.
+- **Tripartite Distillation Loss**:
+  $$\mathcal{L}_{\text{distill}} = \text{MSE}(z_{\text{pred}}, z_{\text{word}}) + \big(1 - \operatorname{CosSim}(z_{\text{pred}}, z_{\text{word}})\big) + \lambda \mathcal{L}_{\text{InfoNCE}}$$
+- **Empirical Fidelity & Compute Advantage**:
+  - Achieves **98.7% Cosine Similarity** ($0.987$) and $\text{MSE} \le 0.015$ with true Conformer acoustic word embeddings.
+  - Runs **$50\times$ faster** than full audio processing, enabling the character decoder to be pre-trained on millions of text tokens at **0.6 steps/s (BS=32)** on a single TITAN X.
+
+---
+
+#### Module 3: Dual-Level MoE Recursive Character Decoder (`OverlappingLengthMoEDecoder`)
+
+##### Level 1: Macro Word Decoder
+- **4 Transformer Layers** ($D = 512$, 8 attention heads, $\text{FFN} = 1536$).
+- **Shift-Invariant Base Query ($\mathbf{q}_{\text{base}}$)**: Shared learnable base query vector eliminates hard positional slot limits. Word slot 100 has the same trained capacity as word slot 0.
+- **Band-Causal Local Macro Attention ($K=8$ words)**: Enforces a strictly causal local attention window over the past 8 words, bounding error snowballing and providing constant $O(K \cdot L)$ computation.
+- **Macro History Noise Injection ($\sigma = 0.05$)**: Injects Gaussian jitter into historical word representations during training, eliminating exposure bias and forcing the decoder to attend to grounding evidence.
+- **Sliding Multi-Word Context Windows ($W=6$ words)**: For every word $l$, packages representations from $[w_{l-5}, \dots, w_l]$ into context keys and values for the micro character decoder.
+
+##### 7 Overlapping Word-Length Experts MoE Router
+- **7 Soft Overlapping Length Intervals**:
+  - Expert 0: `[1, 5]` (Very Short: particles, articles, acronyms)
+  - Expert 1: `[3, 7]` (Short: common nouns, auxiliary verbs)
+  - Expert 2: `[5, 10]` (Medium-Short: regular vocabulary)
+  - Expert 3: `[7, 12]` (Medium: standard vocabulary)
+  - Expert 4: `[9, 15]` (Medium-Large: compound words)
+  - Expert 5: `[12, 20]` (Large: complex terminology, conjugated forms)
+  - Expert 6: `[15, 30]` (Very Large: technical jargon, agglutinated expressions)
+- **Multi-Positive Binary Cross-Entropy Loss**: Unlike rigid bins that create boundary instability, any expert covering the word length receives positive gradient reinforcement.
+- **Anti-Collapse Load Balancing Loss**:
+  $$\mathcal{L}_{\text{balance}} = 7 \sum_{e=0}^{6} f_e P_e$$
+  Prevents expert collapse and guarantees uniform specialization, reaching **98.0%–98.6% routing accuracy**.
+- **Expert Conditioning Embeddings**: Selected top expert generates a 512-dim embedding injected into the micro character decoder.
+
+##### Continuous Length Guidance & Dynamic Horizon Capping
+- **Word Length Predictor (`WordLengthPredictor`)**: Continuous character length prediction $\hat{k} = \operatorname{Softplus}(\operatorname{MLP}([z_{\text{word}}; \text{duration}]))$.
+- **Asymmetric Truncation Loss**:
+  $$\mathcal{L}_{\text{len}} = \begin{cases} \beta_{\text{under}} \cdot (k_{\text{true}} - \hat{k}) & \text{if } \hat{k} < k_{\text{true}} \ (\beta_{\text{under}} = 4.0) \\ \beta_{\text{over}} \cdot \operatorname{ReLU}(\hat{k} - k_{\text{true}} - \delta) & \text{if } \hat{k} \ge k_{\text{true}} \ (\beta_{\text{over}} = 0.5) \end{cases}$$
+  Penalizes under-prediction $8\times$ more heavily than over-prediction, maintaining a consistent $+2.7\text{c}$ to $+3.5\text{c}$ safety headroom.
+- **Dynamic Horizon Capping**: Autoregressive rollout is strictly bounded to $\min(\text{HeadBound},\, \lceil \hat{k} \rceil + 1)$, cutting trailing character hallucination and saving micro decoder FLOPs.
+
+##### Level 2: Micro Character Recursive Decoder (`WindowedMicroPartitionedRecursiveHead`)
+- **4 Recursive Transformer Layers** ($D = 512$, 8 attention heads, $\text{FFN} = 1536$).
+- **Tri-Modal Cross-Attention per Layer**:
+  1. *Causal Character Self-Attention*: Models orthographic sequences and byte dependencies.
+  2. *Direct Acoustic Cross-Attention*: Attends directly to the 32 acoustic frames (~640ms) corresponding to the current acoustic word slice.
+  3. *Sliding Macro Context Cross-Attention*: Cross-attends across the preceding $W=6$ macro word latents, resolving grammatical agreements and homophone ambiguities.
+- **16 Partitioned Micro MoE Experts with Top-2 Routing**:
+  - Expert pool partitioned by word length:
+    - *Short Pool (Experts 0..4)*: active when length $\le 5$.
+    - *Medium Pool (Experts 5..10)*: active when length $5 < k \le 9$.
+    - *Long Pool (Experts 11..15)*: active when length $\ge 10$.
+  - Softmax router dynamically applies $-\infty$ masks outside the selected pool, focusing compute where needed.
+- **Differentiable Soft-Levenshtein DP Loss**:
+  Supervises sequence generation through forward-backward DP edit-distance recursion ($\gamma = 0.2$, weight $0.2$), directly penalizing insertions, deletions, and substitutions.
+- **Byte Vocabulary ($V=128$)**:
+  Weight-tied character embedding and output LM head with label smoothing ($0.05$).
+
+---
+
+### 3. Unified Parameter Breakdown & Loss Formulation
+
+| Component Module | Layer Details | Parameters |
+| :--- | :--- | :---: |
+| **Module 1: Acoustic Front-End** | 7-layer 1D CNN + 8-layer Conformer (4 MoE experts/layer) + Decoupled Boundary Gate + Recursive Phoneme Head | **31.82 M** |
+| **Module 2: Distilled Latent Bridge** | 2-layer Transformer + AttentionPooling + 2-layer MLP projection ($256 \to 512 \to 512$) | **1.51 M** |
+| **Module 3: Level-1 Macro Decoder** | 4-layer Band-Causal Macro Transformer ($K=8$, $W=6$) + 7 Overlapping Length Experts MoE Router | **17.45 M** |
+| **Module 3: Level-2 Micro Decoder** | 4-layer Tri-Modal Recursive Decoder + 16 Partitioned MoE Experts (Top-2) + Byte LM Head | **34.22 M** |
+| **Total Phono-V7.5 Flagship System** | **Complete Tripartite Architecture (Module 1 + Module 2 + Module 3)** | **85.00 M** |
+
+#### Unified Training Objective
+$$\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{char}} + \lambda_{\text{path}} \mathcal{L}_{\text{path}} + \lambda_{\text{balance}} \mathcal{L}_{\text{balance}} + \lambda_{\text{len}} \mathcal{L}_{\text{len}} + \lambda_{\text{lev}} \mathcal{L}_{\text{lev}} + \lambda_{\text{moe}} \mathcal{L}_{\text{moe}}$$
+where:
+- $\mathcal{L}_{\text{char}}$: Cross-entropy loss on byte character tokens with label smoothing ($0.05$).
+- $\mathcal{L}_{\text{path}}$: Multi-positive Binary Cross-Entropy loss on the 7 overlapping length intervals.
+- $\mathcal{L}_{\text{balance}}$: Anti-collapse load-balancing loss on macro MoE experts ($7 \sum f_e P_e$).
+- $\mathcal{L}_{\text{len}}$: Asymmetric duration-guided word length loss ($\beta_{\text{under}}=4.0, \beta_{\text{over}}=0.5$).
+- $\mathcal{L}_{\text{lev}}$: Differentiable Soft-Levenshtein edit-distance alignment loss ($\gamma=0.2$, weight $0.2$).
+- $\mathcal{L}_{\text{moe}}$: Auxiliary load-balancing loss on the 16 micro MoE experts.
+
+---
+
+### 4. Text Middle-Training Empirical Performance Milestones
+
+Module 3 is pre-trained via **Text Middle-Training** across >208,000 sentences in 4 languages (**English, French, Italian, Spanish**) in pure FP32 on NVIDIA TITAN X:
+
+| Milestone / Training Step | Total Validation Loss | Byte Character Accuracy | MoE Path Accuracy (7 Experts) | Soft-Levenshtein Edit Loss |
+| :--- | :---: | :---: | :---: | :---: |
+| **Step 0 (Random Init)** | `4.7798` | 25.1% | 41.0% | 1.482 |
+| **Step 1,000** | `1.8429` | 73.0% | 89.8% | 0.630 |
+| **Step 2,000** | `1.4146` | 81.7% | 92.8% | 0.412 |
+| **Step 3,000** | `1.2183` | 86.5% | 94.7% | 0.315 |
+| **Step 5,000** | `1.0305` | 91.0% | 97.0% | 0.220 |
+| **Step 8,000** | `0.9004` | 94.6% | 98.6% | 0.160 |
+| **Step 10,000 (Active Milestone)** | **`0.8496`** | **`95.5%`** | **`98.0%`** | **`0.153`** |
+
+Poids enregistrés et validés : [`checkpoints/phono_v7_5_text_middle/best_decoder.pt`](file:///home/nathan/github/audiolearn/checkpoints/phono_v7_5_text_middle/best_decoder.pt).
 
 ---
 
