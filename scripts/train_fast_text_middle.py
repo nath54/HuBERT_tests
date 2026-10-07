@@ -20,9 +20,29 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 from transformers import get_cosine_schedule_with_warmup
 
+from piper.voice import EspeakPhonemizer
 from src.data.roman_tokenizer import RomanCharTokenizer
 from src.models.phono_v7_5_speech_model import PhonoV75SpeechConfig, PhonoV75SpeechModel
 from src.models.text_phoneme_encoder import FastTextPhonemeWordEncoder
+from src.training.metrics import compute_wer, compute_cer
+
+_espeak_phonemizer: Optional[EspeakPhonemizer] = None
+
+
+def get_phonemes(text: str, lang: str = "en") -> str:
+    global _espeak_phonemizer
+    if _espeak_phonemizer is None:
+        try:
+            _espeak_phonemizer = EspeakPhonemizer()
+        except Exception:
+            return ""
+    lang_map = {"en": "en-us", "fr": "fr", "it": "it", "es": "es"}
+    target_voice = lang_map.get(lang, "en-us")
+    try:
+        chunks = _espeak_phonemizer.phonemize(target_voice, text)
+        return " ".join("".join(ch) for ch in chunks)
+    except Exception:
+        return ""
 
 
 def format_eta(seconds: float) -> str:
@@ -37,37 +57,37 @@ def format_eta(seconds: float) -> str:
 
 
 class PureTextDataset(Dataset):
-    """Loads and tokenizes pure text sentences into word byte ID tensors."""
+    """Loads and tokenizes pure text sentences into word byte ID tensors with language awareness."""
 
     def __init__(
         self,
-        sentences: List[str],
+        items: List[Tuple[str, str]],
         tokenizer: RomanCharTokenizer,
         max_words: int = 32,
         max_chars_per_word: int = 24,
     ):
-        self.sentences = [s.strip().lower() for s in sentences if s.strip()]
+        self.items = [(s.strip().lower(), lang) for s, lang in items if s.strip()]
         self.tokenizer = tokenizer
         self.max_words = max_words
         self.max_chars = max_chars_per_word
 
     def __len__(self) -> int:
-        return len(self.sentences)
+        return len(self.items)
 
     def __getitem__(self, idx: int) -> Dict[str, Any]:
-        text = self.sentences[idx]
+        text, lang = self.items[idx]
         words = text.split()[: self.max_words]
-        return {"words": words, "text": text}
+        return {"words": words, "text": text, "lang": lang}
 
 
 class PureTextCollator:
-    """Collates list of word lists into input_byte_ids, target_byte_ids, target_lengths."""
+    """Collates list of word lists into input_byte_ids, target_byte_ids, target_lengths, preserving raw text and lang."""
 
     def __init__(self, tokenizer: RomanCharTokenizer, max_chars_per_word: int = 24):
         self.tok = tokenizer
         self.max_chars = max_chars_per_word
 
-    def __call__(self, batch: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
+    def __call__(self, batch: List[Dict[str, Any]]) -> Dict[str, Any]:
         B = len(batch)
         max_L = max(1, max(len(b["words"]) for b in batch))
         K = self.max_chars
@@ -96,6 +116,8 @@ class PureTextCollator:
             "input_byte_ids": input_bytes,
             "target_byte_ids": target_bytes,
             "target_lengths": target_lengths,
+            "raw_texts": [item["text"] for item in batch],
+            "languages": [item.get("lang", "en") for item in batch],
         }
 
 
@@ -105,10 +127,10 @@ def load_multilingual_sentences(
     mls_es_txt: str,
     mls_fr_txt: str,
     max_per_lang: int = 60000,
-) -> Tuple[List[str], List[str]]:
-    """Loads balanced multilingual text sentences from the 4 languages."""
-    train_lines: List[str] = []
-    val_lines: List[str] = []
+) -> Tuple[List[Tuple[str, str]], List[Tuple[str, str]]]:
+    """Loads balanced multilingual text sentences from the 4 languages with language tags."""
+    train_items: List[Tuple[str, str]] = []
+    val_items: List[Tuple[str, str]] = []
 
     # 1. English (LibriSpeech)
     if Path(librispeech_json).is_file():
@@ -116,8 +138,8 @@ def load_multilingual_sentences(
             data = json.load(f)
         en_texts = [d.get("text", d.get("transcript", "")) for d in data if d.get("text") or d.get("transcript")]
         random.shuffle(en_texts)
-        train_lines.extend(en_texts[:max_per_lang])
-        val_lines.extend(en_texts[max_per_lang : max_per_lang + 1000])
+        train_items.extend([(t, "en") for t in en_texts[:max_per_lang]])
+        val_items.extend([(t, "en") for t in en_texts[max_per_lang : max_per_lang + 1000]])
         print(f"  • English (LibriSpeech): {len(en_texts[:max_per_lang])} train sentences", flush=True)
 
     # 2. Italian (MLS)
@@ -125,8 +147,8 @@ def load_multilingual_sentences(
         with open(mls_it_txt, "r", encoding="utf-8") as f:
             it_texts = [line.strip().split("\t", 1)[-1] for line in f if "\t" in line or " " in line]
         random.shuffle(it_texts)
-        train_lines.extend(it_texts[:max_per_lang])
-        val_lines.extend(it_texts[max_per_lang : max_per_lang + 1000])
+        train_items.extend([(t, "it") for t in it_texts[:max_per_lang]])
+        val_items.extend([(t, "it") for t in it_texts[max_per_lang : max_per_lang + 1000]])
         print(f"  • Italian (MLS): {len(it_texts[:max_per_lang])} train sentences", flush=True)
 
     # 3. Spanish (MLS)
@@ -134,8 +156,8 @@ def load_multilingual_sentences(
         with open(mls_es_txt, "r", encoding="utf-8") as f:
             es_texts = [line.strip().split("\t", 1)[-1] for line in f if "\t" in line or " " in line]
         random.shuffle(es_texts)
-        train_lines.extend(es_texts[:max_per_lang])
-        val_lines.extend(es_texts[max_per_lang : max_per_lang + 1000])
+        train_items.extend([(t, "es") for t in es_texts[:max_per_lang]])
+        val_items.extend([(t, "es") for t in es_texts[max_per_lang : max_per_lang + 1000]])
         print(f"  • Spanish (MLS): {len(es_texts[:max_per_lang])} train sentences", flush=True)
 
     # 4. French (MLS)
@@ -143,13 +165,13 @@ def load_multilingual_sentences(
         with open(mls_fr_txt, "r", encoding="utf-8") as f:
             fr_texts = [line.strip().split("\t", 1)[-1] for line in f if "\t" in line or " " in line]
         random.shuffle(fr_texts)
-        train_lines.extend(fr_texts[:max_per_lang])
-        val_lines.extend(fr_texts[max_per_lang : max_per_lang + 1000])
+        train_items.extend([(t, "fr") for t in fr_texts[:max_per_lang]])
+        val_items.extend([(t, "fr") for t in fr_texts[max_per_lang : max_per_lang + 1000]])
         print(f"  • French (MLS): {len(fr_texts[:max_per_lang])} train sentences", flush=True)
 
-    random.shuffle(train_lines)
-    random.shuffle(val_lines)
-    return train_lines, val_lines
+    random.shuffle(train_items)
+    random.shuffle(val_items)
+    return train_items, val_items
 
 
 def main():
@@ -161,6 +183,7 @@ def main():
 
     parser.add_argument("--distilled_student_ckpt", type=str, default="checkpoints/latent_distillation/best_student.pt")
     parser.add_argument("--warm_start_v7_3", type=str, default="checkpoints/phono_v7_3/streaming/best_checkpoint.pt")
+    parser.add_argument("--resume", type=str, default="", help="Path to checkpoint to resume from (or 'auto')")
     parser.add_argument("--save_dir", type=str, default="checkpoints/phono_v7_5_text_middle")
     parser.add_argument("--batch_size", type=int, default=16, help="Batch size of text sentences")
     parser.add_argument("--grad_accum", type=int, default=2, help="Effective batch size = 32")
@@ -184,18 +207,18 @@ def main():
     # 1. Load Multilingual Text Datasets
     print("\n📚 Loading Multilingual Text Datasets (EN, IT, ES, FR)...", flush=True)
     max_sentences = 100 if args.smoke_test else 60000
-    train_lines, val_lines = load_multilingual_sentences(
+    train_items, val_items = load_multilingual_sentences(
         args.librispeech_train,
         args.mls_italian_txt,
         args.mls_spanish_txt,
         args.mls_french_txt,
         max_per_lang=max_sentences,
     )
-    print(f"🌟 Total Text Corpora: {len(train_lines)} train sentences, {len(val_lines)} val sentences", flush=True)
+    print(f"🌟 Total Text Corpora: {len(train_items)} train sentences, {len(val_items)} val sentences", flush=True)
 
     tokenizer = RomanCharTokenizer()
-    train_dataset = PureTextDataset(train_lines, tokenizer)
-    val_dataset = PureTextDataset(val_lines, tokenizer)
+    train_dataset = PureTextDataset(train_items, tokenizer)
+    val_dataset = PureTextDataset(val_items, tokenizer)
     collator = PureTextCollator(tokenizer)
 
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collator, num_workers=2)
@@ -238,10 +261,44 @@ def main():
     save_dir = Path(args.save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
     best_val_loss = float("inf")
+    start_step = 0
 
-    print(f"\n🔥 Starting Fast Text Middle-Training in Pure FP32 ({max_steps} steps, BS={args.batch_size * args.grad_accum})...", flush=True)
+    # Resume support
+    resume_target = args.resume
+    if resume_target == "auto":
+        latest_cand = save_dir / "latest_decoder.pt"
+        best_cand = save_dir / "best_decoder.pt"
+        if latest_cand.is_file():
+            resume_target = str(latest_cand)
+        elif best_cand.is_file():
+            resume_target = str(best_cand)
+        else:
+            resume_target = ""
+
+    if resume_target and Path(resume_target).is_file():
+        print(f"\n🔄 Resuming training from checkpoint: {resume_target}...", flush=True)
+        r_ckpt = torch.load(resume_target, map_location=device, weights_only=False)
+        sd_dec = r_ckpt.get("decoder_state_dict", r_ckpt)
+        model.decoder.load_state_dict(sd_dec, strict=False)
+        if "step" in r_ckpt:
+            start_step = r_ckpt["step"]
+        if "val_loss" in r_ckpt:
+            best_val_loss = r_ckpt["val_loss"]
+        if "optimizer_state_dict" in r_ckpt:
+            try:
+                optimizer.load_state_dict(r_ckpt["optimizer_state_dict"])
+            except Exception as e:
+                print(f"  ⚠️ Could not restore optimizer: {e}", flush=True)
+        if "scheduler_state_dict" in r_ckpt:
+            try:
+                scheduler.load_state_dict(r_ckpt["scheduler_state_dict"])
+            except Exception as e:
+                print(f"  ⚠️ Could not restore scheduler: {e}", flush=True)
+        print(f"  ✅ Successfully resumed from Step {start_step} (historical best val loss: {best_val_loss:.4f})", flush=True)
+
+    print(f"\n🔥 Starting Fast Text Middle-Training in Pure FP32 ({start_step} -> {max_steps} steps, BS={args.batch_size * args.grad_accum})...", flush=True)
     start_time = time.time()
-    step = 0
+    step = start_step
     accum_step = 0
     train_iter = iter(train_loader)
     model.train()
@@ -285,7 +342,8 @@ def main():
 
             if step % args.log_every == 0 or step == 1 or args.smoke_test:
                 elapsed = time.time() - start_time
-                rate = step / max(1e-3, elapsed)
+                completed = step - start_step
+                rate = completed / max(1e-3, elapsed)
                 eta = (max_steps - step) / max(1e-3, rate)
                 lr_curr = optimizer.param_groups[0]["lr"]
 
@@ -303,6 +361,8 @@ def main():
             if (step % args.eval_every == 0 or step == max_steps) and not args.smoke_test:
                 model.eval()
                 val_losses, val_char_accs, val_path_accs = [], [], []
+                all_preds, all_refs = [], []
+                samples_to_show = []
 
                 with torch.no_grad():
                     for v_idx, v_batch in enumerate(val_loader):
@@ -311,6 +371,9 @@ def main():
                         v_inp = v_batch["input_byte_ids"].to(device)
                         v_tgt = v_batch["target_byte_ids"].to(device)
                         v_lens = v_batch["target_lengths"].to(device)
+                        v_texts = v_batch["raw_texts"]
+                        v_langs = v_batch["languages"]
+
                         v_B, v_L, v_K = v_inp.shape
                         v_flat = v_inp.reshape(v_B * v_L, v_K)
                         v_z = text_encoder(byte_ids=v_flat).view(v_B, v_L, -1)
@@ -325,40 +388,78 @@ def main():
                         val_char_accs.append(v_out["char_acc"].item())
                         val_path_accs.append(v_out["path_acc"].item())
 
+                        # Decode predictions for WER and sample logging
+                        v_logits = v_out["logits"]  # [B, L, K, V]
+                        v_pred_ids = v_logits.argmax(dim=-1)  # [B, L, K]
+
+                        for i in range(v_B):
+                            tgt_word_lists = []
+                            for w in range(v_L):
+                                valid_t = [t.item() for t in v_tgt[i, w] if t.item() not in (-100, tokenizer.pad_id, tokenizer.bos_id)]
+                                if valid_t:
+                                    tgt_word_lists.append(valid_t)
+                            ref_text = tokenizer.decode_words(tgt_word_lists)
+                            if not ref_text.strip():
+                                continue
+
+                            pred_word_lists = []
+                            for w in range(len(tgt_word_lists)):
+                                pred_w = v_pred_ids[i, w].tolist()
+                                pred_word_lists.append(pred_w)
+                            pred_text = tokenizer.decode_words(pred_word_lists)
+
+                            all_refs.append(ref_text)
+                            all_preds.append(pred_text)
+
+                            if len(samples_to_show) < 4 and random.random() < 0.25:
+                                lang_code = v_langs[i]
+                                flag = {"en": "🇬🇧 EN", "it": "🇮🇹 IT", "es": "🇪🇸 ES", "fr": "🇫🇷 FR"}.get(lang_code, lang_code.upper())
+                                gt_ph = get_phonemes(ref_text, lang_code)
+                                samples_to_show.append({
+                                    "flag": flag,
+                                    "gt_ph": gt_ph,
+                                    "gt_text": ref_text,
+                                    "pred_text": pred_text,
+                                })
+
                 v_loss = sum(val_losses) / max(1, len(val_losses))
                 v_char = sum(val_char_accs) / max(1, len(val_char_accs))
                 v_path = sum(val_path_accs) / max(1, len(val_path_accs))
+                val_wer = compute_wer(all_preds, all_refs) * 100.0 if all_refs else 0.0
+                val_cer = compute_cer(all_preds, all_refs) * 100.0 if all_refs else 0.0
 
                 print(
-                    f"\n🧪 [Validation Step {step}] Loss: {v_loss:.4f} | CharAcc: {v_char:.1f}% | PathAcc: {v_path:.1f}%",
+                    f"\n🧪 [Validation Step {step}] Loss: {v_loss:.4f} | WER: {val_wer:5.2f}% | CER: {val_cer:5.2f}% | CharAcc: {v_char:.1f}% | PathAcc: {v_path:.1f}%",
                     flush=True,
                 )
+                if samples_to_show:
+                    print("  " + "─" * 78, flush=True)
+                    for s_idx, s in enumerate(samples_to_show, 1):
+                        print(f"  🔍 [Sample {s_idx}] ({s['flag']})", flush=True)
+                        print(f"    • GT Phonem : {s['gt_ph']}", flush=True)
+                        print(f"    • GT Text   : {s['gt_text']}", flush=True)
+                        print(f"    • Pred Text : {s['pred_text']}", flush=True)
+                    print("  " + "─" * 78, flush=True)
+
+                ckpt_data = {
+                    "step": step,
+                    "val_loss": v_loss,
+                    "val_wer": val_wer,
+                    "val_cer": val_cer,
+                    "val_char_acc": v_char,
+                    "val_path_acc": v_path,
+                    "decoder_state_dict": model.decoder.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "scheduler_state_dict": scheduler.state_dict(),
+                }
 
                 if v_loss < best_val_loss:
                     best_val_loss = v_loss
-                    print(f"  🌟 New Best Decoder Validation Loss: {best_val_loss:.4f}!", flush=True)
-                    torch.save(
-                        {
-                            "step": step,
-                            "val_loss": v_loss,
-                            "val_char_acc": v_char,
-                            "val_path_acc": v_path,
-                            "decoder_state_dict": model.decoder.state_dict(),
-                        },
-                        save_dir / "best_decoder.pt",
-                    )
+                    print(f"  🌟 New Best Decoder Validation Loss: {best_val_loss:.4f} (WER: {val_wer:.2f}%)!", flush=True)
+                    torch.save(ckpt_data, save_dir / "best_decoder.pt")
                     print(f"  💾 Saved best decoder checkpoint to {save_dir / 'best_decoder.pt'}", flush=True)
 
-                torch.save(
-                    {
-                        "step": step,
-                        "val_loss": v_loss,
-                        "val_char_acc": v_char,
-                        "val_path_acc": v_path,
-                        "decoder_state_dict": model.decoder.state_dict(),
-                    },
-                    save_dir / "latest_decoder.pt",
-                )
+                torch.save(ckpt_data, save_dir / "latest_decoder.pt")
                 model.train()
 
     print(f"\n🎉 Fast Text Middle-Training completed successfully in {time.time() - start_time:.1f}s!", flush=True)
