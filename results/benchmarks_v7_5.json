@@ -1,0 +1,38 @@
+{
+  "mode": "end_to_end",
+  "p2g_checkpoint": "checkpoints/phono_v7_5_phoneme_to_text/best_p2g.pt",
+  "acoustic_step": 29600,
+  "p2g_step": 29400,
+  "results": [
+    {
+      "name": "LibriSpeech (test-clean)",
+      "lang": "en",
+      "samples": 100,
+      "total_audio_hours": 0.25031529513888884,
+      "wer": 57.11849957374254,
+      "cer": 23.77495462794918,
+      "per": 29.694954460026025,
+      "rtf": 0.17000665738430648
+    },
+    {
+      "name": "Google FLEURS (fr_fr)",
+      "lang": "fr",
+      "samples": 100,
+      "total_audio_hours": 0.29825000000000007,
+      "wer": 93.79097570381796,
+      "cer": 55.75403199897192,
+      "per": 51.39467373469645,
+      "rtf": 0.15386723268517258
+    },
+    {
+      "name": "Google FLEURS (es_419)",
+      "lang": "es",
+      "samples": 100,
+      "total_audio_hours": 0.33355,
+      "wer": 93.1881188118812,
+      "cer": 44.657534246575345,
+      "per": 47.22394453525731,
+      "rtf": 0.14338692873167852
+    }
+  ]
+}

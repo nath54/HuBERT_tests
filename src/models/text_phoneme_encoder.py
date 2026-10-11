@@ -11,6 +11,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from src.data.phoneme_tokenizer import PHONEME_VOCAB_SIZE
+
 
 class AttentionPooling(nn.Module):
     """Attention-weighted pooling across sequence tokens, respecting pad masks."""
@@ -53,7 +55,7 @@ class FastTextPhonemeWordEncoder(nn.Module):
         dim_feedforward: int = 512,
         dropout: float = 0.1,
         byte_vocab_size: int = 128,
-        phoneme_vocab_size: int = 64,
+        phoneme_vocab_size: int = PHONEME_VOCAB_SIZE,
         max_seq_len: int = 32,
     ):
         super().__init__()

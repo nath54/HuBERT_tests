@@ -39,6 +39,7 @@ from src.models.phono_v6_7_windowed_decoder import (
     WindowedAdaptivePathConfig,
     PhonoV67WindowedDecoder,
 )
+from src.data.phoneme_tokenizer import PHONEME_VOCAB_SIZE
 from src.models.phono_v7_alignment import extract_ctc_monotonic_slices
 from src.models.phono_v7_1_alignment import extract_streaming_ctc_slices, detect_online_word_peaks
 
@@ -146,7 +147,7 @@ class PhonoV71SpeechConfig:
             encoder_heads=4,
             encoder_embed_dim=256,
             encoder_ffn_dim=1024,
-            vocab_size=64,
+            vocab_size=PHONEME_VOCAB_SIZE,
             num_experts=4,
             moe_top_k=2,
             use_deep_refiner=False,
@@ -171,7 +172,7 @@ class PhonoV71SpeechConfig:
             encoder_heads=8,
             encoder_embed_dim=512,
             encoder_ffn_dim=2048,
-            vocab_size=64,
+            vocab_size=PHONEME_VOCAB_SIZE,
             num_experts=4,
             moe_top_k=2,
             use_deep_refiner=True,

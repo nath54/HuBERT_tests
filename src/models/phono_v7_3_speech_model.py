@@ -16,6 +16,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from src.data.phoneme_tokenizer import PHONEME_VOCAB_SIZE, NUM_ARTICULATORY_GROUPS
 from src.models.conformer_layers import ConformerMoETransformerEncoder
 from src.models.phono_variants import PhonoV64GatedDiffusionConfig, PhonoV64GatedDiffusionForPreTraining
 from src.models.phono_v7_1_alignment import extract_streaming_ctc_slices
@@ -49,22 +50,47 @@ class DecoupledBoundaryGateHead(nn.Module):
         return self.proj(h)
 
 
-class RecursivePhonemeHead(nn.Module):
-    """Recursive 2-Pass Phoneme Emission Head with Causal Phonotactic Refinement.
+class HierarchicalRecursivePhonemeHead(nn.Module):
+    """Hierarchical Recursive 2-Pass Phoneme Emission Head with Articulatory Macro-Guidance
+    and Causal Phonotactic Refinement.
 
-    Pass 1: Base linear projection h_t -> z_t^(0) (inherits V7.2 phoneme_head weights).
-    Pass 2: Causal depthwise separable convolution taking [h_t; softmax(z_{t-1}^(0))]
-            to enforce phonotactic grammar (no adjacent spaces, smoothed consonant closures).
+    Level 1: Articulatory Macro Head (8 classes: non-speech, prosody/punct, vowels, stops, fricatives, nasals, liquids, affricates)
+    Level 2: Base phoneme projection modulated by macro-class probabilities (num_phonemes classes, e.g. 104)
+    Level 3: Causal depthwise separable convolution refiner taking [h_t; softmax(base_phoneme_{t-1})]
+             to enforce phonotactic grammar (no adjacent spaces, smoothed consonant closures).
+    Level 4: Causal Multi-Head Phonotactic Self-Attention block attending to full utterance emission
+             history to break CTC conditional independence across long phoneme spans.
     """
 
-    def __init__(self, embed_dim: int, vocab_size: int, refiner_dim: int = 128, kernel_size: int = 5):
+    def __init__(
+        self,
+        embed_dim: int,
+        vocab_size: int = 104,
+        num_macro_classes: int = NUM_ARTICULATORY_GROUPS,
+        refiner_dim: int = 128,
+        kernel_size: int = 5,
+        num_heads: int = 4,
+    ):
         super().__init__()
         self.vocab_size = vocab_size
+        self.num_macro_classes = num_macro_classes
+        self.refiner_dim = refiner_dim
+        self.num_heads = num_heads
+        self.head_dim = refiner_dim // num_heads
+
+        # Level 1: Articulatory Macro Head
+        self.macro_head = nn.Linear(embed_dim, num_macro_classes)
+
+        # Macro conditioning projection to phonemes (zero-initialized for exact warm-start)
+        self.macro_proj = nn.Linear(num_macro_classes, vocab_size, bias=False)
+        nn.init.zeros_(self.macro_proj.weight)
+
+        # Level 2: Base fine phoneme projection
         self.base_head = nn.Linear(embed_dim, vocab_size)
 
-        # Pass 2: Causal Refiner
+        # Level 3: Local Causal Conv Refiner
         self.kernel_size = kernel_size
-        self.pad_len = kernel_size - 1  # Strictly causal padding
+        self.pad_len = kernel_size - 1
 
         in_channels = embed_dim + vocab_size
         self.refiner_in = nn.Conv1d(in_channels, refiner_dim, kernel_size=1)
@@ -78,6 +104,15 @@ class RecursivePhonemeHead(nn.Module):
         )
         self.refiner_norm = nn.BatchNorm1d(refiner_dim)
         self.refiner_act = nn.SiLU()
+
+        # Level 4: Causal Multi-Head Phonotactic Self-Attention Block
+        self.attn_norm = nn.LayerNorm(refiner_dim)
+        self.qkv_proj = nn.Linear(refiner_dim, refiner_dim * 3)
+        self.attn_out = nn.Linear(refiner_dim, refiner_dim)
+        # Zero-init attention output projection for exact identity warm-start
+        nn.init.zeros_(self.attn_out.weight)
+        nn.init.zeros_(self.attn_out.bias)
+
         self.refiner_out = nn.Linear(refiner_dim, vocab_size)
 
         # Zero-initialize the refiner output so on step 0, refined_logits == base_logits
@@ -85,26 +120,32 @@ class RecursivePhonemeHead(nn.Module):
         if self.refiner_out.bias is not None:
             nn.init.zeros_(self.refiner_out.bias)
 
-    def forward(self, h: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, h: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Args:
             h: [B, T, D] acoustic representations
         Returns:
-            refined_logits: [B, T, V]
-            base_logits: [B, T, V]
+            refined_logits: [B, T, num_phonemes]
+            base_logits: [B, T, num_phonemes]
+            macro_logits: [B, T, num_macro_classes]
         """
         B, T, D = h.shape
 
-        # Pass 1: Base CTC logits
-        base_logits = self.base_head(h)  # [B, T, V]
+        # Step 1: Predict Articulatory Macro Distribution
+        macro_logits = self.macro_head(h)  # [B, T, 8]
+        macro_probs = F.softmax(macro_logits, dim=-1)  # [B, T, 8]
 
-        # Shifted past emission probabilities (causal context at t-1)
+        # Step 2: Base phoneme logits modulated by macro guidance
+        # (Zero-initialized projection ensures step 0 identity)
+        base_logits = self.base_head(h) + self.macro_proj(macro_probs)  # [B, T, num_phonemes]
+
+        # Step 3: Shifted past emission probabilities (causal context at t-1)
         base_probs = F.softmax(base_logits, dim=-1)
         zeros_t0 = torch.zeros((B, 1, self.vocab_size), device=h.device, dtype=h.dtype)
-        shifted_probs = torch.cat([zeros_t0, base_probs[:, :-1, :]], dim=1)  # [B, T, V]
+        shifted_probs = torch.cat([zeros_t0, base_probs[:, :-1, :]], dim=1)  # [B, T, num_phonemes]
 
-        # Pass 2: Causal Refinement
-        u = torch.cat([h, shifted_probs], dim=-1).transpose(1, 2)  # [B, D+V, T]
+        # Step 4: Local Causal Convolutional Refinement
+        u = torch.cat([h, shifted_probs], dim=-1).transpose(1, 2)  # [B, D+num_phonemes, T]
         r = self.refiner_in(u)
         r = self.refiner_conv(r)
         if self.pad_len > 0:
@@ -113,18 +154,82 @@ class RecursivePhonemeHead(nn.Module):
         r = self.refiner_act(r)
         r = r.transpose(1, 2)  # [B, T, refiner_dim]
 
-        residual = self.refiner_out(r)  # [B, T, V]
+        # Step 5: Causal Multi-Head Phonotactic Self-Attention over sequence history
+        r_norm = self.attn_norm(r)
+        qkv = self.qkv_proj(r_norm)
+        q, k, v = torch.chunk(qkv, 3, dim=-1)
+        q = q.view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
+        k = k.view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
+        v = v.view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
+
+        attn_ctx = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        attn_ctx = attn_ctx.transpose(1, 2).contiguous().view(B, T, self.refiner_dim)
+        r = r + self.attn_out(attn_ctx)  # Causal self-attention residual
+
+        residual = self.refiner_out(r)  # [B, T, num_phonemes]
         refined_logits = base_logits + residual
 
-        return refined_logits, base_logits
+        return refined_logits, base_logits, macro_logits
+
+
+def decode_calibrated_phonemes(
+    logits: torch.Tensor,
+    blank_id: int = 1,
+    pad_id: int = 0,
+    space_id: int = 8,
+    blank_penalty: float = 0.5,
+    min_tokens_between_spaces: int = 1,
+) -> List[int]:
+    """Calibrated CTC decoding with blank threshold penalty and consecutive space suppression."""
+    adjusted_logits = logits.clone()
+    if blank_penalty > 0.0:
+        adjusted_logits[:, blank_id] -= blank_penalty
+
+    preds = adjusted_logits.argmax(dim=-1).detach().cpu().tolist()
+    collapsed = []
+    prev = None
+    for p in preds:
+        if p != prev:
+            if p != blank_id and p != pad_id:
+                collapsed.append(p)
+            prev = p
+
+    cleaned = []
+    tokens_since_last_space = 999
+    for p in collapsed:
+        if p == space_id:
+            if tokens_since_last_space >= min_tokens_between_spaces and len(cleaned) > 0:
+                cleaned.append(p)
+                tokens_since_last_space = 0
+        else:
+            cleaned.append(p)
+            tokens_since_last_space += 1
+
+    while cleaned and cleaned[-1] == space_id:
+        cleaned.pop()
+
+    # Suppress trailing repeated token loops (e.g. "a a a a a")
+    while len(cleaned) >= 2 and cleaned[-1] == cleaned[-2]:
+        cleaned.pop()
+
+    return cleaned
+
+
+# Backward compatibility alias
+RecursivePhonemeHead = HierarchicalRecursivePhonemeHead
 
 
 class PhonoV73AcousticBackbone(PhonoV64GatedDiffusionForPreTraining):
     """Conformer Acoustic Backbone for Phono-V7.3 with Multi-Scale Dilated Convolutions,
-    Decoupled Boundary Gate, and Recursive Phoneme Emission Head."""
+    Decoupled Boundary Gate, and Hierarchical Recursive Phoneme Emission Head."""
 
     def __init__(self, config: PhonoV64GatedDiffusionConfig, conformer_kernel_size: int = 31):
         super().__init__(config)
+
+        self.vocab_size = PHONEME_VOCAB_SIZE
+        self.phoneme_offset = 8
+        self.num_phonemes = self.vocab_size - self.phoneme_offset
+        self.config.vocab_size = self.vocab_size
 
         # Multi-Scale Dilated Conformer Encoder
         self.encoder = ConformerMoETransformerEncoder(
@@ -145,10 +250,17 @@ class PhonoV73AcousticBackbone(PhonoV64GatedDiffusionForPreTraining):
         # 1. Decoupled Word Boundary Gate
         self.boundary_gate_head = DecoupledBoundaryGateHead(self.config.encoder_embed_dim)
 
-        # 2. Recursive 2-Pass Phoneme Head
-        self.phoneme_head = RecursivePhonemeHead(
+        # 2. Hierarchical Recursive Phoneme Head
+        self.phoneme_head = HierarchicalRecursivePhonemeHead(
             embed_dim=self.config.encoder_embed_dim,
-            vocab_size=getattr(self, "num_phonemes", getattr(self.config, "vocab_size", 56)),
+            vocab_size=self.num_phonemes,
+            num_macro_classes=NUM_ARTICULATORY_GROUPS,
+        )
+
+        # 3. Macro CTC Loss (blank token = 0)
+        self.macro_ctc_loss_fn = nn.CTCLoss(
+            blank=0,
+            zero_infinity=True,
         )
 
     def forward(
@@ -158,12 +270,18 @@ class PhonoV73AcousticBackbone(PhonoV64GatedDiffusionForPreTraining):
         target_lengths: Optional[torch.Tensor] = None,
         audio_lengths: Optional[torch.Tensor] = None,
         boundary_targets: Optional[torch.Tensor] = None,
+        macro_targets: Optional[torch.Tensor] = None,
+        macro_lengths: Optional[torch.Tensor] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         # 1. CNN acoustic feature extraction & projection
         cnn_features = self.feature_extractor(audio)
         features = self.feature_projection(cnn_features)
         input_lengths = self._get_feat_extract_output_lengths(audio_lengths) if audio_lengths is not None else None
+
+        # Dynamic SpecAugment (Time-span & Channel masking) in training mode
+        if self.training:
+            features, _ = self.apply_specaugment(features)
 
         # 2. Multi-Scale Conformer Encoding
         enc_out = self.encoder(features)
@@ -172,24 +290,33 @@ class PhonoV73AcousticBackbone(PhonoV64GatedDiffusionForPreTraining):
         # 3. Decoupled Boundary Gate Emissions
         boundary_logits = self.boundary_gate_head(hidden_state)  # [B, T, 3]
 
-        # 4. Recursive Phoneme Emissions
-        refined_p_logits, base_p_logits = self.phoneme_head(hidden_state)  # [B, T, 56]
+        # 4. Hierarchical Recursive Phoneme Emissions
+        refined_p_logits, base_p_logits, macro_logits = self.phoneme_head(hidden_state)  # [B, T, 104], [B, T, 104], [B, T, 8]
         state_logits = self.state_router(hidden_state)  # [B, T, 4]
 
-        refined_logits = self.compute_composite_log_probs(state_logits, refined_p_logits)  # [B, T, 64]
-        base_logits = self.compute_composite_log_probs(state_logits, base_p_logits)  # [B, T, 64]
+        refined_logits = self.compute_composite_log_probs(state_logits, refined_p_logits)  # [B, T, 112]
+        base_logits = self.compute_composite_log_probs(state_logits, base_p_logits)  # [B, T, 112]
 
         # 5. CTC Loss computation
         ctc_loss = torch.tensor(0.0, device=audio.device)
+        macro_ctc_loss = torch.tensor(0.0, device=audio.device)
         boundary_loss = torch.tensor(0.0, device=audio.device)
 
         if targets is not None:
             B_cur, T_cur, _ = refined_logits.shape
-            log_probs = refined_logits.transpose(0, 1).float()  # (T, B, 64)
+            log_probs = refined_logits.transpose(0, 1).float()  # (T, B, 112)
             i_lens = input_lengths if input_lengths is not None else torch.full((B_cur,), T_cur, device=audio.device, dtype=torch.long)
             t_lens = target_lengths if target_lengths is not None else torch.full((B_cur,), targets.shape[1], device=audio.device, dtype=torch.long)
 
             ctc_loss = self.ctc_loss_fn(log_probs, targets, i_lens, t_lens)
+
+        if macro_targets is not None:
+            B_cur, T_cur, _ = macro_logits.shape
+            macro_log_probs = F.log_softmax(macro_logits, dim=-1).transpose(0, 1).float()  # (T, B, 8)
+            i_lens = input_lengths if input_lengths is not None else torch.full((B_cur,), T_cur, device=audio.device, dtype=torch.long)
+            m_lens = macro_lengths if macro_lengths is not None else (target_lengths if target_lengths is not None else torch.full((B_cur,), macro_targets.shape[1], device=audio.device, dtype=torch.long))
+
+            macro_ctc_loss = self.macro_ctc_loss_fn(macro_log_probs, macro_targets, i_lens, m_lens)
 
         # 6. Boundary Gate Cross-Entropy Loss with weighted space penalty
         if boundary_targets is not None:
@@ -206,17 +333,99 @@ class PhonoV73AcousticBackbone(PhonoV64GatedDiffusionForPreTraining):
                 ignore_index=-100,
             )
 
-        total_enc_loss = ctc_loss + 1.0 * boundary_loss
+        total_enc_loss = ctc_loss + 0.2 * macro_ctc_loss + 1.0 * boundary_loss
 
         return {
             "loss": total_enc_loss,
             "ctc_loss": ctc_loss,
+            "macro_ctc_loss": macro_ctc_loss,
             "boundary_loss": boundary_loss,
             "logits": refined_logits,
             "base_logits": base_logits,
+            "macro_logits": macro_logits,
             "boundary_logits": boundary_logits,
             "hidden_state": hidden_state,
             "input_lengths": input_lengths,
+        }
+
+    @torch.no_grad()
+    def forward_sliding_chunks(
+        self,
+        audio: torch.Tensor,
+        chunk_seconds: float = 8.0,
+        overlap_seconds: float = 2.0,
+        sample_rate: int = 16000,
+    ) -> Dict[str, torch.Tensor]:
+        """Runs multi-window overlapping forward passes over long audio scripts.
+        Maintains O(1) memory and stitches frame logits with smooth linear cross-fade blending.
+        """
+        B, total_samples = audio.shape
+        chunk_size = int(chunk_seconds * sample_rate)
+        overlap_size = int(overlap_seconds * sample_rate)
+        hop_size = max(1, chunk_size - overlap_size)
+
+        if total_samples <= chunk_size:
+            out = self.forward(audio)
+            return {
+                "logits": out["logits"],
+                "macro_logits": out["macro_logits"],
+                "boundary_logits": out["boundary_logits"],
+            }
+
+        chunk_starts = list(range(0, max(1, total_samples - overlap_size), hop_size))
+        all_logits = []
+        all_macro = []
+        all_bnd = []
+
+        for start in chunk_starts:
+            end = min(start + chunk_size, total_samples)
+            chunk_audio = audio[:, start:end]
+            if chunk_audio.shape[-1] < 1600:
+                pad = 1600 - chunk_audio.shape[-1]
+                chunk_audio = F.pad(chunk_audio, (0, pad))
+
+            out = self.forward(chunk_audio)
+            all_logits.append(out["logits"])
+            all_macro.append(out["macro_logits"])
+            all_bnd.append(out["boundary_logits"])
+
+        downsample = 320
+        overlap_frames = overlap_size // downsample
+
+        stitched_logits = all_logits[0]
+        stitched_macro = all_macro[0]
+        stitched_bnd = all_bnd[0]
+
+        ramp_up = torch.linspace(0.0, 1.0, overlap_frames, device=audio.device).view(1, -1, 1)
+        ramp_down = 1.0 - ramp_up
+
+        for c_idx in range(1, len(all_logits)):
+            next_log = all_logits[c_idx]
+            next_mac = all_macro[c_idx]
+            next_bnd = all_bnd[c_idx]
+
+            cur_T = stitched_logits.shape[1]
+            overlap_k = min(overlap_frames, cur_T, next_log.shape[1])
+            if overlap_k > 0:
+                r_up = ramp_up[:, :overlap_k, :]
+                r_down = ramp_down[:, :overlap_k, :]
+
+                blended_log = r_down * stitched_logits[:, -overlap_k:, :] + r_up * next_log[:, :overlap_k, :]
+                blended_mac = r_down * stitched_macro[:, -overlap_k:, :] + r_up * next_mac[:, :overlap_k, :]
+                blended_bnd = r_down * stitched_bnd[:, -overlap_k:, :] + r_up * next_bnd[:, :overlap_k, :]
+
+                stitched_logits = torch.cat([stitched_logits[:, :-overlap_k, :], blended_log, next_log[:, overlap_k:, :]], dim=1)
+                stitched_macro = torch.cat([stitched_macro[:, :-overlap_k, :], blended_mac, next_mac[:, overlap_k:, :]], dim=1)
+                stitched_bnd = torch.cat([stitched_bnd[:, :-overlap_k, :], blended_bnd, next_bnd[:, overlap_k:, :]], dim=1)
+            else:
+                stitched_logits = torch.cat([stitched_logits, next_log], dim=1)
+                stitched_macro = torch.cat([stitched_macro, next_mac], dim=1)
+                stitched_bnd = torch.cat([stitched_bnd, next_bnd], dim=1)
+
+        return {
+            "logits": stitched_logits,
+            "macro_logits": stitched_macro,
+            "boundary_logits": stitched_bnd,
         }
 
 
@@ -393,12 +602,28 @@ class PhonoV73SpeechModel(PhonoV72SpeechModel):
             if k in model_dict and model_dict[k].shape == v.shape:
                 model_dict[k].copy_(v)
                 transferred += 1
-            # Map legacy linear phoneme_head to RecursivePhonemeHead.base_head
-            elif "encoder.phoneme_head.weight" in k and "encoder.phoneme_head.base_head.weight" in model_dict:
-                model_dict["encoder.phoneme_head.base_head.weight"].copy_(v)
+            # Splicing for base_head (56 -> 104) and legacy weights
+            elif ("encoder.phoneme_head.base_head.weight" in k or "encoder.phoneme_head.weight" in k) and "encoder.phoneme_head.base_head.weight" in model_dict:
+                min_c = min(model_dict["encoder.phoneme_head.base_head.weight"].shape[0], v.shape[0])
+                model_dict["encoder.phoneme_head.base_head.weight"][:min_c].copy_(v[:min_c])
                 transferred += 1
-            elif "encoder.phoneme_head.bias" in k and "encoder.phoneme_head.base_head.bias" in model_dict:
-                model_dict["encoder.phoneme_head.base_head.bias"].copy_(v)
+            elif ("encoder.phoneme_head.base_head.bias" in k or "encoder.phoneme_head.bias" in k) and "encoder.phoneme_head.base_head.bias" in model_dict:
+                min_c = min(model_dict["encoder.phoneme_head.base_head.bias"].shape[0], v.shape[0])
+                model_dict["encoder.phoneme_head.base_head.bias"][:min_c].copy_(v[:min_c])
+                transferred += 1
+            elif "encoder.phoneme_head.refiner_in.weight" in k and "encoder.phoneme_head.refiner_in.weight" in model_dict:
+                t_w = model_dict["encoder.phoneme_head.refiner_in.weight"]
+                t_w[:, :512, :].copy_(v[:, :512, :])
+                min_p = min(t_w.shape[1] - 512, v.shape[1] - 512)
+                t_w[:, 512 : 512 + min_p, :].copy_(v[:, 512 : 512 + min_p, :])
+                transferred += 1
+            elif "encoder.phoneme_head.refiner_out.weight" in k and "encoder.phoneme_head.refiner_out.weight" in model_dict:
+                min_c = min(model_dict["encoder.phoneme_head.refiner_out.weight"].shape[0], v.shape[0])
+                model_dict["encoder.phoneme_head.refiner_out.weight"][:min_c].copy_(v[:min_c])
+                transferred += 1
+            elif "encoder.phoneme_head.refiner_out.bias" in k and "encoder.phoneme_head.refiner_out.bias" in model_dict:
+                min_c = min(model_dict["encoder.phoneme_head.refiner_out.bias"].shape[0], v.shape[0])
+                model_dict["encoder.phoneme_head.refiner_out.bias"][:min_c].copy_(v[:min_c])
                 transferred += 1
             else:
                 skipped += 1

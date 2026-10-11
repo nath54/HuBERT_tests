@@ -17,7 +17,7 @@ import torch.nn.functional as F
 from src.models.config import HuBERTConfig
 from src.models.cnn_encoder import HuBERTFeatureEncoder
 from src.models.transformer import HuBERTEncoder
-from src.data.phoneme_tokenizer import PhonemeTokenizer
+from src.data.phoneme_tokenizer import PhonemeTokenizer, PHONEME_VOCAB_SIZE
 
 
 @dataclass
@@ -25,7 +25,7 @@ class PhonoHuBERTHierarchicalConfig(HuBERTConfig):
     """Configuration for PhonoHuBERTHierarchical Model."""
 
     # Vocabulary & Special Tokens
-    vocab_size: int = 64
+    vocab_size: int = PHONEME_VOCAB_SIZE
     phoneme_offset: int = 8             # Index where phonetic tokens begin (after special tokens 0..7)
     pad_token_id: int = 0
     blank_token_id: int = 1
