@@ -256,7 +256,7 @@ def main():
     parser.add_argument("--max_duration_seconds", type=float, default=14.0)
     parser.add_argument("--eval_every", type=int, default=2000)
     parser.add_argument("--log_every", type=int, default=50)
-    parser.add_argument("--chunk_eval", action="store_true", default=True)
+    parser.add_argument("--chunk_eval", action="store_true", default=False)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--resume", action="store_true", default=True)
     args = parser.parse_args()

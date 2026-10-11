@@ -231,7 +231,7 @@ class PhonoV8AcousticBackbone(PhonoV64GatedDiffusionForPreTraining):
                 "boundary_logits": out["boundary_logits"],
             }
 
-        total_frames = total_samples // 320
+        total_frames = self.config.compute_output_length(total_samples)
         device = audio.device
 
         blended_logits = torch.zeros(B, total_frames, self.vocab_size, device=device)
@@ -240,21 +240,40 @@ class PhonoV8AcousticBackbone(PhonoV64GatedDiffusionForPreTraining):
 
         start = 0
         while start < total_samples:
-            end = min(start + chunk_size, total_samples)
+            if total_samples - start < 1600:
+                # Stub smaller than receptive field (< 0.1s); already covered by previous window
+                break
+
+            # If tail chunk is shorter than chunk_size, align start so chunk has full chunk_size
+            if (total_samples - start) < chunk_size and start > 0:
+                start = max(0, total_samples - chunk_size)
+                end = total_samples
+                is_last = True
+            else:
+                end = min(start + chunk_size, total_samples)
+                is_last = (end >= total_samples)
+
             chunk_audio = audio[:, start:end]
             cur_len = end - start
+            if cur_len < 1600:
+                break
 
             out = self.forward(chunk_audio)
             c_logits = out["logits"]
             c_boundaries = out["boundary_logits"]
             c_frames = c_logits.shape[1]
 
-            f_start = start // 320
+            f_start = self.config.compute_output_length(start) if start > 0 else 0
             f_end = min(f_start + c_frames, total_frames)
             valid_frames = f_end - f_start
+            if valid_frames <= 0:
+                if is_last:
+                    break
+                start += hop_size
+                continue
 
             w = torch.ones(1, valid_frames, 1, device=device)
-            ov_frames = int((overlap_seconds * sample_rate) // 320)
+            ov_frames = self.config.compute_output_length(overlap_size)
             if f_start > 0 and ov_frames > 0:
                 ramp_len = min(ov_frames, valid_frames)
                 w[:, :ramp_len, :] *= torch.linspace(0.0, 1.0, ramp_len, device=device).view(1, -1, 1)
@@ -266,6 +285,8 @@ class PhonoV8AcousticBackbone(PhonoV64GatedDiffusionForPreTraining):
             blended_boundaries[:, f_start:f_end, :] += c_boundaries[:, :valid_frames, :] * w
             weight_sum[:, f_start:f_end, :] += w
 
+            if is_last:
+                break
             start += hop_size
 
         safe_weight = weight_sum.clamp(min=1e-5)

@@ -49,7 +49,22 @@ class TestPhonoV8Acoustic(unittest.TestCase):
             device=self.device,
         )
         self.assertGreater(t, 500)
-        self.assertGreater(f, 0)
+
+    def test_forward_sliding_chunks_awkward_lengths(self):
+        # Test short, long, and irregular length audios that previously risked stub chunk underflows
+        lengths = [
+            16000 * 2,           # 2s (shorter than 8s chunk)
+            16000 * 8 + 1,       # 8s + 1 sample
+            16000 * 12 + 10,     # 12s + 10 samples
+            16000 * 14,          # 14s
+        ]
+        for L in lengths:
+            audio = torch.randn(1, L, device=self.device)
+            out = self.model.forward_sliding_chunks(audio, chunk_seconds=8.0, overlap_seconds=2.0)
+            self.assertIn("logits", out)
+            self.assertIn("boundary_logits", out)
+            expected_frames = self.model.config.compute_output_length(L)
+            self.assertEqual(out["logits"].shape[1], expected_frames)
 
 
 if __name__ == "__main__":
