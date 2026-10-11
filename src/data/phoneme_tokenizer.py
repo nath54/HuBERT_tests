@@ -12,10 +12,26 @@ Plus full French and English International Phonetic Alphabet (IPA) phonemes.
 """
 
 from typing import Dict, List, Optional, Set, Union
+import torch
+
+PHONEME_VOCAB_SIZE: int = 112
+PHONEME_SPECIAL_TOKENS_COUNT: int = 8
+NUM_ARTICULATORY_GROUPS: int = 8
+
+ARTICULATORY_GROUPS: List[str] = [
+    "NON_SPEECH",          # 0: pad, blank, mask, silence, noise, same, eos, unk, reserved
+    "PROSODY_PUNCT",       # 1: spaces, hyphens, stress markers, punctuation
+    "VOWEL",               # 2: oral and nasal vowels
+    "STOP_PLOSIVE",        # 3: stops and plosives
+    "FRICATIVE",           # 4: sibilants, central and lateral fricatives
+    "NASAL",               # 5: nasal consonants
+    "LIQUID_APPROXIMANT",  # 6: liquids, glides, approximants
+    "AFFRICATE_TRILL",     # 7: affricates, trills, taps
+]
 
 
 class PhonemeTokenizer:
-    """Bilingual (FR + EN) Phoneme Tokenizer with dedicated special tokens."""
+    """Multilingual Phoneme Tokenizer with dedicated articulatory grouping and unified 112 vocabulary."""
 
     SPECIAL_TOKENS = [
         "<pad>",
@@ -28,7 +44,7 @@ class PhonemeTokenizer:
         "<unk>",
     ]
 
-    # Standard English and French IPA phoneme alphabet
+    # Standard English, French, Spanish, and Italian IPA phoneme alphabet
     IPA_INVENTORY = [
         # Word boundary / separator
         " ",
@@ -55,6 +71,8 @@ class PhonemeTokenizer:
         "c", "ɫ", "ɸ", "ʎ", "ʏ", "ʐ", "ʝ", "ɚ", "ᵻ",
         "\u02b2", "\u02e4", "\u0327", "\u0329",
         "!", ",", ":", ";", "?",
+        # Reserved token to guarantee exact 112 vocab alignment
+        "<reserved_111>",
     ]
 
     def __init__(self, extra_tokens: Optional[List[str]] = None):
@@ -111,6 +129,39 @@ class PhonemeTokenizer:
         self.id_to_phoneme = self.id_to_token
         self.phoneme_to_id = self.token_to_id
         self.vocab = self.token_to_id
+        self.token_to_articulatory_group = self.get_articulatory_mapping()
+
+    def get_articulatory_mapping(self) -> torch.Tensor:
+        """Returns tensor of shape [112] mapping each token ID to its articulatory group (0..7)."""
+        mapping = torch.zeros(self.vocab_size, dtype=torch.long)
+        vowels = {'a', 'e', 'i', 'o', 'u', 'y', 'ɑ', 'ɒ', 'ɔ', 'ə', 'ɛ', 'ɜ', 'ɪ', 'ʊ', 'ʌ', 'æ', 'ø', 'œ', '\u0303', 'ɐ', 'ɯ', 'ɤ', 'ɨ', 'ʏ', 'ɚ', 'ᵻ', '\u031e', '\u0308', '\u032a', '\u0361', '\u1d5d'}
+        stops = {'b', 'd', 'ɡ', 'g', 'k', 'p', 't', 'ʔ', 'c', 'q'}
+        fricatives = {'f', 'v', 's', 'z', 'θ', 'ð', 'ʃ', 'ʒ', 'h', 'x', 'ɣ', 'β', 'ħ', 'ʕ', 'χ', 'ɕ', 'ʑ', 'ç', 'ɸ', 'ʐ', 'ʝ', '\u02e4', '\u0327'}
+        nasals = {'m', 'n', 'ŋ', 'ɲ', 'ɴ', '\u0329'}
+        liquids = {'l', 'ɫ', 'ʎ', 'ɹ', 'ʁ', 'j', 'w', 'ɥ', '\u02b2'}
+        affricates = {'tʃ', 'dʒ', 'ts', 'dz', 'ɾ', 'r', 'ɽ'}
+        prosody = {' ', '-', 'ˈ', 'ˌ', 'ː', 'ˑ', '1', '2', '3', '4', '5', '.', '!', ',', ':', ';', '?'}
+
+        for idx, t in self.id_to_token.items():
+            if idx < 8 or t == '<reserved_111>':
+                mapping[idx] = 0  # NON_SPEECH
+            elif t in prosody:
+                mapping[idx] = 1  # PROSODY_PUNCT
+            elif t in vowels:
+                mapping[idx] = 2  # VOWEL
+            elif t in stops:
+                mapping[idx] = 3  # STOP_PLOSIVE
+            elif t in fricatives:
+                mapping[idx] = 4  # FRICATIVE
+            elif t in nasals:
+                mapping[idx] = 5  # NASAL
+            elif t in liquids:
+                mapping[idx] = 6  # LIQUID_APPROXIMANT
+            elif t in affricates:
+                mapping[idx] = 7  # AFFRICATE_TRILL
+            else:
+                mapping[idx] = 0
+        return mapping
 
     @property
     def vocab_size(self) -> int:
@@ -120,10 +171,9 @@ class PhonemeTokenizer:
         """Convert a phoneme sequence into token IDs with unicode NFKD normalization and allophone folding."""
         import unicodedata
 
-        # Standard canonical IPA allophone mapping (eSpeak / Piper -> base IPA inventory)
+        # Standard canonical IPA allophone mapping
         allophone_map = {
             "ɚ": "əɹ",
-            "ɾ": "t",
             "ɐ": "ə",
             "ʲ": "j",
             "̩": "",

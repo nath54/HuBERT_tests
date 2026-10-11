@@ -64,7 +64,13 @@ def load_librispeech_manifest(json_path: str, max_samples: Optional[int] = None,
     return samples
 
 
-def load_mls_manifest(mls_dir: str, lang: str, split: str = "train", max_samples: Optional[int] = None) -> List[AudioUtterance]:
+def load_mls_manifest(
+    mls_dir: str,
+    lang: str,
+    split: str = "train",
+    max_samples: Optional[int] = None,
+    max_char_len: int = 150,
+) -> List[AudioUtterance]:
     """Load OpenSLR MLS manifest (transcripts.txt + audio/<speaker>/<chapter>/<id>.flac)."""
     base = Path(mls_dir)
     transcripts_path = base / split / "transcripts.txt"
@@ -84,6 +90,8 @@ def load_mls_manifest(mls_dir: str, lang: str, split: str = "train", max_samples
                 continue
             uid, text = parts[0].strip(), parts[1].strip()
             if not text:
+                continue
+            if max_char_len > 0 and len(text) > max_char_len:
                 continue
 
             id_parts = uid.split("_")
@@ -184,9 +192,22 @@ class MultilingualAudioDataset(Dataset):
                 indices = np.round(np.arange(0, len(wav), sr / self.sample_rate)).astype(int)
                 indices = indices[indices < len(wav)]
                 wav = wav[indices]
-            # Truncate to max samples
-            if len(wav) > self.max_samples:
-                wav = wav[: self.max_samples]
+            # Zero-truncation policy: Ensure 100% full, uncropped audio corresponding to full text
+            # If audio exceeds max duration, cleanly fetch another within-budget utterance
+            attempts = 0
+            while len(wav) > self.max_samples and attempts < 15:
+                idx = (idx + 17) % len(self.utterances)
+                item = self.utterances[idx]
+                text = self.roman_tok.normalize(item.transcript)
+                wav, sr = sf.read(item.audio_path, dtype="float32")
+                if wav.ndim > 1:
+                    wav = np.mean(wav, axis=1)
+                if sr != self.sample_rate:
+                    indices = np.round(np.arange(0, len(wav), sr / self.sample_rate)).astype(int)
+                    indices = indices[indices < len(wav)]
+                    wav = wav[indices]
+                attempts += 1
+
             audio_tensor = torch.from_numpy(wav).float()
         except Exception:
             # Fallback zero audio if file read fails
@@ -211,6 +232,7 @@ class MultilingualAudioDataset(Dataset):
             "lang": item.lang,
             "audio": audio_tensor,
             "audio_length": len(audio_tensor),
+            "audio_path": item.audio_path,
             "transcript": text,
             "phoneme_targets": phoneme_targets,
             "phoneme_length": len(phoneme_targets),
@@ -385,6 +407,8 @@ class MultilingualSpeechCollator:
             "target_lengths": target_lengths,
             "transcripts": [s["transcript"] for s in batch],
             "languages": [s["lang"] for s in batch],
+            "ids": [s["id"] for s in batch],
+            "audio_paths": [s.get("audio_path", "") for s in batch],
         }
         if target_word_ids is not None:
             res["target_word_ids"] = target_word_ids

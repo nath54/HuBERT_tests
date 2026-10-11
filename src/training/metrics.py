@@ -38,6 +38,22 @@ def compute_wer(predictions: List[str], references: List[str]) -> float:
     return total_distance / max(total_words, 1)
 
 
+def compute_per(predictions: List[List[str]], references: List[List[str]]) -> float:
+    """Compute Phoneme Error Rate (PER).
+    
+    PER = (Substitutions + Deletions + Insertions) / Total Reference Phonemes
+    """
+    total_distance = 0
+    total_phonemes = 0
+
+    for pred_ph, ref_ph in zip(predictions, references):
+        total_distance += editdistance.eval(pred_ph, ref_ph)
+        total_phonemes += max(len(ref_ph), 1)
+
+    return total_distance / max(total_phonemes, 1)
+
+
+
 class MetricTracker:
     """Accumulates losses and calculates running averages."""
 
