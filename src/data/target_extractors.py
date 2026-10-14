@@ -119,8 +119,9 @@ class PhonemeTargetExtractor(BaseTargetExtractor):
     - Frame-level interpolated targets for frame-synchronous SSL models
     """
 
-    def __init__(self, tokenizer: Optional[PhonemeTokenizer] = None):
+    def __init__(self, tokenizer: Optional[PhonemeTokenizer] = None, space_free: bool = True):
         self.tokenizer = tokenizer or PhonemeTokenizer()
+        self.space_free = space_free
         self._espeak_phonemizer = None
         self._phoneme_cache: Dict[str, Tuple[List[int], List[int]]] = {}
 
@@ -130,6 +131,16 @@ class PhonemeTargetExtractor(BaseTargetExtractor):
             for ch in ("ˈ", "ˌ", "ː", "ˑ")
             if ch in self.tokenizer.token_to_id
         }
+        self.space_token_id = self.tokenizer.token_to_id.get(" ", 8)
+        self.hyphen_token_id = self.tokenizer.token_to_id.get("-", None)
+
+        # Tokens to exclude from sequence CTC targets
+        self.excluded_ctc_ids = set(self.diacritic_ids)
+        if self.space_free:
+            self.excluded_ctc_ids.add(self.space_token_id)
+            if self.hyphen_token_id is not None:
+                self.excluded_ctc_ids.add(self.hyphen_token_id)
+
         non_frame_tokens = {"ˈ", "ˌ", "ː", "ˑ", " ", "-", "\n", "\t"}
         self.non_frame_ids = {
             self.tokenizer.token_to_id.get(ch)
@@ -200,8 +211,8 @@ class PhonemeTargetExtractor(BaseTargetExtractor):
             # 2. Encode to token IDs
             token_ids = self.tokenizer.encode(flat_phonemes, add_eos=True)
 
-            # Filter non-acoustic diacritics from CTC sequence targets
-            ctc_token_ids = [t for t in token_ids if t not in self.diacritic_ids]
+            # Filter non-acoustic diacritics and spaces (if space_free) from CTC sequence targets
+            ctc_token_ids = [t for t in token_ids if t not in self.excluded_ctc_ids]
             if not ctc_token_ids:
                 ctc_token_ids = [self.tokenizer.silence_token_id, self.tokenizer.eos_token_id]
 

@@ -279,7 +279,7 @@ def main():
     parser.add_argument("--clean_val_manifest", type=str, default="data/clean_multilingual_val.json")
     parser.add_argument("--librispeech_train", type=str, default="data/librispeech/librispeech_train_460h.json")
     parser.add_argument("--warm_start_ckpt", type=str, default="checkpoints/phono_v8_acoustic/best_v8_acoustic.pt")
-    parser.add_argument("--output_dir", type=str, default="checkpoints/phono_v8_acoustic_multilingual_80k")
+    parser.add_argument("--output_dir", type=str, default="checkpoints/phono_v8_acoustic_multilingual_80k_space_free")
     parser.add_argument("--max_steps", type=int, default=80000)
     parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--grad_accum", type=int, default=4)
@@ -293,6 +293,8 @@ def main():
     parser.add_argument("--chunk_eval", action="store_true", default=False)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--resume", action="store_true", default=True)
+    parser.add_argument("--space_free", dest="space_free", action="store_true", default=True, help="Extract space-free phonetic CTC sequence targets (pure acoustic sound stream)")
+    parser.add_argument("--no_space_free", dest="space_free", action="store_false", help="Include spaces in phonetic CTC targets")
     args = parser.parse_args()
 
     torch.manual_seed(args.seed)
@@ -307,6 +309,7 @@ def main():
     print(f"📁 Checkpoint Output Dir : {out_dir}")
     print(f"⚡ Device                 : {device.type.upper()}")
     print(f"🎯 Total Steps           : {args.max_steps}")
+    print(f"🌌 Continuous Space-Free : {'ENABLED (100% sound-only phoneme stream)' if args.space_free else 'DISABLED (with space token 8)'}")
     print(f"🔥 Micro-Batch / Accum   : {args.batch_size} / {args.grad_accum} (Effective BS = {args.batch_size * args.grad_accum})")
     print(f"📈 Learning Rate         : {args.lr} -> {args.min_lr}")
     print(f"📝 Logging Mode          : Live step log every {args.log_every} st | Rich Top-3 inspection every {args.sample_every} st")
@@ -361,7 +364,7 @@ def main():
     print(f"  🌟 Combined Corpus: {len(train_utts)} train utterances, {len(val_utts)} val utterances\n", flush=True)
 
     ph_tokenizer = PhonemeTokenizer()
-    ph_extractor = PhonemeTargetExtractor(ph_tokenizer)
+    ph_extractor = PhonemeTargetExtractor(ph_tokenizer, space_free=args.space_free)
     roman_tok = RomanCharTokenizer()
 
     train_dataset = MultilingualAudioDataset(
@@ -472,14 +475,24 @@ def main():
         acoustic_model, val_loader, ph_tokenizer, device, token_to_macro, max_eval_batches=25, chunk_eval=args.chunk_eval
     )
     best_val_per = min(init_val["val_per"], saved_val_per) if saved_val_per is not None else init_val["val_per"]
-    init_bd = " | ".join([
-        f"{flag_map.get(l, l.upper())}: PER {p:4.1f}% (Ac: {init_val.get('val_ac_per_by_lang', {}).get(l, p):4.1f}%, WER: {init_val.get('val_wer_by_lang', {}).get(l, 0.0):4.1f}%)"
-        for l, p in init_val.get("val_per_by_lang", {}).items()
-    ])
-    print(
-        f"  📊 Step {start_step} Baseline | Val PER: \033[1;31m{init_val['val_per']:5.2f}%\033[0m (Acoustic PER: \033[1;32m{init_val['val_acoustic_per']:5.2f}%\033[0m) | "
-        f"P-WER: {init_val['val_wer']:5.2f}% | Space Acc: {init_val['val_spc_acc']:5.2f}% | Val Loss: {init_val['val_loss']:.4f} | Best Record: {best_val_per:.2f}%"
-    )
+    if args.space_free:
+        init_bd = " | ".join([
+            f"{flag_map.get(l, l.upper())}: Continuous Space-Free PER {p:4.1f}%"
+            for l, p in init_val.get("val_per_by_lang", {}).items()
+        ])
+        print(
+            f"  📊 Step {start_step} Baseline | Continuous Space-Free Val PER: \033[1;32m{init_val['val_per']:5.2f}%\033[0m | "
+            f"Val Loss: {init_val['val_loss']:.4f} | Best Record: {best_val_per:.2f}%"
+        )
+    else:
+        init_bd = " | ".join([
+            f"{flag_map.get(l, l.upper())}: PER {p:4.1f}% (Ac: {init_val.get('val_ac_per_by_lang', {}).get(l, p):4.1f}%, WER: {init_val.get('val_wer_by_lang', {}).get(l, 0.0):4.1f}%)"
+            for l, p in init_val.get("val_per_by_lang", {}).items()
+        ])
+        print(
+            f"  📊 Step {start_step} Baseline | Val PER: \033[1;31m{init_val['val_per']:5.2f}%\033[0m (Acoustic PER: \033[1;32m{init_val['val_acoustic_per']:5.2f}%\033[0m) | "
+            f"P-WER: {init_val['val_wer']:5.2f}% | Space Acc: {init_val['val_spc_acc']:5.2f}% | Val Loss: {init_val['val_loss']:.4f} | Best Record: {best_val_per:.2f}%"
+        )
     if init_bd:
         print(f"     🌍 Multilingual Baseline: {init_bd}\n", flush=True)
 
@@ -611,12 +624,19 @@ def main():
             avg_moe = running_moe / max(1, args.log_every if global_step > 1 else 1)
             cur_lr = scheduler.get_last_lr()[0]
 
-            print(
-                f"Step {global_step:5d}/{args.max_steps} | Loss: {avg_loss:.4f} (CTC: {avg_ctc:.3f}, Draft: {avg_draft:.3f}, MoE: {avg_moe:.3f}) | "
-                f"PER: {step_per:4.1f}% (Acoustic: {step_ac_per:4.1f}%) | WER: {step_wer:4.1f}% | SpcAcc: {step_spc:4.1f}% | "
-                f"LR: {cur_lr:.2e} | {rate:3.1f} st/s | ETA: {eta_str}",
-                flush=True,
-            )
+            if args.space_free:
+                print(
+                    f"Step {global_step:5d}/{args.max_steps} | Loss: {avg_loss:.4f} (CTC: {avg_ctc:.3f}, Draft: {avg_draft:.3f}, MoE: {avg_moe:.3f}) | "
+                    f"Space-Free PER: {step_per:4.1f}% | LR: {cur_lr:.2e} | {rate:3.1f} st/s | ETA: {eta_str}",
+                    flush=True,
+                )
+            else:
+                print(
+                    f"Step {global_step:5d}/{args.max_steps} | Loss: {avg_loss:.4f} (CTC: {avg_ctc:.3f}, Draft: {avg_draft:.3f}, MoE: {avg_moe:.3f}) | "
+                    f"PER: {step_per:4.1f}% (Acoustic: {step_ac_per:4.1f}%) | WER: {step_wer:4.1f}% | SpcAcc: {step_spc:4.1f}% | "
+                    f"LR: {cur_lr:.2e} | {rate:3.1f} st/s | ETA: {eta_str}",
+                    flush=True,
+                )
 
             running_loss = 0.0
             running_ctc = 0.0
@@ -646,19 +666,33 @@ def main():
                     top3_lines.append(f"        {e['phoneme']:<4} -> [{cand_strs}]")
                 top3_str = "\n".join(top3_lines) if top3_lines else "        (none)"
 
-                spc_r = sample["spc_res"]
-                print(
-                    f"\n  ══════════════════════════════════════════════════════════════════════════════\n"
-                    f"  🔍 [Step {global_step} Inspection ({s_flag})] | PER: {sample['per']:4.1f}% | Acoustic PER: {sample['ac_per']:4.1f}% | P-WER: {sample['wer']:4.1f}%\n"
-                    f"     Space Acc: {spc_r['accuracy']:4.1f}% (Correct: {spc_r['correct']}, Missed: {spc_r['missed']}, Extra: {spc_r['extra']})\n"
-                    f"     • GT Text      : {sample['text'][:140]}\n"
-                    f"     • GT Phonemes  : {sample['gt_ph'][:140]}\n"
-                    f"     • Pred Phonemes: {sample['pred_ph'][:140]}\n"
-                    f"     • Top-3 Phoneme Candidates Snippet (first 10 emitted phones):\n"
-                    f"{top3_str}\n"
-                    f"  ══════════════════════════════════════════════════════════════════════════════\n",
-                    flush=True,
-                )
+                if args.space_free:
+                    print(
+                        f"\n  ══════════════════════════════════════════════════════════════════════════════\n"
+                        f"  🔍 [Step {global_step} Inspection ({s_flag})] | Continuous Space-Free PER: {sample['per']:4.1f}%\n"
+                        f"     • Mode         : 100% Space-Free Acoustic Phoneme Stream (Pure Sound Predictions)\n"
+                        f"     • GT Text      : {sample['text'][:140]}\n"
+                        f"     • GT Phonemes  : {sample['gt_ph'][:140]}\n"
+                        f"     • Pred Phonemes: {sample['pred_ph'][:140]}\n"
+                        f"     • Top-3 Phoneme Candidates Snippet (first 10 emitted phones):\n"
+                        f"{top3_str}\n"
+                        f"  ══════════════════════════════════════════════════════════════════════════════\n",
+                        flush=True,
+                    )
+                else:
+                    spc_r = sample["spc_res"]
+                    print(
+                        f"\n  ══════════════════════════════════════════════════════════════════════════════\n"
+                        f"  🔍 [Step {global_step} Inspection ({s_flag})] | PER: {sample['per']:4.1f}% | Acoustic PER: {sample['ac_per']:4.1f}% | P-WER: {sample['wer']:4.1f}%\n"
+                        f"     Space Acc: {spc_r['accuracy']:4.1f}% (Correct: {spc_r['correct']}, Missed: {spc_r['missed']}, Extra: {spc_r['extra']})\n"
+                        f"     • GT Text      : {sample['text'][:140]}\n"
+                        f"     • GT Phonemes  : {sample['gt_ph'][:140]}\n"
+                        f"     • Pred Phonemes: {sample['pred_ph'][:140]}\n"
+                        f"     • Top-3 Phoneme Candidates Snippet (first 10 emitted phones):\n"
+                        f"{top3_str}\n"
+                        f"  ══════════════════════════════════════════════════════════════════════════════\n",
+                        flush=True,
+                    )
 
         # Periodic Validation & Checkpointing
         if global_step % args.eval_every == 0:
@@ -679,33 +713,62 @@ def main():
             if is_best:
                 best_val_per = val_res["val_per"]
 
-            bd_str = " | ".join([
-                f"{flag_map.get(l, l.upper())}: PER {p:4.1f}% (Ac: {val_res.get('val_ac_per_by_lang', {}).get(l, p):4.1f}%, WER: {val_res.get('val_wer_by_lang', {}).get(l, 0.0):4.1f}%)"
-                for l, p in val_res.get("val_per_by_lang", {}).items()
-            ])
-            print(
-                f"  📊 Val Results: PER: \033[1;31m{val_res['val_per']:5.2f}%\033[0m (Acoustic PER: \033[1;32m{val_res['val_acoustic_per']:5.2f}%\033[0m) | "
-                f"P-WER: {val_res['val_wer']:5.2f}% | Space Acc: {val_res['val_spc_acc']:5.2f}% | Loss: {val_res['val_loss']:.4f}{record_str}\n"
-                f"     🌍 Multilingual Metrics: {bd_str}"
-            )
-            print("─" * 80)
-
-            for l_k, s_v in val_res["samples"].items():
-                s_flag = flag_map.get(l_k, l_k.upper())
-                top3_lines = []
-                for e in s_v.get("top3_emissions", []):
-                    cand_strs = " | ".join([f"{cand}: {prob:.2f}" for cand, prob in e["topk"]])
-                    top3_lines.append(f"        {e['phoneme']:<4} -> [{cand_strs}]")
-                top3_str = "\n".join(top3_lines) if top3_lines else "        (none)"
+            if args.space_free:
+                bd_str = " | ".join([
+                    f"{flag_map.get(l, l.upper())}: Space-Free PER {p:4.1f}%"
+                    for l, p in val_res.get("val_per_by_lang", {}).items()
+                ])
                 print(
-                    f"  🔍 [Val {s_flag}] | PER: {s_v['per_greedy']:4.1f}% | Acoustic PER: {s_v['acoustic_per']:4.1f}% | P-WER: {s_v['pwer']:4.1f}% | Spc Acc: {s_v['spc_acc']:4.1f}%\n"
-                    f"    • GT Text      : {s_v['text'][:140]}\n"
-                    f"    • GT Phonemes  : {s_v['gt'][:140]}\n"
-                    f"    • Pred Phonemes: {s_v['pred_greedy'][:140]}\n"
-                    f"    • Top-3 Candidates Snippet:\n"
-                    f"{top3_str}"
+                    f"  📊 Val Results: Continuous Space-Free PER: \033[1;32m{val_res['val_per']:5.2f}%\033[0m | "
+                    f"Loss: {val_res['val_loss']:.4f}{record_str}\n"
+                    f"     🌍 Multilingual Metrics: {bd_str}"
                 )
-            print("─" * 80 + "\n")
+                print("─" * 80)
+
+                for l_k, s_v in val_res["samples"].items():
+                    s_flag = flag_map.get(l_k, l_k.upper())
+                    top3_lines = []
+                    for e in s_v.get("top3_emissions", []):
+                        cand_strs = " | ".join([f"{cand}: {prob:.2f}" for cand, prob in e["topk"]])
+                        top3_lines.append(f"        {e['phoneme']:<4} -> [{cand_strs}]")
+                    top3_str = "\n".join(top3_lines) if top3_lines else "        (none)"
+                    print(
+                        f"  🔍 [Val {s_flag}] | Continuous Space-Free PER: {s_v['per_greedy']:4.1f}%\n"
+                        f"    • GT Text      : {s_v['text'][:140]}\n"
+                        f"    • GT Phonemes  : {s_v['gt'][:140]}\n"
+                        f"    • Pred Phonemes: {s_v['pred_greedy'][:140]}\n"
+                        f"    • Top-3 Candidates Snippet:\n"
+                        f"{top3_str}"
+                    )
+                print("─" * 80 + "\n")
+            else:
+                bd_str = " | ".join([
+                    f"{flag_map.get(l, l.upper())}: PER {p:4.1f}% (Ac: {val_res.get('val_ac_per_by_lang', {}).get(l, p):4.1f}%, WER: {val_res.get('val_wer_by_lang', {}).get(l, 0.0):4.1f}%)"
+                    for l, p in val_res.get("val_per_by_lang", {}).items()
+                ])
+                print(
+                    f"  📊 Val Results: PER: \033[1;31m{val_res['val_per']:5.2f}%\033[0m (Acoustic PER: \033[1;32m{val_res['val_acoustic_per']:5.2f}%\033[0m) | "
+                    f"P-WER: {val_res['val_wer']:5.2f}% | Space Acc: {val_res['val_spc_acc']:5.2f}% | Loss: {val_res['val_loss']:.4f}{record_str}\n"
+                    f"     🌍 Multilingual Metrics: {bd_str}"
+                )
+                print("─" * 80)
+
+                for l_k, s_v in val_res["samples"].items():
+                    s_flag = flag_map.get(l_k, l_k.upper())
+                    top3_lines = []
+                    for e in s_v.get("top3_emissions", []):
+                        cand_strs = " | ".join([f"{cand}: {prob:.2f}" for cand, prob in e["topk"]])
+                        top3_lines.append(f"        {e['phoneme']:<4} -> [{cand_strs}]")
+                    top3_str = "\n".join(top3_lines) if top3_lines else "        (none)"
+                    print(
+                        f"  🔍 [Val {s_flag}] | PER: {s_v['per_greedy']:4.1f}% | Acoustic PER: {s_v['acoustic_per']:4.1f}% | P-WER: {s_v['pwer']:4.1f}% | Spc Acc: {s_v['spc_acc']:4.1f}%\n"
+                        f"    • GT Text      : {s_v['text'][:140]}\n"
+                        f"    • GT Phonemes  : {s_v['gt'][:140]}\n"
+                        f"    • Pred Phonemes: {s_v['pred_greedy'][:140]}\n"
+                        f"    • Top-3 Candidates Snippet:\n"
+                        f"{top3_str}"
+                    )
+                print("─" * 80 + "\n")
 
             # Save Checkpoints
             save_payload = {
