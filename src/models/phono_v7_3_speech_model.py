@@ -178,12 +178,15 @@ def decode_calibrated_phonemes(
     pad_id: int = 0,
     space_id: int = 8,
     blank_penalty: float = 0.5,
+    space_bonus: float = 0.0,
     min_tokens_between_spaces: int = 1,
 ) -> List[int]:
-    """Calibrated CTC decoding with blank threshold penalty and consecutive space suppression."""
+    """Calibrated CTC decoding with blank threshold penalty, space boost bonus, and consecutive space suppression."""
     adjusted_logits = logits.clone()
     if blank_penalty > 0.0:
         adjusted_logits[:, blank_id] -= blank_penalty
+    if space_bonus != 0.0:
+        adjusted_logits[:, space_id] += space_bonus
 
     preds = adjusted_logits.argmax(dim=-1).detach().cpu().tolist()
     collapsed = []
@@ -213,6 +216,78 @@ def decode_calibrated_phonemes(
         cleaned.pop()
 
     return cleaned
+
+
+def decode_top_k_calibrated_phonemes(
+    logits: torch.Tensor,
+    blank_id: int = 1,
+    pad_id: int = 0,
+    space_id: int = 8,
+    blank_penalty: float = 0.5,
+    space_bonus: float = 0.0,
+    top_k: int = 3,
+    min_tokens_between_spaces: int = 1,
+) -> Tuple[List[int], List[Tuple[List[int], List[float]]]]:
+    """Calibrated CTC decoding that extracts both discrete token IDs and per-emission Top-K candidates.
+
+    Returns:
+        cal_ids: List[int] discrete calibrated phoneme IDs (including space_id)
+        emissions: List of (top_k_ids, top_k_probs) tuples for each emitted phoneme/space
+    """
+    adjusted_logits = logits.clone()
+    if blank_penalty > 0.0:
+        adjusted_logits[:, blank_id] -= blank_penalty
+    if space_bonus != 0.0:
+        adjusted_logits[:, space_id] += space_bonus
+
+    preds = adjusted_logits.argmax(dim=-1).detach().cpu().tolist()
+
+    # Identify non-blank, non-repeat emission frames
+    collapsed_frames = []
+    prev = None
+    for t, p in enumerate(preds):
+        if p != prev:
+            if p != blank_id and p != pad_id:
+                collapsed_frames.append((t, p))
+            prev = p
+
+    # Clean consecutive spaces
+    cleaned_frames = []
+    tokens_since_last_space = 999
+    for t, p in collapsed_frames:
+        if p == space_id:
+            if tokens_since_last_space >= min_tokens_between_spaces and len(cleaned_frames) > 0:
+                cleaned_frames.append((t, p))
+                tokens_since_last_space = 0
+        else:
+            cleaned_frames.append((t, p))
+            tokens_since_last_space += 1
+
+    while cleaned_frames and cleaned_frames[-1][1] == space_id:
+        cleaned_frames.pop()
+
+    # Suppress trailing repeated token loops
+    while len(cleaned_frames) >= 2 and cleaned_frames[-1][1] == cleaned_frames[-2][1]:
+        cleaned_frames.pop()
+
+    cal_ids = [p for _, p in cleaned_frames]
+
+    # For each emission, extract top-K candidate tokens and probabilities
+    emissions = []
+    for t, p in cleaned_frames:
+        if p == space_id:
+            emissions.append(([space_id] * top_k, [1.0] + [0.0] * (top_k - 1)))
+        else:
+            frame_logits = adjusted_logits[t].clone()
+            frame_logits[blank_id] = -1e9
+            frame_logits[pad_id] = -1e9
+            frame_logits[space_id] = -1e9
+            top_vals, top_inds = torch.topk(frame_logits, k=top_k)
+            top_probs = F.softmax(top_vals, dim=-1).cpu().tolist()
+            top_ids = top_inds.cpu().tolist()
+            emissions.append((top_ids, top_probs))
+
+    return cal_ids, emissions
 
 
 # Backward compatibility alias
