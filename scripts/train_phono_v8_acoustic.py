@@ -58,6 +58,24 @@ def decode_ctc_phoneme_ids(logits: torch.Tensor, blank_id: int = 1, pad_id: int 
     return collapsed
 
 
+def compute_acoustic_per(pred_tokens: List[int], gt_tokens: List[int], space_token: int = 8) -> Tuple[int, int]:
+    """Computes phoneme edit distance strictly on speech sounds (excluding spaces)."""
+    p_pure = [t for t in pred_tokens if t != space_token]
+    g_pure = [t for t in gt_tokens if t != space_token]
+    ref_len = max(1, len(g_pure))
+    ed = editdistance.eval(p_pure, g_pure)
+    return ed, ref_len
+
+
+def compute_pwer(pred_ph_str: str, gt_ph_str: str) -> Tuple[int, int]:
+    """Computes phonetic Word Error Rate (P-WER) by comparing space-separated phonetic words."""
+    pr_words = [w for w in pred_ph_str.strip().split() if w]
+    gt_words = [w for w in gt_ph_str.strip().split() if w]
+    ref_len = max(1, len(gt_words))
+    ed = editdistance.eval(pr_words, gt_words)
+    return ed, ref_len
+
+
 def compute_spacing_errors(gt_tokens: List[int], pred_tokens: List[int], space_token: int = 8) -> Dict[str, Any]:
     matcher = difflib.SequenceMatcher(None, gt_tokens, pred_tokens)
     missed_spaces = 0
@@ -126,21 +144,27 @@ def evaluate_acoustic(
     ph_tokenizer: PhonemeTokenizer,
     device: torch.device,
     token_to_macro: torch.Tensor,
-    max_eval_batches: int = 25,
+    max_eval_batches: int = 30,
     chunk_eval: bool = False,
 ) -> Dict[str, Any]:
     model.eval()
     total_ed = 0
     total_ref_len = 0
-    total_ed_cal = 0
+    total_acoustic_ed = 0
+    total_acoustic_ref_len = 0
+    total_wer_ed = 0
+    total_wer_ref_len = 0
     total_spc_correct = 0
     total_spc_gt = 0
     total_loss = 0.0
     num_batches = 0
 
     per_lang_ed: Dict[str, int] = {}
-    per_lang_ed_cal: Dict[str, int] = {}
     per_lang_len: Dict[str, int] = {}
+    per_lang_ac_ed: Dict[str, int] = {}
+    per_lang_ac_len: Dict[str, int] = {}
+    per_lang_wer_ed: Dict[str, int] = {}
+    per_lang_wer_len: Dict[str, int] = {}
     val_sample_records: Dict[str, Dict[str, Any]] = {}
 
     for b_idx, batch in enumerate(val_loader):
@@ -156,7 +180,6 @@ def evaluate_acoustic(
         if chunk_eval and audio.shape[1] > 128000:
             chunk_out = model.forward_sliding_chunks(audio, chunk_seconds=8.0, overlap_seconds=2.0)
             logits = chunk_out["logits"]
-            boundary_logits = chunk_out["boundary_logits"]
             loss_val = 0.0
         else:
             out = model(
@@ -168,63 +191,73 @@ def evaluate_acoustic(
                 macro_lengths=phoneme_lengths,
             )
             logits = out["logits"]
-            boundary_logits = out["boundary_logits"]
             loss_val = out["loss"].item()
 
         total_loss += loss_val
         num_batches += 1
 
-        b_probs = F.softmax(boundary_logits, dim=-1)
-
         for i in range(len(audio)):
             l_i = batch["languages"][i]
             p_toks = decode_ctc_phoneme_ids(logits[i])
             g_toks = phoneme_targets[i][: phoneme_lengths[i]].cpu().tolist()
-
-            cal_toks = decode_calibrated_phonemes(logits[i], blank_penalty=0.4, min_tokens_between_spaces=1)
+            pred_ph = ph_tokenizer.decode(p_toks, skip_special=True)
+            gt_ph = ph_tokenizer.decode(g_toks, skip_special=True)
 
             ed_i = editdistance.eval(p_toks, g_toks)
-            ed_cal_i = editdistance.eval(cal_toks, g_toks)
             ref_i = max(1, len(g_toks))
 
+            ac_ed_i, ac_ref_i = compute_acoustic_per(p_toks, g_toks, space_token=8)
+            wer_ed_i, wer_ref_i = compute_pwer(pred_ph, gt_ph)
             spc_res = compute_spacing_errors(g_toks, p_toks, space_token=8)
 
             total_ed += ed_i
-            total_ed_cal += ed_cal_i
             total_ref_len += ref_i
+            total_acoustic_ed += ac_ed_i
+            total_acoustic_ref_len += ac_ref_i
+            total_wer_ed += wer_ed_i
+            total_wer_ref_len += wer_ref_i
             total_spc_correct += spc_res["correct"]
             total_spc_gt += spc_res["total_gt"]
 
             per_lang_ed[l_i] = per_lang_ed.get(l_i, 0) + ed_i
-            per_lang_ed_cal[l_i] = per_lang_ed_cal.get(l_i, 0) + ed_cal_i
             per_lang_len[l_i] = per_lang_len.get(l_i, 0) + ref_i
+            per_lang_ac_ed[l_i] = per_lang_ac_ed.get(l_i, 0) + ac_ed_i
+            per_lang_ac_len[l_i] = per_lang_ac_len.get(l_i, 0) + ac_ref_i
+            per_lang_wer_ed[l_i] = per_lang_wer_ed.get(l_i, 0) + wer_ed_i
+            per_lang_wer_len[l_i] = per_lang_wer_len.get(l_i, 0) + wer_ref_i
 
             if l_i not in val_sample_records:
+                top3_info = model.decode_topk_phonemes(logits[i], k=3, tokenizer=ph_tokenizer)[0]
                 val_sample_records[l_i] = {
                     "lang": l_i,
                     "text": batch["transcripts"][i],
-                    "gt": ph_tokenizer.decode(g_toks, skip_special=True),
-                    "pred_greedy": ph_tokenizer.decode(p_toks, skip_special=True),
-                    "pred_calib": ph_tokenizer.decode(cal_toks, skip_special=True),
+                    "gt": gt_ph,
+                    "pred_greedy": pred_ph,
                     "per_greedy": (ed_i / ref_i) * 100.0,
-                    "per_calib": (ed_cal_i / ref_i) * 100.0,
+                    "acoustic_per": (ac_ed_i / ac_ref_i) * 100.0,
+                    "pwer": (wer_ed_i / wer_ref_i) * 100.0,
                     "spc_acc": spc_res["accuracy"],
+                    "top3_emissions": top3_info["emissions"][:10],
                 }
 
     val_per = (total_ed / max(1, total_ref_len)) * 100.0
-    val_per_cal = (total_ed_cal / max(1, total_ref_len)) * 100.0
+    val_acoustic_per = (total_acoustic_ed / max(1, total_acoustic_ref_len)) * 100.0
+    val_wer = (total_wer_ed / max(1, total_wer_ref_len)) * 100.0
     spc_acc = (total_spc_correct / max(1, total_spc_gt)) * 100.0 if total_spc_gt > 0 else 100.0
 
     val_per_by_lang = {l: (per_lang_ed[l] / max(1, per_lang_len[l])) * 100.0 for l in per_lang_ed}
-    val_per_by_lang_cal = {l: (per_lang_ed_cal[l] / max(1, per_lang_len[l])) * 100.0 for l in per_lang_ed_cal}
+    val_ac_per_by_lang = {l: (per_lang_ac_ed[l] / max(1, per_lang_ac_len[l])) * 100.0 for l in per_lang_ac_ed}
+    val_wer_by_lang = {l: (per_lang_wer_ed[l] / max(1, per_lang_wer_len[l])) * 100.0 for l in per_lang_wer_ed}
 
     return {
         "val_per": val_per,
-        "val_per_cal": val_per_cal,
+        "val_acoustic_per": val_acoustic_per,
+        "val_wer": val_wer,
         "val_spc_acc": spc_acc,
         "val_loss": total_loss / max(1, num_batches),
         "val_per_by_lang": val_per_by_lang,
-        "val_per_by_lang_cal": val_per_by_lang_cal,
+        "val_ac_per_by_lang": val_ac_per_by_lang,
+        "val_wer_by_lang": val_wer_by_lang,
         "samples": val_sample_records,
     }
 
@@ -245,17 +278,18 @@ def main():
     parser.add_argument("--clean_train_manifest", type=str, default="data/clean_multilingual_train.json")
     parser.add_argument("--clean_val_manifest", type=str, default="data/clean_multilingual_val.json")
     parser.add_argument("--librispeech_train", type=str, default="data/librispeech/librispeech_train_460h.json")
-    parser.add_argument("--warm_start_ckpt", type=str, default="checkpoints/phono_v7_5_acoustic/best_acoustic.pt")
-    parser.add_argument("--output_dir", type=str, default="checkpoints/phono_v8_acoustic")
-    parser.add_argument("--max_steps", type=int, default=120000)
+    parser.add_argument("--warm_start_ckpt", type=str, default="checkpoints/phono_v8_acoustic/best_v8_acoustic.pt")
+    parser.add_argument("--output_dir", type=str, default="checkpoints/phono_v8_acoustic_multilingual_80k")
+    parser.add_argument("--max_steps", type=int, default=80000)
     parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--grad_accum", type=int, default=4)
-    parser.add_argument("--lr", type=float, default=8.0e-5)
-    parser.add_argument("--min_lr", type=float, default=5.0e-6)
+    parser.add_argument("--lr", type=float, default=4.0e-5)
+    parser.add_argument("--min_lr", type=float, default=2.0e-6)
     parser.add_argument("--warmup_steps", type=int, default=1000)
     parser.add_argument("--max_duration_seconds", type=float, default=14.0)
     parser.add_argument("--eval_every", type=int, default=2000)
-    parser.add_argument("--log_every", type=int, default=50)
+    parser.add_argument("--log_every", type=int, default=1)
+    parser.add_argument("--sample_every", type=int, default=20)
     parser.add_argument("--chunk_eval", action="store_true", default=False)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--resume", action="store_true", default=True)
@@ -267,7 +301,7 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
 
     print("=" * 80)
-    print("🚀 PHONO-V8.0: ACOUSTIC CONFORMER WITH DEEPSEEK MoE & PHONEME ENGRAM")
+    print("🚀 PHONO-V8.0: PURE MODEL 1 MULTILINGUAL ACOUSTIC TRAINING (80,000 STEPS)")
     print("=" * 80)
     print(f"📦 Warm-Start Checkpoint : {args.warm_start_ckpt}")
     print(f"📁 Checkpoint Output Dir : {out_dir}")
@@ -275,6 +309,7 @@ def main():
     print(f"🎯 Total Steps           : {args.max_steps}")
     print(f"🔥 Micro-Batch / Accum   : {args.batch_size} / {args.grad_accum} (Effective BS = {args.batch_size * args.grad_accum})")
     print(f"📈 Learning Rate         : {args.lr} -> {args.min_lr}")
+    print(f"📝 Logging Mode          : Live step log every {args.log_every} st | Rich Top-3 inspection every {args.sample_every} st")
 
     print("\n📚 Loading Gold-Standard Verbatim Datasets...", flush=True)
     train_utts: List[AudioUtterance] = []
@@ -389,9 +424,14 @@ def main():
         saved_val_per = ckpt.get("val_per")
         print(f"📍 Resuming training from step {start_step} (saved best val PER: {saved_val_per:.2f}%)...")
     elif os.path.isfile(args.warm_start_ckpt):
-        print(f"🔄 Warm-starting Phono-V8 from V7.5 weights: {args.warm_start_ckpt}...")
-        transferred, fresh = warm_start_phono_v8_from_v75(acoustic_model, args.warm_start_ckpt, device=torch.device("cpu"))
-        print(f"✅ Warm-start complete: transferred {transferred} tensors into DeepSeek MoE & Conformer ({fresh} fresh Engram/Router tensors)")
+        print(f"🔄 Initializing weights from {args.warm_start_ckpt}...")
+        ckpt = torch.load(args.warm_start_ckpt, map_location="cpu", weights_only=False)
+        if "acoustic_state_dict" in ckpt:
+            acoustic_model.load_state_dict(ckpt["acoustic_state_dict"])
+            print(f"✅ Loaded 100% matched Phono-V8 acoustic state dict from {args.warm_start_ckpt}")
+        else:
+            transferred, fresh = warm_start_phono_v8_from_v75(acoustic_model, args.warm_start_ckpt, device=torch.device("cpu"))
+            print(f"✅ Warm-start complete: transferred {transferred} tensors into DeepSeek MoE & Conformer ({fresh} fresh Engram/Router tensors)")
     else:
         print(f"⚠️ Warning: checkpoint {args.warm_start_ckpt} not found! Initializing randomly.")
 
@@ -431,15 +471,14 @@ def main():
     init_val = evaluate_acoustic(
         acoustic_model, val_loader, ph_tokenizer, device, token_to_macro, max_eval_batches=25, chunk_eval=args.chunk_eval
     )
-    init_score = min(init_val["val_per"], init_val.get("val_per_cal", init_val["val_per"]))
-    best_val_per = min(init_score, saved_val_per) if saved_val_per is not None else init_score
+    best_val_per = min(init_val["val_per"], saved_val_per) if saved_val_per is not None else init_val["val_per"]
     init_bd = " | ".join([
-        f"{flag_map.get(l, l.upper())}: {p:4.1f}% (cal: {init_val.get('val_per_by_lang_cal', {}).get(l, p):4.1f}%)"
+        f"{flag_map.get(l, l.upper())}: PER {p:4.1f}% (Ac: {init_val.get('val_ac_per_by_lang', {}).get(l, p):4.1f}%, WER: {init_val.get('val_wer_by_lang', {}).get(l, 0.0):4.1f}%)"
         for l, p in init_val.get("val_per_by_lang", {}).items()
     ])
     print(
-        f"  📊 Step {start_step} Baseline | Val PER: \033[1;31m{init_val['val_per']:5.2f}%\033[0m (Calibrated: \033[1;32m{init_val.get('val_per_cal', init_val['val_per']):5.2f}%\033[0m) | "
-        f"Space Acc: {init_val['val_spc_acc']:5.2f}% | Val Loss: {init_val['val_loss']:.4f} | Best Record: {best_val_per:.2f}%"
+        f"  📊 Step {start_step} Baseline | Val PER: \033[1;31m{init_val['val_per']:5.2f}%\033[0m (Acoustic PER: \033[1;32m{init_val['val_acoustic_per']:5.2f}%\033[0m) | "
+        f"P-WER: {init_val['val_wer']:5.2f}% | Space Acc: {init_val['val_spc_acc']:5.2f}% | Val Loss: {init_val['val_loss']:.4f} | Best Record: {best_val_per:.2f}%"
     )
     if init_bd:
         print(f"     🌍 Multilingual Baseline: {init_bd}\n", flush=True)
@@ -456,6 +495,10 @@ def main():
     running_moe = 0.0
     running_per_ed = 0
     running_per_len = 0
+    running_ac_ed = 0
+    running_ac_len = 0
+    running_wer_ed = 0
+    running_wer_len = 0
     running_spc_correct = 0
     running_spc_gt = 0
 
@@ -508,27 +551,41 @@ def main():
         running_moe += aux_moe_loss.item()
 
         logits = out["logits"]
-        for i in range(len(audio)):
-            l_i = batch["languages"][i]
-            p_toks = decode_ctc_phoneme_ids(logits[i])
-            g_toks = phoneme_targets[i][: phoneme_lengths[i]].cpu().tolist()
-            ed_i = editdistance.eval(p_toks, g_toks)
-            ref_i = max(1, len(g_toks))
-            spc_i = compute_spacing_errors(g_toks, p_toks, space_token=8)
+        s_lang = batch["languages"][0]
+        p_toks_0 = decode_ctc_phoneme_ids(logits[0])
+        g_toks_0 = phoneme_targets[0][: phoneme_lengths[0]].cpu().tolist()
+        ed_0 = editdistance.eval(p_toks_0, g_toks_0)
+        ref_0 = max(1, len(g_toks_0))
+        step_per = (ed_0 / ref_0) * 100.0
+        ac_ed_0, ac_ref_0 = compute_acoustic_per(p_toks_0, g_toks_0, space_token=8)
+        step_ac_per = (ac_ed_0 / ac_ref_0) * 100.0
+        pr_ph_0 = ph_tokenizer.decode(p_toks_0, skip_special=True)
+        gt_ph_0 = ph_tokenizer.decode(g_toks_0, skip_special=True)
+        wer_ed_0, wer_ref_0 = compute_pwer(pr_ph_0, gt_ph_0)
+        step_wer = (wer_ed_0 / wer_ref_0) * 100.0
+        spc_res_0 = compute_spacing_errors(g_toks_0, p_toks_0, space_token=8)
+        step_spc = spc_res_0["accuracy"]
 
-            latest_train_samples[l_i] = {
-                "lang": l_i,
-                "text": batch["transcripts"][i],
-                "gt_ph": ph_tokenizer.decode(g_toks, skip_special=True),
-                "pred_ph": ph_tokenizer.decode(p_toks, skip_special=True),
-                "per": (ed_i / ref_i) * 100.0,
-                "spc_res": spc_i,
-            }
+        running_per_ed += ed_0
+        running_per_len += ref_0
+        running_ac_ed += ac_ed_0
+        running_ac_len += ac_ref_0
+        running_wer_ed += wer_ed_0
+        running_wer_len += wer_ref_0
+        running_spc_correct += spc_res_0["correct"]
+        running_spc_gt += spc_res_0["total_gt"]
 
-            running_per_ed += ed_i
-            running_per_len += ref_i
-            running_spc_correct += spc_i["correct"]
-            running_spc_gt += spc_i["total_gt"]
+        latest_train_samples[s_lang] = {
+            "lang": s_lang,
+            "text": batch["transcripts"][0],
+            "gt_ph": gt_ph_0,
+            "pred_ph": pr_ph_0,
+            "per": step_per,
+            "ac_per": step_ac_per,
+            "wer": step_wer,
+            "spc_res": spc_res_0,
+            "logits": logits[0].detach(),
+        }
 
         if (global_step + 1) % args.grad_accum == 0 or (global_step + 1) == args.max_steps:
             torch.nn.utils.clip_grad_norm_(acoustic_model.parameters(), max_norm=1.0)
@@ -538,6 +595,7 @@ def main():
 
         global_step += 1
 
+        # Live per-step output
         if global_step % args.log_every == 0 or global_step == 1:
             t_now = time.time()
             elapsed_sec = t_now - t_start
@@ -551,44 +609,56 @@ def main():
             avg_draft = running_draft / max(1, args.log_every if global_step > 1 else 1)
             avg_macro = running_macro / max(1, args.log_every if global_step > 1 else 1)
             avg_moe = running_moe / max(1, args.log_every if global_step > 1 else 1)
-            train_per = (running_per_ed / max(1, running_per_len)) * 100.0
-            spc_acc = (running_spc_correct / max(1, running_spc_gt)) * 100.0 if running_spc_gt > 0 else 100.0
             cur_lr = scheduler.get_last_lr()[0]
 
-            lang_cycle = ["en", "fr", "es", "it"]
-            target_lang = lang_cycle[log_cycle_idx % len(lang_cycle)]
-            log_cycle_idx += 1
-
-            sample = latest_train_samples.get(target_lang)
-            if sample is None and len(latest_train_samples) > 0:
-                sample = next(iter(latest_train_samples.values()))
-
-            s_lang = sample["lang"] if sample else batch["languages"][0]
-            flag = flag_map.get(s_lang, s_lang.upper())
-
             print(
-                f"Step {global_step}/{args.max_steps} | Loss: {avg_loss:.4f} (CTC: {avg_ctc:.4f}, Draft: {avg_draft:.4f}, Macro: {avg_macro:.4f}, MoE: {avg_moe:.4f}) | "
-                f"Train PER: {train_per:5.2f}% | SpcAcc: {spc_acc:5.2f}% | LR: {cur_lr:.2e} | Rate: {rate:4.1f} st/s | ETA: {eta_str}"
+                f"Step {global_step:5d}/{args.max_steps} | Loss: {avg_loss:.4f} (CTC: {avg_ctc:.3f}, Draft: {avg_draft:.3f}, MoE: {avg_moe:.3f}) | "
+                f"PER: {step_per:4.1f}% (Acoustic: {step_ac_per:4.1f}%) | WER: {step_wer:4.1f}% | SpcAcc: {step_spc:4.1f}% | "
+                f"LR: {cur_lr:.2e} | {rate:3.1f} st/s | ETA: {eta_str}",
+                flush=True,
             )
-            if sample is not None:
-                spc_r = sample["spc_res"]
-                print(
-                    f"  🔍 [Step {global_step} Sample ({flag})] | PER: {sample['per']:4.1f}% | "
-                    f"Space Acc: {spc_r['accuracy']:4.1f}% (Missed: {spc_r['missed']}, Extra: {spc_r['extra']})\n"
-                    f"    • GT Text      : {sample['text'][:140]}\n"
-                    f"    • GT Phonemes  : {sample['gt_ph'][:140]}\n"
-                    f"    • Pred Phonemes: {sample['pred_ph'][:140]}"
-                )
 
             running_loss = 0.0
             running_ctc = 0.0
             running_draft = 0.0
             running_macro = 0.0
             running_moe = 0.0
-            running_per_ed = 0
-            running_per_len = 0
-            running_spc_correct = 0
-            running_spc_gt = 0
+
+        # Rich sample inspection with Top-3 probabilities
+        if global_step % args.sample_every == 0 or global_step == 1:
+            lang_cycle = ["en", "fr", "es", "it"]
+            target_lang = lang_cycle[log_cycle_idx % len(lang_cycle)]
+            log_cycle_idx += 1
+
+            sample = latest_train_samples.get(target_lang)
+            if sample is None:
+                sample = latest_train_samples.get(s_lang)
+            if sample is None and len(latest_train_samples) > 0:
+                sample = next(iter(latest_train_samples.values()))
+
+            if sample is not None:
+                s_flag = flag_map.get(sample["lang"], sample["lang"].upper())
+                top3_info = acoustic_model.decode_topk_phonemes(sample["logits"], k=3, tokenizer=ph_tokenizer)[0]
+                emissions = top3_info["emissions"][:10]
+                top3_lines = []
+                for e in emissions:
+                    cand_strs = " | ".join([f"{cand}: {prob:.2f}" for cand, prob in e["topk"]])
+                    top3_lines.append(f"        {e['phoneme']:<4} -> [{cand_strs}]")
+                top3_str = "\n".join(top3_lines) if top3_lines else "        (none)"
+
+                spc_r = sample["spc_res"]
+                print(
+                    f"\n  ══════════════════════════════════════════════════════════════════════════════\n"
+                    f"  🔍 [Step {global_step} Inspection ({s_flag})] | PER: {sample['per']:4.1f}% | Acoustic PER: {sample['ac_per']:4.1f}% | P-WER: {sample['wer']:4.1f}%\n"
+                    f"     Space Acc: {spc_r['accuracy']:4.1f}% (Correct: {spc_r['correct']}, Missed: {spc_r['missed']}, Extra: {spc_r['extra']})\n"
+                    f"     • GT Text      : {sample['text'][:140]}\n"
+                    f"     • GT Phonemes  : {sample['gt_ph'][:140]}\n"
+                    f"     • Pred Phonemes: {sample['pred_ph'][:140]}\n"
+                    f"     • Top-3 Phoneme Candidates Snippet (first 10 emitted phones):\n"
+                    f"{top3_str}\n"
+                    f"  ══════════════════════════════════════════════════════════════════════════════\n",
+                    flush=True,
+                )
 
         # Periodic Validation & Checkpointing
         if global_step % args.eval_every == 0:
@@ -604,31 +674,36 @@ def main():
                 chunk_eval=args.chunk_eval,
             )
 
-            cal_score = val_res.get("val_per_cal", val_res["val_per"])
-            is_best = cal_score < best_val_per
+            is_best = val_res["val_per"] < best_val_per
             record_str = " 🌟 NEW BEST PHONO-V8 RECORD!" if is_best else ""
             if is_best:
-                best_val_per = cal_score
+                best_val_per = val_res["val_per"]
 
             bd_str = " | ".join([
-                f"{flag_map.get(l, l.upper())}: {p:4.1f}% (cal: {val_res.get('val_per_by_lang_cal', {}).get(l, p):4.1f}%)"
+                f"{flag_map.get(l, l.upper())}: PER {p:4.1f}% (Ac: {val_res.get('val_ac_per_by_lang', {}).get(l, p):4.1f}%, WER: {val_res.get('val_wer_by_lang', {}).get(l, 0.0):4.1f}%)"
                 for l, p in val_res.get("val_per_by_lang", {}).items()
             ])
             print(
-                f"  📊 Val Results: PER: \033[1;31m{val_res['val_per']:5.2f}%\033[0m (Calibrated: \033[1;32m{cal_score:5.2f}%\033[0m) | "
-                f"Space Acc: {val_res['val_spc_acc']:5.2f}% | Loss: {val_res['val_loss']:.4f}{record_str}\n"
-                f"     🌍 Multilingual PER: {bd_str}"
+                f"  📊 Val Results: PER: \033[1;31m{val_res['val_per']:5.2f}%\033[0m (Acoustic PER: \033[1;32m{val_res['val_acoustic_per']:5.2f}%\033[0m) | "
+                f"P-WER: {val_res['val_wer']:5.2f}% | Space Acc: {val_res['val_spc_acc']:5.2f}% | Loss: {val_res['val_loss']:.4f}{record_str}\n"
+                f"     🌍 Multilingual Metrics: {bd_str}"
             )
             print("─" * 80)
 
             for l_k, s_v in val_res["samples"].items():
                 s_flag = flag_map.get(l_k, l_k.upper())
+                top3_lines = []
+                for e in s_v.get("top3_emissions", []):
+                    cand_strs = " | ".join([f"{cand}: {prob:.2f}" for cand, prob in e["topk"]])
+                    top3_lines.append(f"        {e['phoneme']:<4} -> [{cand_strs}]")
+                top3_str = "\n".join(top3_lines) if top3_lines else "        (none)"
                 print(
-                    f"  🔍 [Val {s_flag}] | Greedy PER: {s_v['per_greedy']:4.1f}% | Cal PER: {s_v['per_calib']:4.1f}% | Spc Acc: {s_v['spc_acc']:4.1f}%\n"
+                    f"  🔍 [Val {s_flag}] | PER: {s_v['per_greedy']:4.1f}% | Acoustic PER: {s_v['acoustic_per']:4.1f}% | P-WER: {s_v['pwer']:4.1f}% | Spc Acc: {s_v['spc_acc']:4.1f}%\n"
                     f"    • GT Text      : {s_v['text'][:140]}\n"
                     f"    • GT Phonemes  : {s_v['gt'][:140]}\n"
-                    f"    • Pred (Greedy): {s_v['pred_greedy'][:140]}\n"
-                    f"    • Pred (Calib) : {s_v['pred_calib'][:140]}"
+                    f"    • Pred Phonemes: {s_v['pred_greedy'][:140]}\n"
+                    f"    • Top-3 Candidates Snippet:\n"
+                    f"{top3_str}"
                 )
             print("─" * 80 + "\n")
 
@@ -636,7 +711,9 @@ def main():
             save_payload = {
                 "step": global_step,
                 "acoustic_state_dict": acoustic_model.state_dict(),
-                "val_per": cal_score,
+                "val_per": val_res["val_per"],
+                "val_acoustic_per": val_res["val_acoustic_per"],
+                "val_wer": val_res["val_wer"],
                 "best_val_per": best_val_per,
                 "args": vars(args),
             }

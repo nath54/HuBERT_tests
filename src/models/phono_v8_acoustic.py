@@ -298,6 +298,96 @@ class PhonoV8AcousticBackbone(PhonoV64GatedDiffusionForPreTraining):
             "boundary_logits": blended_boundaries,
         }
 
+    @torch.no_grad()
+    def decode_topk_phonemes(
+        self,
+        logits: torch.Tensor,
+        k: int = 3,
+        blank_id: int = 1,
+        pad_id: int = 0,
+        tokenizer: Optional[Any] = None,
+    ) -> List[Dict[str, Any]]:
+        """Decodes CTC logits into collapsed phoneme emissions with Top-k candidate probabilities.
+
+        Args:
+            logits: (T, vocab_size) or (B, T, vocab_size) frame-level logits
+            k: Top-k candidates per emitted phoneme segment (default 3)
+            blank_id: CTC blank token index (default 1)
+            pad_id: Padding token index (default 0)
+            tokenizer: Optional PhonemeTokenizer to convert token IDs into characters
+
+        Returns:
+            List of utterance results (one per item in batch):
+            [{
+                'token_ids': List[int],
+                'phoneme_str': str,
+                'emissions': List[{'token_id': int, 'phoneme': str, 'prob': float, 'topk': [(str, float), ...]}],
+            }]
+        """
+        if logits.ndim == 2:
+            logits = logits.unsqueeze(0)
+
+        results = []
+        for b in range(logits.shape[0]):
+            l_b = logits[b]
+            probs = F.softmax(l_b, dim=-1)
+            topk_probs, topk_indices = torch.topk(probs, k=k, dim=-1)
+            argmax_ids = topk_indices[:, 0].tolist()
+
+            emitted = []
+            token_ids = []
+            prev = None
+            seg = []
+
+            for t, p in enumerate(argmax_ids):
+                if p != prev:
+                    if seg and prev not in (blank_id, pad_id):
+                        peak_t = max(seg, key=lambda f: probs[f, prev].item())
+                        token_ids.append(prev)
+                        p_str = tokenizer.id_to_token.get(prev, "?") if tokenizer else str(prev)
+                        cand_list = []
+                        for rank in range(k):
+                            c_id = topk_indices[peak_t, rank].item()
+                            c_p = topk_probs[peak_t, rank].item()
+                            c_str = tokenizer.id_to_token.get(c_id, "?") if tokenizer else str(c_id)
+                            cand_list.append((c_str, c_p))
+                        emitted.append({
+                            "token_id": prev,
+                            "phoneme": p_str,
+                            "prob": probs[peak_t, prev].item(),
+                            "topk": cand_list,
+                        })
+                    seg = [t]
+                    prev = p
+                else:
+                    seg.append(t)
+
+            if seg and prev not in (blank_id, pad_id):
+                peak_t = max(seg, key=lambda f: probs[f, prev].item())
+                token_ids.append(prev)
+                p_str = tokenizer.id_to_token.get(prev, "?") if tokenizer else str(prev)
+                cand_list = []
+                for rank in range(k):
+                    c_id = topk_indices[peak_t, rank].item()
+                    c_p = topk_probs[peak_t, rank].item()
+                    c_str = tokenizer.id_to_token.get(c_id, "?") if tokenizer else str(c_id)
+                    cand_list.append((c_str, c_p))
+                emitted.append({
+                    "token_id": prev,
+                    "phoneme": p_str,
+                    "prob": probs[peak_t, prev].item(),
+                    "topk": cand_list,
+                })
+
+            ph_str = "".join([e["phoneme"] for e in emitted])
+            results.append({
+                "token_ids": token_ids,
+                "phoneme_str": ph_str,
+                "emissions": emitted,
+            })
+
+        return results
+
 
 def warm_start_phono_v8_from_v75(
     v8_model: PhonoV8AcousticBackbone,
