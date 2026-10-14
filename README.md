@@ -88,8 +88,11 @@ Phono-V7.5 completely supersedes monolithic speech recognition by establishing a
 Phono-V8.0 is engineered to reach the **$< 5\%$ multilingual Phoneme Error Rate (PER)** milestone across 4 European languages (EN, FR, ES, IT) without language ID conditioning vectors:
 1. **DeepSeek MoE Backbone (1 Shared + 8 Routed Experts)**: 1 always-active shared expert handles language-invariant acoustic phonetics, while 8 fine-grained routed experts (Top-2 gating) specialize in manner of articulation. Total model capacity: **203.69M parameters** (~103M active compute parameters per frame).
 2. **FactorEngram Multi-Order Phoneme Memory (`PhonemeEngramMemory`)**: Stores static phonotactic transition priors in $O(1)$ constant-time parameter tables via 4-head polynomial prime hashing across 2-grams (16k), 3-grams (32k), and 4-grams (32k). FactorEngram channel-wise gates ($g_t \in [0, 1]^{512}$) inject phonotactic memory residually at Layers 4 and 7 based on Layer 3 draft candidate emissions.
-3. **Bit-for-Bit Zero-Initialization Warm-Start**: Strict zero-initialization of shared expert and memory projections guarantees exact mathematical equivalence at Step 0 ($\max |\Delta| \le 7.63 \times 10^{-6}$ vs `best_acoustic.pt`), eliminating warm-start shocks.
-4. **Autonomous Verbatim Corpus Sanitization**: High-throughput acoustic filtering pipeline ([`scripts/clean_and_filter_corpus.py`](scripts/clean_and_filter_corpus.py)) retaining **82,601 pristine training utterances** and **828 clean validation utterances**.
+3. **Top-3 Phoneme Candidate Emissions with Exact Probabilities (`decode_topk_phonemes`)**: For every emitted acoustic segment, Model 1 extracts the top 3 candidate phonemes along with their softmax confidence probabilities (e.g. `t -> [t: 0.61 | n: 0.13 | z: 0.13]`), revealing phonetic ambiguities and providing rich soft distributions for downstream lexical disambiguation.
+4. **Space-Free Continuous Phoneme-to-Word Architecture (`ContinuousPhonemeWordSegmenter`)**: In conversational speech, acoustic silences do not physically exist at every word boundary. Rather than forcing Model 1 to predict fragile `<space>` tokens at 50Hz, Model 1 emits continuous phonemes; Model 2 uses bidirectional Transformer contextual representations and boundary gating ($b_t > \tau$) to slice word spans dynamically and pool them into discrete word latents $\mathbf{z}_{\text{word}}$.
+5. **Phonotactic Beam Search & Noise Robustness**: `PhonotacticBeamSearchDecoder` integrates prefix trie constraints and syllable onset/nucleus/coda transition priors. Paired with `PhoneticNoiseInjector`, models are trained with realistic articulatory confusions for robust acoustic-to-grapheme decoding.
+6. **Bit-for-Bit Zero-Initialization Warm-Start**: Strict zero-initialization of shared expert and memory projections guarantees exact mathematical equivalence at Step 0 ($\max |\Delta| \le 7.63 \times 10^{-6}$ vs `best_acoustic.pt`), eliminating warm-start shocks.
+7. **Autonomous Verbatim Corpus Sanitization**: High-throughput acoustic filtering pipeline ([`scripts/clean_and_filter_corpus.py`](scripts/clean_and_filter_corpus.py)) retaining **82,601 pristine training utterances** and **828 clean validation utterances**.
 
 👉 **Full Technical Specification & Equations**: See [`docs/architectures/11_phono_v8_0_deepseek_moe_engram.md`](docs/architectures/11_phono_v8_0_deepseek_moe_engram.md).
 
@@ -128,6 +131,9 @@ audiolearn/
 │   │   ├── phono_v7_1_alignment.py # Online event-driven streaming peak tracker
 │   │   ├── phono_v7_1_speech_model.py # Phono-V7.1 Real-Time Streaming Conformer Speech Model
 │   │   ├── phono_v7_2_speech_model.py # Phono-V7.2 Partitioned MoE Decoder with Horizon Capping
+│   │   ├── phono_v8_acoustic.py# Phono-V8.0 DeepSeek MoE Conformer Backbone + Top-3 candidate emission
+│   │   ├── text_phoneme_encoder.py # FastTextPhonemeWordEncoder & ContinuousPhonemeWordSegmenter
+│   │   ├── phonotactic_beam_search.py # Phonotactic beam search decoder with trie constraints
 │   │   └── registry.py         # ModelRegistry factory for dynamic discovery & scaling
 │   ├── losses/                 # Differentiable loss implementations
 │   │   └── soft_levenshtein.py # Differentiable Soft-Levenshtein DP string alignment loss
@@ -137,10 +143,14 @@ audiolearn/
 │   │   ├── multilingual_lexicon.py # Offline pronunciation lexicon for EN, IT, ES, FR
 │   │   ├── multilingual_audio_dataset.py # 4-way balanced multilingual dataset loader & collator
 │   │   ├── target_extractors.py# KMeansUnitExtractor & PhonemeTargetExtractor
+│   │   ├── phonetic_noise.py   # Articulatory confusion matrix & acoustic noise injection
+│   │   ├── phonotactic_segmenter.py # Linguistic syllable onset/nucleus/coda segmenter
 │   │   ├── streaming_piper.py  # 0-disk Piper voice manager & VoiceQualityGuardian
 │   │   ├── threaded_dataset.py # Asynchronous BufferedSpeechBatchGenerator & StepProfiler
 │   │   ├── dataset.py          # AudioASRDataset + dynamic padding collate fn
 │   │   └── augmentations.py    # Waveform noise, gain, and time-masking
+│   ├── inference/              # Decoding & search engines
+│   │   └── character_beam_search.py # Lexical character beam search with trie prefix guidance
 │   ├── benchmark/              # Comparative benchmarking suite
 │   │   └── sota_evaluator.py   # SOTABenchmarkRunner (HuBERT vs. OpenAI Whisper Shootout)
 │   ├── server/                 # Full-stack interactive web application
@@ -156,14 +166,22 @@ audiolearn/
 │   │   ├── probes.py           # Layer-wise Diagnostic Probes & Inversion Decoders
 │   │   └── visualizer.py       # Matplotlib visualization suite
 │   └── utils/                  # Audio I/O & logging utilities
-├── checkpoints/                # Saved weights (HuBERT, PhonoHuBERT, V7, V7.1, V7.2)
+├── checkpoints/                # Saved weights (HuBERT, PhonoHuBERT, V7, V7.5, V8.0)
 │   ├── phono_v7/char/          # Phono-V7 Two-Level Character Decoder checkpoints
 │   ├── phono_v7_1/streaming/   # Phono-V7.1 Real-Time Streaming checkpoints
-│   └── phono_v7_2/streaming/   # Phono-V7.2 Partitioned MoE Streaming checkpoints
+│   ├── phono_v7_2/streaming/   # Phono-V7.2 Partitioned MoE Streaming checkpoints
+│   ├── phono_v7_5_acoustic/    # Phono-V7.5 Acoustic Conformer checkpoints
+│   ├── phono_v8_acoustic/      # Phono-V8.0 Baseline checkpoints
+│   └── phono_v8_acoustic_multilingual_80k/ # Phono-V8.0 Pure Model 1 Multilingual 80k checkpoints
 ├── logs/                       # Real-time status JSONs & TensorBoard telemetry
 ├── scripts/                    # Command-line entry points
 │   ├── run_server.py           # Start the FastAPI interactive studio server
 │   ├── run_pretrain.py         # Unified modular 0-disk streaming pre-training CLI
+│   ├── train_phono_v8_acoustic.py # Pure Model 1 Multilingual 80,000-Step training with Top-3 logs
+│   ├── train_phono_v8_continuous_p2g.py # Continuous space-free phoneme-to-grapheme training
+│   ├── train_phono_v8_robust_p2g.py # Noise-robust phoneme-to-grapheme training
+│   ├── evaluate_phono_v8_e2e.py# End-to-end multi-module evaluation suite
+│   ├── audit_phonetic_confusions.py # Acoustic phoneme confusion matrix auditor
 │   ├── train_phono_v7_stage1.py# Phono-V7 Stage 1 Conformer & alignment pre-training
 │   ├── train_phono_v7_char.py  # Phono-V7 Stage 2 Two-Level Character Decoder training
 │   ├── train_phono_v7_1_streaming.py # Phono-V7.1 Real-Time Streaming training
@@ -172,7 +190,11 @@ audiolearn/
 │   ├── evaluate.py             # Checkpoint evaluator
 │   ├── run_xai.py              # Generate static XAI visualization plots
 │   └── demo_pipeline.py        # Automated end-to-end master pipeline
-├── tests/                      # Pytest automated test suite (95+ tests)
+├── tests/                      # Pytest automated test suite (100+ tests)
+│   ├── test_phonetic_noise.py  # Articulatory noise injection tests
+│   ├── test_phonotactic_beam_search.py # Phonotactic beam search decoder tests
+│   ├── test_phonotactic_segmenter.py # Syllable segmentation tests
+│   ├── test_text_phoneme_encoder.py # FastText and continuous word encoder tests
 │   ├── test_conformer_conv.py  # Conformer depthwise convolution tests
 │   ├── test_forced_aligner.py  # CTC dynamic programming aligner tests
 │   ├── test_multilingual_lexicon.py # Pronunciation lexicon tests
@@ -434,6 +456,41 @@ PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True PYTHONPATH=. .venv/bin/python s
     --checkpoint_dir checkpoints/phono_v7_2/streaming
 ```
 
+### 12. Phono-V8.0 Pure Acoustic Model 1 (80,000-Step Multilingual Training with Top-3 Emissions)
+Isolated Conformer CTC training with DeepSeek MoE (1 shared + 8 routed experts, Top-2), Layer-4 draft supervision, FactorEngram associative memory, and real-time Top-3 phoneme candidate probability extraction:
+```bash
+# Launch Pure Model 1 Multilingual Conformer Training (80,000 steps)
+.venv/bin/python scripts/train_phono_v8_acoustic.py \
+    --clean_train_manifest data/clean_multilingual_train.json \
+    --clean_val_manifest data/clean_multilingual_val.json \
+    --warm_start_ckpt checkpoints/phono_v8_acoustic/best_v8_acoustic.pt \
+    --output_dir checkpoints/phono_v8_acoustic_multilingual_80k \
+    --max_steps 80000 \
+    --batch_size 4 \
+    --grad_accum 4 \
+    --lr 4.0e-5 \
+    --min_lr 2.0e-6 \
+    --warmup_steps 1000 \
+    --log_every 1 \
+    --sample_every 20 \
+    --eval_every 2000
+```
+- **Real-Time Step Logging**: Live 1-line update every step displaying PER, Acoustic Sound PER (spaces excluded), Phonetic WER (P-WER), Space Accuracy, loss, steps/sec, and ETA.
+- **Top-3 Probability Trace**: Rich inspection every 20 steps showing exact softmax candidate distributions (e.g. `[t: 0.61 | n: 0.13 | z: 0.13]`).
+
+### 13. Space-Free Continuous Phoneme-to-Word & Robust P2G Training
+Trains `ContinuousPhonemeWordSegmenter` on continuous phoneme streams without fragile acoustic `<space>` tokens, using boundary attention gating and word span pooling:
+```bash
+# Launch Continuous Space-Free P2G Training
+.venv/bin/python scripts/train_phono_v8_continuous_p2g.py
+
+# Launch Noise-Robust P2G Training with Articulatory Confusion Simulation
+.venv/bin/python scripts/train_phono_v8_robust_p2g.py
+
+# Evaluate End-to-End ASR with Phonotactic Beam Search
+.venv/bin/python scripts/evaluate_phono_v8_e2e.py
+```
+
 ---
 
 ## Longitudinal PER Benchmark Progression
@@ -560,13 +617,13 @@ AudioLearn implements three interpretability paradigms:
 
 ## Automated Testing
 
-AudioLearn includes a comprehensive 91-test suite covering data synthesis, model architectures (HuBERT, PhonoHuBERT, V6.1 MoE, V6.2 Sparse, V6.3 Diffusion, V6.4 Gated Diffusion with learnable thresholds, Word Denoising Decoder), the Voice Quality Guardian, the threaded batch generator, RunManager isolation, XAI attribution, Conformer convolutions, CTC forced alignment, multilingual lexicon tokenization, differentiable Soft-Levenshtein loss, and the Phono-V7 & V7.1 streaming pipelines:
+AudioLearn includes a comprehensive 100+ test suite covering data synthesis, model architectures (HuBERT, PhonoHuBERT, V6.1 MoE, V6.2 Sparse, V6.3 Diffusion, V6.4 Gated Diffusion, Word Denoising Decoder, Phono-V7/V7.1/V7.2 Conformer MoE), articulatory confusion matrix simulation (`PhoneticNoiseInjector`), phonotactic syllable segmentation (`PhonotacticSegmenter`), prefix beam search decoders (`PhonotacticBeamSearchDecoder`), the Voice Quality Guardian, the threaded batch generator, RunManager isolation, XAI attribution, Conformer convolutions, CTC forced alignment, multilingual lexicon tokenization, differentiable Soft-Levenshtein loss, and the continuous phoneme segmenter:
 
 ```bash
 PYTHONPATH=. .venv/bin/pytest tests/ -v
 ```
 
-All 91 tests pass on CPU/GPU.
+All 100+ tests pass across CPU/GPU environments.
 
 ---
 
