@@ -28,3 +28,7 @@ scratch/
 results/phono_v8_*.json
 results/*_eval*.json
 results/librispeech_*.json
+*.onnx
+*.tflite
+clean_model_src/test_export_pixel10/
+

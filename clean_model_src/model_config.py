@@ -1,78 +1,212 @@
 """
-Unified clean model config here.
+Unified Clean Model Configuration.
+Provides modular dataclasses for all model parts, device mappings, and dynamic class resolution.
 """
 
 # Import Modules
-from dataclasses import dataclass
-
+from dataclasses import dataclass, field
 import importlib
-
+from typing import Any, Dict, List, Optional, Tuple, Type, TypeVar
+import torch
 
 T = TypeVar("T")
 
 
-def get_class(path: str) -> type[T]:
+def get_class(path: str) -> Type[T]:
     """
-    Get a class from a module
+    Get a class from a module path.
 
     Args:
-        path (str) : Module path and class name, separated by the last dot.
+        path (str): Module path and class name, separated by dots (e.g. 'clean_model_src.model1_a2p.Model_A2P').
 
     Returns:
-        type[T] : The class from the module
+        Type[T]: The resolved class object.
     """
+    # Split by last dot to separate module from class name
+    parts: List[str] = path.split(".")
+    if len(parts) == 1:
+        # Local module within package
+        module_path: str = f"clean_model_src.{parts[0]}"
+        class_name: str = parts[0]
+    else:
+        module_path = ".".join(parts[:-1])
+        class_name = parts[-1]
 
-    cls: type[T] = getattr(
-        importlib.import_module(".".join(path.split(".")[:-1])),
-        path.split(".")[-1],
-    )
+    # Resolve module
+    try:
+        mod = importlib.import_module(module_path)
+    except ModuleNotFoundError:
+        # Fallback to local import if called from within package
+        mod = importlib.import_module(f".{module_path.split('.')[-1]}", package="clean_model_src")
 
+    cls: Type[T] = getattr(mod, class_name)
     return cls
 
 
 @dataclass
+class ModelA2PConfig:
+    """
+    Configuration for Model Part 1: Audio to Phonemes (A2P).
+    12-layer Conformer Backbone with DeepSeek MoE, Phoneme Engram Memory, and 7-layer CNN frontend.
+    """
+    # Audio sampling rate in Hertz
+    sample_rate: int = 16000
+
+    # CNN Feature Extractor parameters (downsamples audio by 320x -> 50 Hz)
+    in_channels: int = 1
+    conv_channels: int = 512
+    cnn_weights_path: str = "data/pretrained_cnn_ls960.pt"
+
+    # Conformer Encoder parameters
+    embed_dim: int = 512
+    num_layers: int = 12
+    num_heads: int = 8
+    ffn_dim: int = 2048
+    conv_kernel_size: int = 31
+    dropout: float = 0.1
+    attention_dropout: float = 0.1
+    use_rope: bool = True
+
+    # DeepSeek Mixture-of-Experts (MoE) parameters
+    use_deepseek_moe: bool = True
+    num_routed_experts: int = 8
+    top_k: int = 2
+    num_shared_experts: int = 1
+    load_balance_weight: float = 0.01
+    router_jitter_std: float = 0.02
+
+    # Intermediate Draft Supervision parameters
+    draft_layer_idx: int = 3
+
+    # Multi-Scale Phoneme Engram Memory parameters
+    engram_layers: Tuple[int, ...] = (5, 9)
+    engram_heads: int = 4
+    engram_memory_dim: int = 128
+    engram_table_size: int = 4096
+    engram_ngram_orders: Tuple[int, ...] = (2, 3, 4)
+
+    # Phoneme Vocabulary & Tokens
+    vocab_size: int = 112
+    blank_id: int = 1
+    space_id: int = 8
+    pad_id: int = 0
+
+
+@dataclass
+class ModelPEConfig:
+    """
+    Configuration for Model Part 2: Phoneme Encoder (PE).
+    FastText-style phoneme word encoder mapping discrete phoneme slices to continuous word latents z_word.
+    """
+    d_macro: int = 512
+    d_model: int = 256
+    nhead: int = 4
+    num_layers: int = 2
+    dim_feedforward: int = 512
+    dropout: float = 0.1
+    phoneme_vocab_size: int = 128
+    max_seq_len: int = 32
+
+
+@dataclass
+class ModelWDConfig:
+    """
+    Configuration for Model Part 3: Word Decoder (WD).
+    Overlapping Length Experts MoE Router with Band-Causal Attention and Autoregressive Character Head.
+    """
+    macro_dim: int = 512
+    micro_dim: int = 512
+    num_macro_layers: int = 4
+    num_heads: int = 8
+    band_window_words: int = 8
+    num_overlapping_experts: int = 7
+    char_vocab_size: int = 128
+    max_word_len: int = 24
+    bos_id: int = 1
+    eos_id: int = 2
+    pad_id: int = 0
+
+
+@dataclass
 class ModelConfig:
+    """
+    Master Unified Configuration coordinating all 3 model parts,
+    device assignments, and dynamic instantiation paths.
+    """
 
-    # --- Dynamic Class Loading ---
+    # --- Dynamic Class Loading Paths ---
+    class_model_a2p: str = "clean_model_src.model1_a2p.Model_A2P"
+    class_model_pe: str = "clean_model_src.model2_pe.Model_PE"
+    class_model_wd: str = "clean_model_src.model3_wd.Model_WD"
 
-    # Class to load for the model audio to phonemes (Model part 1)
-    class_model_a2p: str = "model1_a2p.Model_A2P"
+    # Aliases for flexible access
+    @property
+    def model_a2p_class(self) -> str:
+        return self.class_model_a2p
 
-    # Class to load for the model phoneme encoder (Model part 2)
-    class_model_pe: str = "model2_pe.Model_PE"
+    @property
+    def model_pe_class(self) -> str:
+        return self.class_model_pe
 
-    # Class to load for the model word decoder (Model part 3)
-    class_model_wd: str = "model3_wd.Model_WD"
+    @property
+    def model_wd_class(self) -> str:
+        return self.class_model_wd
 
-    # Device for the model audio to phonemes (Model part 1)
+    # --- Device Assignments per Model Part ---
     device_model_a2p: str = "CUDA"
-
-    # Device for the model phoneme encoder (Model part 2)
     device_model_pe: str = "CPU"
-
-    # Device for the model word decoder (Model part 3)
     device_model_wd: str = "CPU"
 
-    # TODO
-    pass
+    @property
+    def device_a2p(self) -> str:
+        return self.device_model_a2p
 
+    @device_a2p.setter
+    def device_a2p(self, val: str) -> None:
+        self.device_model_a2p = val
 
-    def get_device(self, part: str) -> str:
+    @property
+    def device_pe(self) -> str:
+        return self.device_model_pe
+
+    @device_pe.setter
+    def device_pe(self, val: str) -> None:
+        self.device_model_pe = val
+
+    @property
+    def device_wd(self) -> str:
+        return self.device_model_wd
+
+    @device_wd.setter
+    def device_wd(self, val: str) -> None:
+        self.device_model_wd = val
+
+    # --- Sub-Component Configurations ---
+    a2p: ModelA2PConfig = field(default_factory=ModelA2PConfig)
+    pe: ModelPEConfig = field(default_factory=ModelPEConfig)
+    wd: ModelWDConfig = field(default_factory=ModelWDConfig)
+
+    def get_device(self, part: str) -> torch.device:
         """
-        Get the device for the correct model part.
+        Get the torch.device object for the requested model part.
 
         Args:
-            part (str): The model part that request the device
+            part (str): The model part ('A2P', 'PE', or 'WD').
 
-        Return:
-            str: The device to load Parameters or Tensors on
+        Returns:
+            torch.device: The resolved device (e.g. cuda:0 or cpu).
         """
-
-        if part == "A2P":
-            return self.device_model_a2p
-        elif part == "PE":
-            return self.device_model_pe
-        elif part == "WD":
-            return self.device_model_wd
+        part_upper: str = part.upper()
+        if part_upper in ("A2P", "MODEL1", "MODEL_1", "1"):
+            target_str = self.device_model_a2p
+        elif part_upper in ("PE", "MODEL2", "MODEL_2", "2"):
+            target_str = self.device_model_pe
+        elif part_upper in ("WD", "MODEL3", "MODEL_3", "3"):
+            target_str = self.device_model_wd
         else:
-            raise ValueError(f"Unknown model part: `{part}`")
+            raise ValueError(f"Unknown model part: `{part}`. Expected 'A2P', 'PE', or 'WD'.")
+
+        # Resolve CUDA availability fallback
+        if target_str.upper() == "CUDA" and not torch.cuda.is_available():
+            return torch.device("cpu")
+        return torch.device(target_str.lower())
