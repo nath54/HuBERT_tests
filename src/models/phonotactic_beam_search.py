@@ -13,6 +13,18 @@ from typing import Dict, List, Optional, Tuple
 import torch
 
 
+def _logaddexp(a: float, b: float) -> float:
+    if a == -float("inf"):
+        return b
+    if b == -float("inf"):
+        return a
+    diff = a - b
+    if diff > 0:
+        return a + math.log1p(math.exp(-diff))
+    else:
+        return b + math.log1p(math.exp(diff))
+
+
 class PhonotacticPrefixBeamSearch:
     """Prefix beam search decoder for phoneme CTC logits."""
 
@@ -46,7 +58,6 @@ class PhonotacticPrefixBeamSearch:
         T, V = log_probs.shape
 
         # Initialize beam: mapping prefix (tuple of token ids) to (p_blank, p_non_blank)
-        # Empty prefix () starts with p_blank = 1.0 (log 0.0), p_non_blank = 0.0 (log -inf)
         beam = {(): (0.0, -float("inf"))}
 
         for t in range(T):
@@ -62,50 +73,46 @@ class PhonotacticPrefixBeamSearch:
 
             # Consider top candidates at this frame
             top_vals, top_indices = torch.topk(frame, min(self.beam_width * 2, V))
+            top_vals_list = top_vals.tolist()
+            top_indices_list = top_indices.tolist()
 
             for prefix, (p_b, p_nb) in beam.items():
-                p_tot = torch.logaddexp(torch.tensor(p_b), torch.tensor(p_nb)).item()
+                p_tot = _logaddexp(p_b, p_nb)
 
-                for log_p, c in zip(top_vals.tolist(), top_indices.tolist()):
+                for log_p, c in zip(top_vals_list, top_indices_list):
                     if c == self.blank_id:
                         # Blank transition maintains current prefix
                         cur_b, cur_nb = next_beam[prefix]
-                        new_b = torch.logaddexp(torch.tensor(cur_b), torch.tensor(p_tot + log_p)).item()
+                        new_b = _logaddexp(cur_b, p_tot + log_p)
                         next_beam[prefix] = (new_b, cur_nb)
                     else:
                         # Phonotactic constraints on spaces:
-                        # 1. No leading space
                         if not prefix and c == self.space_id:
                             continue
-                        # 2. No consecutive spaces
                         if prefix and prefix[-1] == self.space_id and c == self.space_id:
                             continue
 
                         # Check if c repeats last non-blank token
                         if prefix and c == prefix[-1]:
-                            # Repeating token: from blank state forms new token; from non-blank state collapses
-                            # a) Collapse with previous non-blank:
+                            # Repeating token
                             cur_b, cur_nb = next_beam[prefix]
-                            new_nb = torch.logaddexp(torch.tensor(cur_nb), torch.tensor(p_nb + log_p)).item()
+                            new_nb = _logaddexp(cur_nb, p_nb + log_p)
                             next_beam[prefix] = (cur_b, new_nb)
 
-                            # b) Add new token from blank state:
                             new_prefix = prefix + (c,)
                             cur_b, cur_nb = next_beam[new_prefix]
-                            new_nb2 = torch.logaddexp(torch.tensor(cur_nb), torch.tensor(p_b + log_p)).item()
+                            new_nb2 = _logaddexp(cur_nb, p_b + log_p)
                             next_beam[new_prefix] = (cur_b, new_nb2)
                         else:
-                            # Distinct token: extends prefix
                             new_prefix = prefix + (c,)
                             cur_b, cur_nb = next_beam[new_prefix]
-                            new_nb = torch.logaddexp(torch.tensor(cur_nb), torch.tensor(p_tot + log_p)).item()
+                            new_nb = _logaddexp(cur_nb, p_tot + log_p)
                             next_beam[new_prefix] = (cur_b, new_nb)
 
             # Prune beam to beam_width
             def score(item):
                 pref, (pb, pnb) = item
-                tot = torch.logaddexp(torch.tensor(pb), torch.tensor(pnb)).item()
-                # Length normalization
+                tot = _logaddexp(pb, pnb)
                 lp = max(1, len(pref)) ** self.length_penalty
                 return tot / lp
 
@@ -113,8 +120,7 @@ class PhonotacticPrefixBeamSearch:
             beam = dict(sorted_beam[: self.beam_width])
 
         # Return highest scoring prefix
-        best_prefix = max(beam.keys(), key=lambda p: torch.logaddexp(torch.tensor(beam[p][0]), torch.tensor(beam[p][1])).item())
-        # Clean trailing spaces
+        best_prefix = max(beam.keys(), key=lambda p: _logaddexp(beam[p][0], beam[p][1]))
         res = list(best_prefix)
         while res and res[-1] == self.space_id:
             res.pop()
