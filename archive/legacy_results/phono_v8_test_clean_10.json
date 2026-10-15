@@ -1,0 +1,53 @@
+{
+  "acoustic_checkpoint": "checkpoints/phono_v8_acoustic/best_v8_acoustic.pt",
+  "p2g_checkpoint": "checkpoints/phono_v8_robust_p2g/best_robust_p2g.pt",
+  "total_samples": 10,
+  "total_audio_hours": 0.019444461805555556,
+  "global_per_calib": 5.730994152046784,
+  "global_per_greedy": 6.549707602339182,
+  "global_spc_acc": 98.05194805194806,
+  "global_wer": 38.69047619047619,
+  "global_cer": 18.941798941798943,
+  "global_rtf": 0.08343324364415503,
+  "languages": {
+    "en": {
+      "samples": 10,
+      "wer": 38.69047619047619,
+      "cer": 18.941798941798943,
+      "per": 5.730994152046784,
+      "space_acc": 98.05194805194806,
+      "rtf": 0.08343324364415503
+    }
+  },
+  "samples": {
+    "en": [
+      {
+        "ref_text": "he hoped there would be stew for dinner turnips and carrots and bruised potatoes and fat mutton pieces to be ladled out in thick peppered flour fattened sauce",
+        "pred_text": "he hoped their would be to for dinner turnips and christ and broods attentions and fat young pass toby little out an thick perfect flower fatigant son",
+        "gt_phones": "hi ho\u028apt \u00f0\u025b\u0279 w\u028ad bi stu f\u0254\u0279 d\u026an\u0259\u0279 t\u025cn\u026aps \u00e6nd k\u00e6\u0279\u0259ts \u00e6nd b\u0279uzd p\u0259te\u026a\u027eo\u028az \u00e6nd f\u00e6t m\u028c\u0294n pis\u026az t\u0259bi l\u00e6d\u0259ld a\u028at \u026an \u03b8\u026ak p\u025bp\u0259\u0279d fla\u028a\u0259\u0279 f\u00e6\u0294nd s\u0254s",
+        "pred_phones": "hi ho\u028apt \u00f0\u025b\u0279 w\u028ad bi stu f\u0254\u0279 d\u026an\u0259\u0279 t\u025cn\u026aps \u00e6nd k\u00e6\u0279\u026ats \u00e6nd b\u0279uzd \u026ate\u026a\u027eo\u028az \u00e6nd f\u00e6t m\u028c\u0294n psz t\u0259bi le\u026ad\u0259ld a\u028at \u026an \u03b8\u026ak p\u025bp\u0259\u0279d fla\u028a\u0259\u0279 f\u00e6\u0294\u0259nd s\u0254s",
+        "wer": 53.57142857142857,
+        "cer": 33.54430379746836,
+        "per": 5.839416058394161
+      },
+      {
+        "ref_text": "stuff it into you his belly counselled him",
+        "pred_text": "stuffed into you his belly counted him",
+        "gt_phones": "st\u028cf \u026a\u027e \u026ant\u028a ju h\u026az b\u025bli ka\u028ans\u025bld h\u026am",
+        "pred_phones": "st\u028cf\u026ad \u026ant\u028a ju h\u026az b\u025bli ka\u028ant\u0259ld h\u026am",
+        "wer": 37.5,
+        "cer": 16.666666666666664,
+        "per": 10.81081081081081
+      },
+      {
+        "ref_text": "after early nightfall the yellow lamps would light up here and there the squalid quarter of the brothels",
+        "pred_text": "after early night for the yellow lamps would little here and their the squilled quarter often brothers",
+        "gt_phones": "\u00e6ft\u0259\u0279\u0279 \u025cli na\u026atf\u0254l \u00f0\u0259 j\u025blo\u028a l\u00e6mps w\u028ad la\u026at \u028cp h\u026a\u0279 \u0259nd \u00f0\u025b\u0279 \u00f0\u0259 skw\u0251l\u026ad kw\u0254\u0279\u027e\u0259\u0279\u0279 \u028cv\u00f0\u0259 b\u0279\u0251\u03b8\u0259lz",
+        "pred_phones": "\u00e6ft\u0259\u0279\u0279 \u025cli na\u026at f\u0254l \u00f0\u0259 j\u025blo\u028a l\u00e6mps w\u028ad la\u026at\u00e6p h\u026a\u0279 \u00e6nd \u00f0\u025b\u0279 \u00f0\u0259 skw\u0254l\u026ad kw\u0254\u0279\u027e\u0259\u0279\u0279 \u028cv\u00f0\u0259 b\u0279\u0254v\u0259lz",
+        "wer": 50.0,
+        "cer": 17.307692307692307,
+        "per": 7.777777777777778
+      }
+    ]
+  }
+}

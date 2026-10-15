@@ -1,0 +1,53 @@
+{
+  "acoustic_checkpoint": "checkpoints/phono_v8_acoustic/best_v8_acoustic.pt",
+  "p2g_checkpoint": "checkpoints/phono_v8_robust_p2g/best_robust_p2g.pt",
+  "total_samples": 10,
+  "total_audio_hours": 0.020695833333333333,
+  "global_per_calib": 20.43222003929273,
+  "global_per_greedy": 20.13752455795678,
+  "global_spc_acc": 96.85534591194968,
+  "global_wer": 38.15028901734104,
+  "global_cer": 21.263157894736842,
+  "global_rtf": 0.07598353235459666,
+  "languages": {
+    "en": {
+      "samples": 10,
+      "wer": 38.15028901734104,
+      "cer": 21.263157894736842,
+      "per": 20.43222003929273,
+      "space_acc": 96.85534591194968,
+      "rtf": 0.07598353235459666
+    }
+  },
+  "samples": {
+    "en": [
+      {
+        "ref_text": "mister quilter is the apostle of the middle classes and we are glad to welcome his gospel",
+        "pred_text": "mister quilter is they opposition out middle classes and we are glad the welcome his gospel",
+        "gt_phones": "m\u02c8\u026ast\u0259\u0279 kw\u02c8\u026alt\u0259\u0279\u0279 \u026az \u00f0\u026aj \u0259p\u02c8\u0251\u02d0s\u0259l \u028cv\u00f0\u0259 m\u02c8\u026ad\u0259l kl\u02c8\u00e6s\u026az \u00e6nd wi\u02d0j \u0251\u02d0\u0279 \u0261l\u02c8\u00e6d t\u0259 w\u02c8\u025blk\u028cm h\u026az \u0261\u02c8\u0251\u02d0sp\u0259l",
+        "pred_phones": "m\u026ast\u0259\u0279 kw\u026alt\u0259\u0279\u0279 \u026az \u00f0\u026aj \u0259p\u0251s\u0259l \u028cv\u00f0\u0259 m\u026ad\u0259l kl\u00e6s\u026az \u00e6nd wij \u0251\u0279 \u0261l\u00e6d t\u0259 w\u025blk\u028cm h\u026az \u0261\u0251sp\u0259l",
+        "wer": 29.411764705882355,
+        "cer": 14.606741573033707,
+        "per": 12.5
+      },
+      {
+        "ref_text": "nor is mister quilter's manner less interesting than his matter",
+        "pred_text": "nor is mister quietly manner less interested on his matter",
+        "gt_phones": "n\u02c8\u0254\u02d0\u0279 \u026az m\u02c8\u026ast\u0259\u0279 kw\u02c8\u026alt\u0259\u0279z m\u02c8\u00e6n\u0259\u0279 l\u02c8\u025bs \u02c8\u026ant\u0279\u025bst\u026a\u014b \u00f0\u0259n h\u026az m\u02c8\u00e6\u027e\u0259\u0279",
+        "pred_phones": "n\u0254\u0279 \u026az m\u026ast\u0259\u0279 kw\u026alt\u0259\u0279z m\u00e6n\u0259\u0279 l\u025bs \u026ant\u0259\u0279\u0279\u025bst\u026a\u014bz \u0254n h\u026az m\u00e6\u027e\u0259\u0279",
+        "wer": 30.0,
+        "cer": 17.46031746031746,
+        "per": 20.3125
+      },
+      {
+        "ref_text": "he tells us that at this festive season of the year with christmas and roast beef looming before us similes drawn from eating and its results occur most readily to the mind",
+        "pred_text": "he tells us that at suggest obsession out year with christs an roast biff loving before us sympathies done from thing and its results or course most readily the the mind",
+        "gt_phones": "hi\u02d0 t\u02c8\u025blz \u02cc\u028cs \u00f0\u00e6t \u00e6t \u00f0\u026as f\u02c8\u025bst\u026av s\u02c8i\u02d0z\u0259n \u028cv\u00f0\u0259 j\u02c8\u026a\u0279 w\u026a\u00f0 k\u0279\u02c8\u026asm\u0259s \u00e6nd \u0279\u02c8o\u028ast b\u02c8i\u02d0f l\u02c8u\u02d0m\u026a\u014b b\u026af\u02cc\u0254\u02d0\u0279 \u02cc\u028cs s\u02c8\u026am\u026al\u02cc\u026az d\u0279\u02c8\u0254\u02d0n f\u0279\u028cm \u02c8i\u02d0\u027e\u026a\u014b \u00e6nd \u026ats \u0279\u026az\u02c8\u028clts \u0259k\u02c8\u025c\u02d0 m\u02c8o\u028ast \u0279\u02c8\u025bdili t\u0259 \u00f0\u0259 m\u02c8a\u026and",
+        "pred_phones": "hi t\u025blz \u028cs \u00f0\u00e6t \u00e6t \u00f0\u0259sf\u025bst \u028cbsiz\u0259n \u028cv\u00f0\u0259 j\u026a\u0279 w\u026a\u00f0 k\u0279\u026asm\u026as \u00e6n \u0279o\u028ast bif lum\u026a\u014b b\u026af\u0254\u0279 \u028cs s\u026am\u026aliz d\u0254n f\u0279\u028cm i\u027e\u026a\u014b \u00e6nd \u026ats \u0279\u026az\u028clts \u0254\u0279 k\u025c\u0279\u0259 mo\u028ast \u0279\u025bdili t\u0259 \u00f0\u0259 ma\u026and",
+        "wer": 46.875,
+        "cer": 25.0,
+        "per": 22.77777777777778
+      }
+    ]
+  }
+}

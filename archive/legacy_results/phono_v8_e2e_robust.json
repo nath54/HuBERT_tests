@@ -1,0 +1,164 @@
+{
+  "acoustic_checkpoint": "checkpoints/phono_v8_acoustic/best_v8_acoustic.pt",
+  "p2g_checkpoint": "checkpoints/phono_v8_robust_p2g/best_robust_p2g.pt",
+  "total_samples": 828,
+  "total_audio_hours": 2.198345850694446,
+  "global_per_calib": 23.846958807911513,
+  "global_per_greedy": 24.294078475123023,
+  "global_spc_acc": 87.218285470723,
+  "global_wer": 49.1271568081769,
+  "global_cer": 22.138637622300166,
+  "global_rtf": 0.048289215653811,
+  "languages": {
+    "en": {
+      "samples": 337,
+      "wer": 41.81391994230076,
+      "cer": 21.14980689748628,
+      "per": 21.92501575299307,
+      "space_acc": 94.64570063694268,
+      "rtf": 0.059335418586472635
+    },
+    "es": {
+      "samples": 154,
+      "wer": 53.05986696230599,
+      "cer": 23.364603400619817,
+      "per": 26.13989637305699,
+      "space_acc": 82.00320146352618,
+      "rtf": 0.044849753617536285
+    },
+    "fr": {
+      "samples": 145,
+      "wer": 47.85960641103672,
+      "cer": 23.93550012597632,
+      "per": 22.473183260311224,
+      "space_acc": 85.4157960718763,
+      "rtf": 0.045512742874265384
+    },
+    "it": {
+      "samples": 192,
+      "wer": 55.2113855169527,
+      "cer": 20.29748536504547,
+      "per": 25.012338367387226,
+      "space_acc": 85.93545573484518,
+      "rtf": 0.043289920016467004
+    }
+  },
+  "samples": {
+    "en": [
+      {
+        "ref_text": "mister quilter is the apostle of the middle classes and we are glad to welcome his gospel",
+        "pred_text": "mister quilter is they opposition out middle classes and we are glad the welcome his gossiple",
+        "gt_phones": "m\u02c8\u026ast\u0259\u0279 kw\u02c8\u026alt\u0259\u0279\u0279 \u026az \u00f0\u026aj \u0259p\u02c8\u0251\u02d0s\u0259l \u028cv\u00f0\u0259 m\u02c8\u026ad\u0259l kl\u02c8\u00e6s\u026az \u00e6nd wi\u02d0j \u0251\u02d0\u0279 \u0261l\u02c8\u00e6d t\u0259 w\u02c8\u025blk\u028cm h\u026az \u0261\u02c8\u0251\u02d0sp\u0259l",
+        "pred_phones": "m\u026ast\u0259\u0279 kw\u026alt\u0259\u0279\u0279 \u026az \u00f0\u026aj \u0259p\u0251s\u0259l \u028cv\u00f0\u0259 m\u026ad\u0259l kl\u00e6s\u026az \u00e6nd wij \u0251\u0279 \u0261l\u00e6d t\u0259 w\u025blk\u028cm h\u026az \u0261\u0251sp\u0259l",
+        "wer": 35.294117647058826,
+        "cer": 19.101123595505616,
+        "per": 12.5
+      },
+      {
+        "ref_text": "nor is mister quilter's manner less interesting than his matter",
+        "pred_text": "nor is mister quicklets manner less interestings on his matter",
+        "gt_phones": "n\u02c8\u0254\u02d0\u0279 \u026az m\u02c8\u026ast\u0259\u0279 kw\u02c8\u026alt\u0259\u0279z m\u02c8\u00e6n\u0259\u0279 l\u02c8\u025bs \u02c8\u026ant\u0279\u025bst\u026a\u014b \u00f0\u0259n h\u026az m\u02c8\u00e6\u027e\u0259\u0279",
+        "pred_phones": "n\u0254\u0279 \u026az m\u026ast\u0259\u0279 kw\u026alt\u0259\u0279z m\u00e6n\u0259\u0279 l\u025bs \u026ant\u0259\u0279\u0279\u025bst\u026a\u014bz \u0254n h\u026az m\u00e6\u027e\u0259\u0279",
+        "wer": 30.0,
+        "cer": 14.285714285714285,
+        "per": 20.3125
+      },
+      {
+        "ref_text": "he tells us that at this festive season of the year with christmas and roast beef looming before us similes drawn from eating and its results occur most readily to the mind",
+        "pred_text": "he tells us that at sufficient obsence out year with cristise an roast biff longing before us similais done from thing and its results or course most readily the the mind",
+        "gt_phones": "hi\u02d0 t\u02c8\u025blz \u02cc\u028cs \u00f0\u00e6t \u00e6t \u00f0\u026as f\u02c8\u025bst\u026av s\u02c8i\u02d0z\u0259n \u028cv\u00f0\u0259 j\u02c8\u026a\u0279 w\u026a\u00f0 k\u0279\u02c8\u026asm\u0259s \u00e6nd \u0279\u02c8o\u028ast b\u02c8i\u02d0f l\u02c8u\u02d0m\u026a\u014b b\u026af\u02cc\u0254\u02d0\u0279 \u02cc\u028cs s\u02c8\u026am\u026al\u02cc\u026az d\u0279\u02c8\u0254\u02d0n f\u0279\u028cm \u02c8i\u02d0\u027e\u026a\u014b \u00e6nd \u026ats \u0279\u026az\u02c8\u028clts \u0259k\u02c8\u025c\u02d0 m\u02c8o\u028ast \u0279\u02c8\u025bdili t\u0259 \u00f0\u0259 m\u02c8a\u026and",
+        "pred_phones": "hi t\u025blz \u028cs \u00f0\u00e6t \u00e6t \u00f0\u0259sf\u025bst \u028cbsiz\u0259n \u028cv\u00f0\u0259 j\u026a\u0279 w\u026a\u00f0 k\u0279\u026asm\u026as \u00e6n \u0279o\u028ast bif lum\u026a\u014b b\u026af\u0254\u0279 \u028cs s\u026am\u026aliz d\u0254n f\u0279\u028cm i\u027e\u026a\u014b \u00e6nd \u026ats \u0279\u026az\u028clts \u0254\u0279 k\u025c\u0279\u0259 mo\u028ast \u0279\u025bdili t\u0259 \u00f0\u0259 ma\u026and",
+        "wer": 46.875,
+        "cer": 26.16279069767442,
+        "per": 22.77777777777778
+      }
+    ],
+    "fr": [
+      {
+        "ref_text": "il fut saisi de frayeur et se jeta au plus vite sur son cheval la pr\u00e9tendue princesse parut dans le moment et voyant qu'elle avait manqu\u00e9 son coup ne craignez rien cria-t-elle au prince qui \u00eates-vous que cherchez-vous",
+        "pred_text": "il fait saisit de fr\u00e8re et se justa au pluie sur son chouvant n'apr\u00e8s tendu pr\u00e9c\u00e8s-cent dont le mon et voyant qu'elle vais manqu\u00e9s son coup ne craigner rien cr\u00e9atif l'eau princes qui \u00e9touvent que cherchez-vous",
+        "gt_phones": "il fy s\u025bz\u02c8i d\u0259- f\u0281\u025bj\u02c8\u0153\u0281 e s\u0259- \u0292\u0259t\u02c8a o ply v\u02c8it sy\u0281 s\u0254\u0303 \u0283\u0259v\u02c8al la- p\u0281et\u0251\u0303d\u02c8y p\u0281\u025b\u0303s\u02c8\u025bs pa\u0281\u02c8y d\u0251\u0303 l\u0259- mom\u02c8\u0251\u0303 e vwaj\u02c8\u0251\u0303 k\u025bl av\u02c8\u025b m\u0251\u0303k\u02c8e s\u0254\u0303 k\u02c8u n\u0259- k\u0281\u025bnj\u02c8e \u0281j\u02cc\u025b\u0303 k\u0281i\u02c8at\u025bl o p\u0281\u02c8\u025b\u0303s kij \u025btvu k\u0259 \u0283\u025b\u0281\u0283\u02c8ev\u02c8u",
+        "pred_phones": "il f\u025b s\u025bzi d\u0259- f\u0281j\u0153\u0281 e s\u0259- \u0292yta o plyi sy\u0281 s\u0254\u0303 \u0283uval nap\u0281\u025b t\u0251\u0303dy p\u0281\u025b\u0303s\u025bst\u0281e d\u0303 l\u0259- mom\u0303 e vwaj\u0303 k\u025bl ve m\u0251\u0303ke s\u0254\u0303 ku yn\u0259- k\u0281\u025bnje \u0281j\u025b\u0303 k\u0281e\u025bt\u025b lo p\u0281\u025b\u0303s kij \u025btuvu k\u0259 \u0283\u025b\u0281\u0292evu",
+        "wer": 52.63157894736842,
+        "cer": 26.72811059907834,
+        "per": 23.85786802030457
+      },
+      {
+        "ref_text": "le p\u00eacheur ne lui dit pas ce que le g\u00e9nie lui avait recommand\u00e9 mais pour se dispenser de fournir ce jour-l\u00e0 les poissons qu'on lui demandait il s'excusa sur la longueur du chemin et promit de les apporter le lendemain matin",
+        "pred_text": "ne p\u00e9ch\u00e8rent de lui dit pas se que le g\u00e9nie du avait command\u00e9 les pour se distance de foignir sous jours et sans conduit demande il cette succ\u00e8s sur la mangueur de chemin et promit\u00e9s les apporter de lent de main matin",
+        "gt_phones": "l\u0259- p\u025b\u0283\u02c8\u0153\u0281 n\u0259- ly\u02cci d\u02c8i pa s\u0259- k\u0259 l\u0259- \u0292en\u02c8i ly\u02ccij av\u02c8\u025b \u0281\u0259k\u0254m\u0251\u0303d\u02c8e m\u025b pu\u0281 s\u0259- disp\u0251\u0303s\u02c8e d\u0259- fu\u0281n\u02c8i\u0281 s\u0259- \u0292\u02c8u\u0281l\u02c8a le- pwas\u02c8\u0254\u0303 k\u0254\u0303 ly\u02cci d\u0259m\u0251\u0303d\u02c8\u025bt il s\u025bkskyz\u02c8a sy\u0281 la- l\u0254\u0303\u0261\u02c8\u0153\u0281 dy- \u0283\u0259m\u02c8\u025b\u0303 e p\u0281om\u02c8i d\u0259- le-z ap\u0254\u0281t\u02c8e l\u0259- l\u0251\u0303dm\u02c8\u025b\u0303 mat\u02c8\u025b\u0303",
+        "pred_phones": "n\u0259- pe\u0283\u025b\u0281 d\u0259- lyi di pa s\u0259- k\u0259 l\u0259- \u0292eni yij av\u025b\u0303 k\u0254m\u0251\u0303de le pu\u0281 s\u0259- dist\u0251\u0303s d\u0259- fwa\u0303ni\u0281 su \u0292u\u0281a e as\u0303 k\u0303lyi d\u0259m\u0303d il s\u025b skyza sya\u0281 la- m\u0251\u0303\u0261\u0153\u0281 d- \u0283\u0259m\u025b\u0303 e p\u0281omite le-z ap\u0254\u0281te l\u0259- l\u0251\u0303 d\u0259- ma\u0303 mat\u025b\u0303",
+        "wer": 63.41463414634146,
+        "cer": 28.699551569506728,
+        "per": 27.75330396475771
+      },
+      {
+        "ref_text": "ce ministre les prit et les emporta lui-m\u00eame encore dans la cuisine o\u00f9 il s'enferma seul avec la cuisini\u00e8re qui commen\u00e7a \u00e0 les habiller devant lui et qui les mit sur le feu comme elle avait fait pour les quatre autres le jour pr\u00e9c\u00e9dent",
+        "pred_text": "se ministre les prix il emporta lui-m\u00eame encore en les cuisines ou il sans faire mal avec cuginaire amante les habits devant lui et qui invisible feu comme elle ail\u00e9e faire pourrait quatorte jour pendant",
+        "gt_phones": "s\u0259- min\u02c8ist\u0281 le- p\u0281\u02c8i e le-z \u0251\u0303p\u0254\u0281t\u02c8a ly\u02ccim\u02c8\u025bm \u0251\u0303k\u02cc\u0254\u0281 d\u0251\u0303 la- kyiz\u02c8in u il s\u0251\u0303f\u025b\u0281m\u02c8a s\u02c8\u0153l av\u02cc\u025bk la- kyizinj\u02c8\u025b\u0281 ki k\u0254m\u0251\u0303s\u02c8a a le-z abij\u02c8e d\u0259v\u02c8\u0251\u0303 ly\u02ccij e ki le- m\u02c8i sy\u0281 l\u0259- f\u02c8\u00f8 k\u0254m \u025bl av\u02c8\u025b f\u02c8\u025b pu\u0281 le- k\u02c8at\u0281 ot\u0281 l\u0259- \u0292\u02c8u\u0281 p\u0281esed\u02c8\u0251\u0303",
+        "pred_phones": "s\u0259- minist\u0281 le- p\u0281i ilz \u0251\u0303pu\u0281ta lyim\u025bm \u0251\u0303k\u0254\u0281 \u0251\u0303 le- kyizin u il s\u0251\u0303 f\u025b\u0281 masl av\u025bk ky\u0292nj\u025b\u0281 \u0303m\u0303sa le aije d\u0259v\u0303 lyij e kij \u025bmisyb f\u00f8 k\u0254m \u025bl \u025ble f\u025b\u0281 pu\u0281le- kat\u0281ot\u0281 \u0292u\u0281 psed\u0251\u0303",
+        "wer": 65.9090909090909,
+        "cer": 35.319148936170215,
+        "per": 33.03964757709251
+      }
+    ],
+    "es": [
+      {
+        "ref_text": "y \u00e1 los hijos de los extranjeros que se allegaren \u00e1 jehov\u00e1 para ministrarle y que amaren el nombre de jehov\u00e1 para ser sus siervos \u00e1 todos los que guardaren el s\u00e1bado de profanarlo y abrazaren mi pacto",
+        "pred_text": "io a acentua los hijos de los extranjeros que se allegaron a acentuada jehov\u00e1 para ministrarle y que amar en el nombre de jehov\u00e1 para hacer su siervos a acentuada todo los que guardar y y el salvo de profanarlo y abrasar en mi pacto",
+        "gt_phones": "ij \u02c8a a\u03b8\u025bntw\u02c8a\u00f0a los \u02c8ixos \u00f0e los \u02ccekst\u027ea\u014bx\u02c8e\u027eos ke se \u02cca\u028ee\u0263\u02c8a\u027een \u02c8a a\u03b8\u025bntw\u02c8a\u00f0a x\u02cceo\u03b2\u02c8a p\u02cca\u027ea m\u02ccinist\u027e\u02c8a\u027ele i ke am\u02c8a\u027een el n\u02c8omb\u027ee \u00f0e x\u02cceo\u03b2\u02c8a p\u02cca\u027ea s\u02c8e\u027e sus sj\u02c8e\u027e\u03b2os \u02c8a a\u03b8\u025bntw\u02c8a\u00f0a t\u02c8o\u00f0os los ke \u0263wa\u027e\u00f0\u02c8a\u027een el s\u02c8a\u03b2a\u00f0o \u00f0e p\u027e\u02ccofan\u02c8a\u027elo ij \u02cca\u03b2\u027ea\u03b8\u02c8a\u027een mi p\u02c8akto",
+        "pred_phones": "ij a a\u03b8\u025bntwa\u00f0a los ixos \u00f0e los ekst\u027ea\u014bxe\u027eos ke se a\u028ee\u0263a\u027een a a\u03b8\u025bntwa\u00f0a xeo\u03b2a pa\u027ea minist\u027ea\u027ele i ke ama\u027e en el nomb\u027ee \u00f0e xeoa pa\u027ea ase\u027e su sje\u027e\u03b2os a a\u03b8\u025bntwa\u00f0a to\u00f0o los ke \u0263wa\u027e\u00f0a\u027e e n el savalo \u00f0e p\u027eofana\u027elo i a\u03b2\u027easa\u027e en mi pakto",
+        "wer": 50.0,
+        "cer": 25.0,
+        "per": 16.731517509727624
+      },
+      {
+        "ref_text": "no es antes el ayuno que yo escog\u00ed desatar las ligaduras de impiedad deshacer los haces de opresi\u00f3n y dejar libres a los quebrantados y que romp\u00e1is todo yugo",
+        "pred_text": "non estante layuno quej'occhio desat\u00e1rselas liguras y impiedad deshace nochese desprecios y dejar libres a acentua los cobr\u00e1ndose y que rompismatos y yugo",
+        "gt_phones": "n\u02c8o \u02c8es \u02c8antes el a\u029d\u02c8uno ke \u029d\u02c8o \u02cceskox\u02c8i \u00f0\u02ccesat\u02c8a\u027e las l\u02cci\u0263a\u00f0\u02c8u\u027eas \u00f0e \u02ccimpje\u00f0\u02c8ad \u00f0\u02ccesa\u03b8\u02c8e\u027e los \u02c8a\u03b8es \u00f0e \u02ccop\u027eesj\u02c8on i \u00f0ex\u02c8a\u027e l\u02c8i\u03b2\u027ees a los k\u02cce\u03b2\u027eant\u02c8a\u00f0os i ke romp\u02c8ais t\u02c8o\u00f0o \u029d\u02c8u\u0263o",
+        "pred_phones": "no esantese la\u029duno ke\u028eoeskoxi \u00f0esata\u027elas li\u0263au\u027eas l impje\u00f0ad \u00f0esa\u03b8e nosase deop\u027eesjon i \u00f0exa\u027e li\u03b2es a a\u03b8\u025bntwa\u00f0a los ke\u03b2\u027eanta\u00f0os i ke rompaisto\u00f0o i \u029du\u0263o",
+        "wer": 72.41379310344827,
+        "cer": 33.75796178343949,
+        "per": 32.20338983050847
+      },
+      {
+        "ref_text": "el hablar calumnia y rebeli\u00f3n concebir y proferir de coraz\u00f3n palabras de mentira y el derecho se retir\u00f3 y la justicia se puso lejos porque la verdad tropez\u00f3 en la plaza y la equidad no pudo venir",
+        "pred_text": "y labrada luna il revelaron conserve y profer de corazon palabra y de mentire y el derecho sereno y la justicia se puso lejos porque la verdad tropeso la plaza y la iquidad no puro venir",
+        "gt_phones": "el a\u03b2l\u02c8a\u027e kal\u02c8umnja i r\u02cce\u03b2elj\u02c8on k\u02ccon\u03b8e\u03b2\u02c8i\u027e i p\u027e\u02ccofe\u027e\u02c8i\u027e \u00f0e k\u02cco\u027ea\u03b8\u02c8om pal\u02c8a\u03b2\u027eas \u00f0e ment\u02c8i\u027ea ij el \u00f0e\u027e\u02c8et\u0283o se r\u02cceti\u027e\u02c8o i la xust\u02c8i\u03b8ja se p\u02c8uso l\u02c8exos p\u02cco\u027eke la \u03b2e\u027e\u00f0\u02c8ad t\u027e\u02ccope\u03b8\u02c8o en la pl\u02c8a\u03b8a i la \u02cceki\u00f0\u02c8ad n\u02c8o p\u02c8u\u00f0o \u03b2en\u02c8i\u027e",
+        "pred_phones": "e la\u03b2la\u027eka lun\u026a il \u027eeveljon konsevil i p\u027eofei\u027e \u00f0e ko\u027ea\u03b8on pala\u03b2\u027ea z de menti\u027ee ij el deret\u0283o seret\u027eo i la xusti\u03b8ja se puso lexos po\u027eke la \u03b2e\u027e\u00f0ad t\u027eopeso na plasa i la iki\u00f0ad no pu\u027eo \u03b2eni\u027e",
+        "wer": 45.94594594594595,
+        "cer": 19.48717948717949,
+        "per": 26.244343891402718
+      }
+    ],
+    "it": [
+      {
+        "ref_text": "tanto d'ogni laudato esser la prima di dio la madre ancor quaggi\u00f9 dovea tanto piacque al signor di porre in cima questa fanciulla ebrea",
+        "pred_text": "tanto d'ogni laudato esser la prima di dio la madre ancor qua gi\u00f9 dove tanto piacque signor di poi renditia questa fanciulle ebre",
+        "gt_phones": "t\u02c8anto d\u02cco\u0272\u0272\u026a la\u028ad\u02c8ato \u02c8\u025bsser la p\u027e\u02c8ima d\u026a d\u02c8ijo la m\u02c8ad\u027ee ank\u02c8o\u027e kwad\u0292\u02d0\u02c8u dov\u02c8\u025ba t\u02c8anto pj\u02c8ak\u02d0we al si\u0272\u02c8o\u027e d\u026a p\u02c8\u0254r\u027ee in t\u0283\u02c8ima kw\u02ccesta fant\u0283\u02c8ulla eb\u027e\u02c8\u025ba",
+        "pred_phones": "tanto do\u0272\u0272\u026a la\u028adato \u025bsser la p\u027eima d\u026a dijo la mad\u027ea ank\u0254\u027e kwa d\u0292u dov\u025b tando pjakol si\u0272o\u027e d\u026a p\u0254a \u027eent\u0283ima kwesta fant\u0283ulle eb\u027e\u025ba",
+        "wer": 37.5,
+        "cer": 11.11111111111111,
+        "per": 22.875816993464053
+      },
+      {
+        "ref_text": "qual angolo ti raccogliea nascente quando il tuo re dai perfidi tratto a morir sul colle imporpor\u00f2 le zolle del suo sublime altar",
+        "pred_text": "guardandolo ti raccoglienza dietro quando il tuo re da perfi di tratto a morircius colle impreso le dolore del suoi sombrillato",
+        "gt_phones": "kw\u02c8al \u02c8a\u014b\u0261olo t\u026a \u027eak\u02d0o\u028e\u02c8\u025ba na\u0283\u02c8\u025bnte kw\u02c8ando il t\u02cc\u028ao \u027e\u02c8\u025b daj p\u02c8\u025b\u027efid\u026a t\u027e\u02c8at\u02d0o a mor\u02c8ij\u027e s\u028al k\u02c8olle impo\u027epo\u027e\u02c8\u0254 le dz\u02c8\u0254lle del s\u02cc\u028ao s\u028abl\u02c8ime alt\u02c8a\u027e",
+        "pred_phones": "kwa\u027ea\u014b\u0261olo t\u026a \u027eako\u028ei\u025bana \u0283j\u025bnte kwando il t\u028ao \u027e\u025b daj pe\u027ef\u026a d\u026a t\u027eato a morij\u027es\u028ail kolle imp\u027epe\u027e\u0254 le dzolle del s\u028ao soblimijalta\u027e",
+        "wer": 60.86956521739131,
+        "cer": 27.906976744186046,
+        "per": 22.916666666666664
+      },
+      {
+        "ref_text": "come vittima innanzi all'altar non lo seppe il superbo romano ma f\u00e9 stima il deliro potente che giovasse col sangue innocente la sua vil sicurtade comprar",
+        "pred_text": "come viti me pennanzi all'altra non lo seppe il superbo romano ma festina al dello tente che gentese con sangue innocente lo sua villa securate compraron",
+        "gt_phones": "k\u02ccome v\u02c8it\u02d0ima inn\u02c8ants\u026a allalt\u02c8a\u027e non lo s\u02c8\u025bp\u02d0e il s\u028ap\u02c8\u025b\u027ebo \u027eom\u02c8ano ma f\u02c8e st\u02c8ima il del\u02c8iro pot\u02c8\u025bnte ke d\u0292ov\u02c8asse kol s\u02c8a\u014b\u0261we innot\u0283\u02c8\u025bnte la s\u02cc\u028aa v\u02c8il sik\u028a\u027et\u02c8ade komp\u027e\u02c8a\u027e",
+        "pred_phones": "kome vit\u026a me ennants\u026a alalta\u027ea non lo s\u025bpe il s\u028ap\u025b\u027ebo romano ma fessima al delro t\u025bnte ke d\u0292evasse kol sa\u014b\u0261we inot\u0283\u025bnte lo s\u028aa viil s\u026ak\u028a\u027etade komp\u027ea\u027eo",
+        "wer": 57.692307692307686,
+        "cer": 18.83116883116883,
+        "per": 21.511627906976745
+      }
+    ]
+  }
+}

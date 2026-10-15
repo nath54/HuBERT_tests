@@ -166,13 +166,20 @@ class Model_A2P(Model_Part):
         draft_tokens: Optional[Tensor] = None
         total_moe_loss: Tensor = torch.tensor(0.0, device=x.device)
 
-        # Pass sequentially through 12 Conformer blocks
+        # Pass sequentially through Conformer blocks
         for l_idx, layer in enumerate(self.conformer_layers):
             # Conformer block forward: [B, T, D]
-            x, _, layer_moe_loss = layer(x, key_padding_mask=key_padding_mask)
+            if self.training and getattr(self.cfg, "gradient_checkpointing", False):
+                def _layer_fwd(mod: nn.Module, x_in: Tensor, mask: Optional[Tensor]) -> Tuple[Tensor, Optional[Tensor], Tensor]:
+                    return mod(x_in, key_padding_mask=mask)
+                x, _, layer_moe_loss = torch.utils.checkpoint.checkpoint(
+                    _layer_fwd, layer, x, key_padding_mask, use_reentrant=False
+                )
+            else:
+                x, _, layer_moe_loss = layer(x, key_padding_mask=key_padding_mask)
             total_moe_loss = total_moe_loss + layer_moe_loss
 
-            # 1. Layer 4 Draft Phoneme Supervision & Emission
+            # 1. Layer Draft Phoneme Supervision & Emission
             if l_idx == self.draft_layer_idx:
                 # Shape: [B, T, V], Type: torch.float32, Role: intermediate draft logits
                 draft_logits = self.draft_head(x)

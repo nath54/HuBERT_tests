@@ -85,6 +85,9 @@ class ModelA2PConfig:
     engram_table_size: int = 4096
     engram_ngram_orders: Tuple[int, ...] = (2, 3, 4)
 
+    # Gradient Checkpointing (essential for training Ultra/Large tiers in <=12GB VRAM)
+    gradient_checkpointing: bool = False
+
     # Phoneme Vocabulary & Tokens
     vocab_size: int = 112
     blank_id: int = 1
@@ -210,3 +213,114 @@ class ModelConfig:
         if target_str.upper() == "CUDA" and not torch.cuda.is_available():
             return torch.device("cpu")
         return torch.device(target_str.lower())
+
+    # --- Official Model Size Tier Presets (NaVox v1.0) ---
+
+    @classmethod
+    def tiny(cls, **kwargs: Any) -> "ModelConfig":
+        """NaVox-Tiny (~15M params): Ultra-lightweight for microcontrollers & embedded devices."""
+        cfg = cls(
+            a2p=ModelA2PConfig(
+                embed_dim=256,
+                num_layers=6,
+                num_heads=4,
+                ffn_dim=1024,
+                use_deepseek_moe=False,
+                engram_layers=(2, 4),
+                draft_layer_idx=1,
+            ),
+            pe=ModelPEConfig(d_macro=512, d_model=256, num_layers=2, nhead=4, dim_feedforward=512),
+            wd=ModelWDConfig(macro_dim=512, micro_dim=256, num_macro_layers=3, num_heads=4, num_overlapping_experts=5),
+            **kwargs,
+        )
+        return cfg
+
+    @classmethod
+    def small(cls, **kwargs: Any) -> "ModelConfig":
+        """NaVox-Small (~45M params): Real-time on-device edge / Google Pixel 10 NPU."""
+        cfg = cls(
+            a2p=ModelA2PConfig(
+                embed_dim=384,
+                num_layers=8,
+                num_heads=6,
+                ffn_dim=1536,
+                use_deepseek_moe=True,
+                num_routed_experts=4,
+                top_k=2,
+                num_shared_experts=1,
+                engram_layers=(3, 6),
+                draft_layer_idx=2,
+            ),
+            pe=ModelPEConfig(d_macro=512, d_model=384, num_layers=3, nhead=6, dim_feedforward=768),
+            wd=ModelWDConfig(macro_dim=512, micro_dim=384, num_macro_layers=4, num_heads=6, num_overlapping_experts=7),
+            **kwargs,
+        )
+        return cfg
+
+    @classmethod
+    def base(cls, **kwargs: Any) -> "ModelConfig":
+        """NaVox-Base (~120M params / 45M active): Balanced desktop / high-accuracy streaming."""
+        cfg = cls(
+            a2p=ModelA2PConfig(
+                embed_dim=512,
+                num_layers=12,
+                num_heads=8,
+                ffn_dim=2048,
+                use_deepseek_moe=True,
+                num_routed_experts=8,
+                top_k=2,
+                num_shared_experts=1,
+                engram_layers=(5, 9),
+                draft_layer_idx=3,
+            ),
+            pe=ModelPEConfig(d_macro=512, d_model=512, num_layers=4, nhead=8, dim_feedforward=1024),
+            wd=ModelWDConfig(macro_dim=512, micro_dim=512, num_macro_layers=4, num_heads=8, num_overlapping_experts=7),
+            **kwargs,
+        )
+        return cfg
+
+    @classmethod
+    def large(cls, **kwargs: Any) -> "ModelConfig":
+        """NaVox-Large (~510M params / 175M active): High-capacity multilingual standard."""
+        cfg = cls(
+            a2p=ModelA2PConfig(
+                embed_dim=512,
+                num_layers=16,
+                num_heads=8,
+                ffn_dim=2048,
+                use_deepseek_moe=True,
+                num_routed_experts=12,
+                top_k=2,
+                num_shared_experts=1,
+                engram_layers=(7, 13),
+                draft_layer_idx=4,
+                gradient_checkpointing=True,
+            ),
+            pe=ModelPEConfig(d_macro=512, d_model=512, num_layers=6, nhead=8, dim_feedforward=2048),
+            wd=ModelWDConfig(macro_dim=512, micro_dim=512, num_macro_layers=6, num_heads=8, num_overlapping_experts=7),
+            **kwargs,
+        )
+        return cfg
+
+    @classmethod
+    def ultra(cls, **kwargs: Any) -> "ModelConfig":
+        """NaVox-Ultra (~995M params / 256M active): Flagship SOTA capacity on 12GB VRAM."""
+        cfg = cls(
+            a2p=ModelA2PConfig(
+                embed_dim=512,
+                num_layers=24,
+                num_heads=8,
+                ffn_dim=2048,
+                use_deepseek_moe=True,
+                num_routed_experts=16,
+                top_k=2,
+                num_shared_experts=1,
+                engram_layers=(10, 19),
+                draft_layer_idx=5,
+                gradient_checkpointing=True,
+            ),
+            pe=ModelPEConfig(d_macro=512, d_model=512, num_layers=8, nhead=8, dim_feedforward=2048),
+            wd=ModelWDConfig(macro_dim=512, micro_dim=512, num_macro_layers=8, num_heads=8, num_overlapping_experts=7),
+            **kwargs,
+        )
+        return cfg

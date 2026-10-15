@@ -59,6 +59,15 @@ class Model_Part(nn.Module, ABC):
         target_dev: torch.device = self.get_device()
         return self.to(target_dev)
 
+    def forward(self, *args: Any, **kwargs: Any) -> Any:
+        """
+        Standard PyTorch forward hook.
+        Routes to forward_training if self.training is True, else forward_inference.
+        """
+        if self.training:
+            return self.forward_training(*args, **kwargs)
+        return self.forward_inference(*args, **kwargs)
+
     @abstractmethod
     def forward_training(self, *args: Any, **kwargs: Any) -> Dict[str, Tensor]:
         """

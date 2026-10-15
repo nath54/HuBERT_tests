@@ -111,32 +111,44 @@ class MultiHeadSelfAttention(nn.Module):
         if self.use_rope and self.rope is not None:
             q, k = self.rope.apply_rope(q, k)
 
-        # 4. Scaled dot-product attention scores: [B, H, T, d_k] x [B, H, d_k, T] -> [B, H, T, T]
-        scores: Tensor = torch.matmul(q, k.transpose(-2, -1)) * self.scaling
+        # 4. Memory-Efficient Scaled Dot-Product Attention (SDPA / FlashAttention)
+        if not return_weights:
+            # Combine masks if present
+            merged_mask = None
+            if key_padding_mask is not None:
+                # [B, 1, 1, T]
+                merged_mask = ~key_padding_mask.unsqueeze(1).unsqueeze(2)
+            if attn_mask is not None:
+                if merged_mask is not None:
+                    merged_mask = merged_mask & (attn_mask == 0)
+                else:
+                    merged_mask = attn_mask
 
-        # 5. Apply key padding mask if provided: [B, 1, 1, T]
-        if key_padding_mask is not None:
-            # Expand mask to broadcast over heads and query positions
-            # Dimension: [B, 1, 1, T], Type: torch.bool
-            mask_expanded: Tensor = key_padding_mask.unsqueeze(1).unsqueeze(2)
-            scores = scores.masked_fill(mask_expanded, -1e9)
+            dropout_p = self.dropout.p if self.training else 0.0
+            context: Tensor = F.scaled_dot_product_attention(
+                q, k, v,
+                attn_mask=merged_mask if (merged_mask is not None and merged_mask.dtype == torch.bool) else None,
+                dropout_p=dropout_p,
+                scale=self.scaling,
+            )
+            probs = None
+        else:
+            # Explicit attention matrix computation for logging/visualization
+            scores: Tensor = torch.matmul(q, k.transpose(-2, -1)) * self.scaling
+            if key_padding_mask is not None:
+                mask_expanded: Tensor = key_padding_mask.unsqueeze(1).unsqueeze(2)
+                scores = scores.masked_fill(mask_expanded, -1e9)
+            if attn_mask is not None:
+                scores = scores + attn_mask
+            probs: Tensor = F.softmax(scores, dim=-1)
+            probs_dropped: Tensor = self.dropout(probs)
+            context = torch.matmul(probs_dropped, v)
 
-        # 6. Apply attention structure mask if provided: [T, T]
-        if attn_mask is not None:
-            scores = scores + attn_mask
-
-        # 7. Softmax attention probabilities: [B, H, T, T]
-        probs: Tensor = F.softmax(scores, dim=-1)
-        probs_dropped: Tensor = self.dropout(probs)
-
-        # 8. Weight values: [B, H, T, T] x [B, H, T, d_k] -> [B, H, T, d_k]
-        context: Tensor = torch.matmul(probs_dropped, v)
-
-        # 9. Concat heads and project out: [B, H, T, d_k] -> [B, T, D]
+        # 5. Concat heads and project out: [B, H, T, d_k] -> [B, T, D]
         context = context.transpose(1, 2).contiguous().view(b_sz, seq_len, self.embed_dim)
         out: Tensor = self.out_proj(context)
 
-        return out, (probs if return_weights else None)
+        return out, probs
 
 
 class BandCausalSelfAttention(nn.Module):

@@ -1,0 +1,53 @@
+{
+  "acoustic_checkpoint": "checkpoints/phono_v8_acoustic/best_v8_acoustic.pt",
+  "p2g_checkpoint": "checkpoints/phono_v8_robust_p2g/best_robust_p2g.pt",
+  "total_samples": 15,
+  "total_audio_hours": 0.04874444444444445,
+  "global_per_calib": 20.783345095271702,
+  "global_per_greedy": 21.524347212420608,
+  "global_spc_acc": 84.16523235800344,
+  "global_wer": 58.89261744966443,
+  "global_cer": 31.64983164983165,
+  "global_rtf": 0.08187632042263318,
+  "languages": {
+    "fr": {
+      "samples": 15,
+      "wer": 58.89261744966443,
+      "cer": 31.64983164983165,
+      "per": 20.783345095271702,
+      "space_acc": 84.16523235800344,
+      "rtf": 0.08187632042263318
+    }
+  },
+  "samples": {
+    "fr": [
+      {
+        "ref_text": "il fut saisi de frayeur et se jeta au plus vite sur son cheval la pr\u00e9tendue princesse parut dans le moment et voyant qu'elle avait manqu\u00e9 son coup ne craignez rien cria-t-elle au prince qui \u00eates-vous que cherchez-vous",
+        "pred_text": "il fait saisit de fr\u00e8re et se justa au pluie sur son cheval n'apprends tendu pr\u00e9sent\u00e8rent de le mon et voyant qu'elle vos manquer son coup ne craignait rien cr\u00e9ature le prince qui \u00e9coutent que cherchez-vous",
+        "gt_phones": "il fy s\u025bzi d\u0259- f\u0281\u025bj\u0153\u0281 e s\u0259- \u0292\u0259ta o ply vit sy\u0281 s\u0254\u0303 \u0283\u0259val la- p\u0281et\u0251\u0303dy p\u0281\u025b\u0303s\u025bs pa\u0281y d\u0251\u0303 l\u0259- mom\u0251\u0303 e vwaj\u0251\u0303 k\u025bl av\u025b m\u0251\u0303ke s\u0254\u0303 ku n\u0259- k\u0281\u025bnje \u0281j\u025b\u0303 k\u0281iat\u025bl o p\u0281\u025b\u0303s kij \u025btvu k\u0259 \u0283\u025b\u0281\u0283evu",
+        "pred_phones": "il f\u025b s\u025bzi d\u0259- f\u0281j\u0153\u0281 e s\u0259- \u0292yta o plyi sy\u0281 s\u0254\u0303 \u0283uval nap\u0281\u025b t\u0251\u0303dy p\u0281\u025b\u0303s\u025bst\u0281e d\u0303 l\u0259- mom\u0303 e vwaj\u0303 k\u025bl ve m\u0251\u0303ke s\u0254\u0303 ku yn\u0259- k\u0281\u025bnje \u0281j\u025b\u0303 k\u0281e\u025bt\u025b lo p\u0281\u025b\u0303s kij \u025btuvu k\u0259 \u0283\u025b\u0281\u0292evu",
+        "wer": 47.368421052631575,
+        "cer": 29.493087557603687,
+        "per": 15.730337078651685
+      },
+      {
+        "ref_text": "le p\u00eacheur ne lui dit pas ce que le g\u00e9nie lui avait recommand\u00e9 mais pour se dispenser de fournir ce jour-l\u00e0 les poissons qu'on lui demandait il s'excusa sur la longueur du chemin et promit de les apporter le lendemain matin",
+        "pred_text": "ne p\u00eacheur de lui dit pas se que le g\u00e9nie du avait command\u00e9 les pour se distance de froideur se jours et sans pluie demande il cette succ\u00e8s sur la mangore de chemin et promiti\u00e9 les apporter de la de ma matin",
+        "gt_phones": "l\u0259- p\u025b\u0283\u0153\u0281 n\u0259- lyi di pa s\u0259- k\u0259 l\u0259- \u0292eni lyij av\u025b \u0281\u0259k\u0254m\u0251\u0303de m\u025b pu\u0281 s\u0259- disp\u0251\u0303se d\u0259- fu\u0281ni\u0281 s\u0259- \u0292u\u0281la le- pwas\u0254\u0303 k\u0254\u0303 lyi d\u0259m\u0251\u0303d\u025bt il s\u025bkskyza sy\u0281 la- l\u0254\u0303\u0261\u0153\u0281 dy- \u0283\u0259m\u025b\u0303 e p\u0281omi d\u0259- le-z ap\u0254\u0281te l\u0259- l\u0251\u0303dm\u025b\u0303 mat\u025b\u0303",
+        "pred_phones": "n\u0259- pe\u0283\u025b\u0281 d\u0259- lyi di pa s\u0259- k\u0259 l\u0259- \u0292eni yij av\u025b\u0303 k\u0254m\u0251\u0303de le pu\u0281 s\u0259- dist\u0251\u0303s d\u0259- fwa\u0303ni\u0281 su \u0292u\u0281a e as\u0303 \u0303lyi d\u0259m\u0303d il s\u025b skyza sya\u0281 la- m\u0251\u0303\u0261\u0153\u0281 d- \u0283\u0259m\u025b\u0303 e p\u0281omite le-z ap\u0254\u0281te l\u0259- l\u0251\u0303 d\u0259- ma\u0303 mat\u025b\u0303",
+        "wer": 60.97560975609756,
+        "cer": 29.596412556053814,
+        "per": 20.87378640776699
+      },
+      {
+        "ref_text": "ce ministre les prit et les emporta lui-m\u00eame encore dans la cuisine o\u00f9 il s'enferma seul avec la cuisini\u00e8re qui commen\u00e7a \u00e0 les habiller devant lui et qui les mit sur le feu comme elle avait fait pour les quatre autres le jour pr\u00e9c\u00e9dent",
+        "pred_text": "se ministre les prix il emporta lui-m\u00eame encore en les cuisines ou il sans faire mal avec concierge immense les habits devant lui et qui invisible feu comme elle allait fait voulez quatorze jour perdant",
+        "gt_phones": "s\u0259- minist\u0281 le- p\u0281i e le-z \u0251\u0303p\u0254\u0281ta lyim\u025bm \u0251\u0303k\u0254\u0281 d\u0251\u0303 la- kyizin u il s\u0251\u0303f\u025b\u0281ma s\u0153l av\u025bk la- kyizinj\u025b\u0281 ki k\u0254m\u0251\u0303sa a le-z abije d\u0259v\u0251\u0303 lyij e ki le- mi sy\u0281 l\u0259- f\u00f8 k\u0254m \u025bl av\u025b f\u025b pu\u0281 le- kat\u0281 ot\u0281 l\u0259- \u0292u\u0281 p\u0281esed\u0251\u0303",
+        "pred_phones": "s\u0259- minist\u0281 le- p\u0281i ilz \u0251\u0303pu\u0281ta lyim\u025bm \u0251\u0303k\u0254\u0281 \u0251\u0303 le- kyizin u il s\u0251\u0303 f\u025b\u0281 masl av\u025bk ky\u0292nj\u025b\u0281 \u0303m\u0303sa le aije d\u0259v\u0303 lyi e kij \u025bmisyb f\u00f8 k\u0254m \u025bl \u025ble f\u025b pu\u0281le- kat\u0281ot\u0281 \u0292u\u0281 psed\u0251\u0303",
+        "wer": 63.63636363636363,
+        "cer": 33.61702127659574,
+        "per": 25.853658536585368
+      }
+    ]
+  }
+}
