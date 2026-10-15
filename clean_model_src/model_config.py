@@ -123,10 +123,10 @@ class ModelWDConfig:
     num_heads: int = 8
     band_window_words: int = 8
     num_overlapping_experts: int = 7
-    char_vocab_size: int = 128
+    char_vocab_size: int = 122
     max_word_len: int = 24
-    bos_id: int = 1
-    eos_id: int = 2
+    bos_id: int = 2
+    eos_id: int = 3
     pad_id: int = 0
 
 

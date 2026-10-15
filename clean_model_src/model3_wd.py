@@ -376,17 +376,19 @@ class Model_WD(Model_Part):
             if finished.all():
                 break
 
-        # 4. Decode ASCII / Latin character strings
+        # 4. Decode orthographic character strings via RomanCharTokenizer vocabulary
+        from clean_model_src.tokenizers.roman_tokenizer import RomanCharTokenizer
+        _tokenizer = RomanCharTokenizer()
+
         decoded_words: List[str] = []
         for l in range(l_words):
             char_list: List[str] = []
             for tok_val in active_words[l, 1:].cpu().tolist():
-                if tok_val in (self.cfg.bos_id, self.cfg.eos_id, self.cfg.pad_id):
+                if tok_val in (self.cfg.bos_id, self.cfg.eos_id, self.cfg.pad_id, 4):  # ignore control / eow
                     continue
-                try:
-                    char_list.append(chr(tok_val))
-                except Exception:
-                    pass
+                char_sym = _tokenizer.id2char.get(tok_val, "")
+                if char_sym and not char_sym.startswith("<"):
+                    char_list.append(char_sym)
             word_str: str = "".join(char_list).strip()
             decoded_words.append(word_str)
 

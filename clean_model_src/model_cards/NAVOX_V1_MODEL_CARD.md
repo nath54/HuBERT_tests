@@ -30,11 +30,11 @@ By decoupling the pipeline into **Acoustic Phonemes** (Model 1), **Continuous Wo
 
 | Model | Params | test-clean WER (%) | test-other WER (%) | Acoustic PER (%) |
 | :--- | :---: | :---: | :---: | :---: |
-| **NaVox-Tiny** | 15 M | 6.8% | 14.2% | 8.4% |
-| **NaVox-Small** | 45 M | 4.2% | 9.8% | 5.6% |
-| **NaVox-Base** | 120 M | 3.1% | 7.4% | 4.1% |
-| **NaVox-Large** | 510 M | 2.4% | 5.8% | 3.2% |
-| **NaVox-Ultra (v1.0)** | **995 M** | **1.9%** | **4.6%** | **2.5%** |
+| **NaVox-Tiny** | 15 M | / | / | / |
+| **NaVox-Small** | 45 M | / | / | / |
+| **NaVox-Base** | 120 M | / | / | / |
+| **NaVox-Large** | 510 M | / | / | / |
+| **NaVox-Ultra (v1.0)** | **995 M** | **/** | **/** | **/** |
 | *Whisper-Base (Reference)* | 74 M | 4.3% | 10.1% | N/A |
 | *Whisper-Small (Reference)* | 244 M | 3.4% | 7.6% | N/A |
 
@@ -45,10 +45,11 @@ By decoupling the pipeline into **Acoustic Phonemes** (Model 1), **Continuous Wo
 
 | Model Tier | 🇬🇧 English | 🇫🇷 French | 🇪🇸 Spanish | 🇮🇹 Italian | Avg Multilingual WER |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| **NaVox-Small** | 6.2% | 8.9% | 7.4% | 7.9% | 7.60% |
-| **NaVox-Base** | 4.1% | 6.3% | 5.2% | 5.5% | 5.27% |
-| **NaVox-Large** | 3.2% | 4.8% | 4.1% | 4.3% | 4.10% |
-| **NaVox-Ultra (v1.0)** | **2.5%** | **3.9%** | **3.3%** | **3.6%** | **3.32%** |
+| **NaVox-Tiny** | / | / | / | / | / |
+| **NaVox-Small** | / | / | / | / | / |
+| **NaVox-Base** | / | / | / | / | / |
+| **NaVox-Large** | / | / | / | / | / |
+| **NaVox-Ultra (v1.0)** | **/** | **/** | **/** | **/** | **/** |
 
 ---
 
