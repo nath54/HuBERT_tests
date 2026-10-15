@@ -38,6 +38,8 @@ from src.data.roman_tokenizer import RomanCharTokenizer
 from src.data.phonetic_noise import PhoneticNoiseSimulator
 from src.models.phono_v7_5_speech_model import PhonoV75SpeechConfig, PhonoV75SpeechModel
 from src.models.text_phoneme_encoder import ContinuousPhonemeWordSegmenter
+from src.inference.character_beam_search import beam_search_character_rollout
+from src.training.metrics import compute_wer, compute_cer
 
 _espeak_phonemizer = None
 _phoneme_tokenizer = None
@@ -263,7 +265,10 @@ def main():
     parser.add_argument("--min_lr", type=float, default=2.0e-6)
     parser.add_argument("--boundary_loss_weight", type=float, default=2.0)
     parser.add_argument("--eval_every", type=int, default=1000)
-    parser.add_argument("--log_every", type=int, default=50)
+    parser.add_argument("--log_every", type=int, default=10)
+    parser.add_argument("--sample_every", type=int, default=25, help="Interval for visual sample inspections")
+    parser.add_argument("--freeze_decoder", action="store_true", default=True, help="Strictly freeze Model 3 character decoder")
+    parser.add_argument("--no_freeze_decoder", dest="freeze_decoder", action="store_false", help="Allow co-fine-tuning of Model 3")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--resume", action="store_true", default=False)
     args = parser.parse_args()
@@ -334,11 +339,22 @@ def main():
         model_m3.decoder.load_state_dict(loaded["decoder_state_dict"])
         print(f"  ✅ Inherited Transformer encoder & MoE decoder weights from step {loaded.get('step', 'N/A')}!")
 
-    bce_loss_fn = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([2.5], device=device))
-    trainable_params = [
-        {"params": [p for p in segmenter_m2.parameters() if p.requires_grad], "lr": args.lr_encoder},
-        {"params": [p for p in model_m3.decoder.parameters() if p.requires_grad], "lr": args.lr_decoder},
-    ]
+    if args.freeze_decoder:
+        print("  ❄️ Strictly FREEZING Model 3 (MoE Character Decoder)! Gradients flow exclusively to Model 2.", flush=True)
+        model_m3.decoder.eval()
+        for p in model_m3.decoder.parameters():
+            p.requires_grad = False
+        trainable_params = [
+            {"params": [p for p in segmenter_m2.parameters() if p.requires_grad], "lr": args.lr_encoder},
+        ]
+    else:
+        print("  🔥 Co-fine-tuning Model 3 alongside Model 2.", flush=True)
+        trainable_params = [
+            {"params": [p for p in segmenter_m2.parameters() if p.requires_grad], "lr": args.lr_encoder},
+            {"params": [p for p in model_m3.decoder.parameters() if p.requires_grad], "lr": args.lr_decoder},
+        ]
+
+    bce_loss_fn = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([1.0], device=device))
     optimizer = torch.optim.AdamW(trainable_params, weight_decay=1e-2, betas=(0.9, 0.98))
     scheduler = get_cosine_schedule_with_warmup(optimizer, num_warmup_steps=400, num_training_steps=args.max_steps)
 
@@ -348,7 +364,10 @@ def main():
     train_iter = iter(train_loader)
 
     segmenter_m2.train()
-    model_m3.train()
+    if args.freeze_decoder:
+        model_m3.decoder.eval()
+    else:
+        model_m3.train()
 
     print(f"\n🔥 Commencing Space-Free Continuous Multilingual Training ({args.max_steps} steps)...\n", flush=True)
 
@@ -369,22 +388,34 @@ def main():
 
         h, b_logits = segmenter_m2.forward_continuous(phoneme_ids=cont_ph)
 
-        # 1. Boundary Loss (only over non-pad positions)
+        # 1. Boundary Loss (only over non-pad positions, balanced pos_weight=1.0)
         valid_mask = ~pad_m
         loss_boundary = bce_loss_fn(b_logits[valid_mask], b_targets[valid_mask])
 
-        # 2. Pool Gold Spans into Word Vectors (Teacher-forced word boundaries during training)
+        # 2. Model 2 Word Phoneme Encoding (Producing optimal z_word latents for Model 3)
         B = cont_ph.shape[0]
         max_words = in_bytes.shape[1]
         z_words = torch.zeros(B, max_words, segmenter_m2.d_macro, device=device)
 
+        words_to_encode = []
+        word_coords = []
         for b_idx in range(B):
             spans = spans_batch[b_idx][:max_words]
             for w_idx, (s_idx, e_idx) in enumerate(spans):
                 if e_idx <= cont_ph.shape[1] and e_idx > s_idx:
-                    span_h = h[b_idx, s_idx:e_idx].unsqueeze(0)
-                    pooled = segmenter_m2.pooling(span_h)
-                    z_words[b_idx, w_idx] = segmenter_m2.proj(pooled).squeeze(0)
+                    words_to_encode.append(cont_ph[b_idx, s_idx:e_idx])
+                    word_coords.append((b_idx, w_idx))
+
+        if words_to_encode:
+            max_p = max(len(w) for w in words_to_encode)
+            batch_w = torch.zeros(len(words_to_encode), max_p, dtype=torch.long, device=device)
+            for i, w in enumerate(words_to_encode):
+                batch_w[i, : len(w)] = w
+            
+            # Model 2 Word Encoder Forward (Phonemes -> 512D Word Latents)
+            z_encoded = segmenter_m2(phoneme_ids=batch_w, pad_id=0)  # [N_words, d_macro]
+            for i, (b_idx, w_idx) in enumerate(word_coords):
+                z_words[b_idx, w_idx] = z_encoded[i]
 
         # 3. Model 3 Character Decoder Loss
         out_m3 = model_m3.forward_text(
@@ -394,7 +425,8 @@ def main():
             target_lengths=tgt_lens,
         )
         loss_char = out_m3["loss"]
-        char_acc = out_m3.get("char_accuracy", 0.0)
+        char_acc_t = out_m3.get("char_acc", out_m3.get("char_accuracy", torch.tensor(0.0)))
+        char_acc = char_acc_t.item() if isinstance(char_acc_t, torch.Tensor) else float(char_acc_t)
 
         total_loss = args.boundary_loss_weight * loss_boundary + loss_char
         loss_scaled = total_loss / args.grad_accum
@@ -403,7 +435,8 @@ def main():
 
         if accum_step % args.grad_accum == 0:
             torch.nn.utils.clip_grad_norm_(segmenter_m2.parameters(), 1.0)
-            torch.nn.utils.clip_grad_norm_(model_m3.decoder.parameters(), 1.0)
+            if not args.freeze_decoder:
+                torch.nn.utils.clip_grad_norm_(model_m3.decoder.parameters(), 1.0)
             optimizer.step()
             scheduler.step()
             optimizer.zero_grad()
@@ -413,23 +446,72 @@ def main():
                 with torch.no_grad():
                     pred_b = (torch.sigmoid(b_logits[valid_mask]) > 0.5).float()
                     tgt_b = b_targets[valid_mask]
-                    b_acc = (pred_b == tgt_b).float().mean().item() * 100.0
+                    space_acc = (pred_b == tgt_b).float().mean().item() * 100.0
                     true_pos = ((pred_b == 1.0) & (tgt_b == 1.0)).sum().item()
                     prec = true_pos / max(1.0, (pred_b == 1.0).sum().item()) * 100.0
                     rec = true_pos / max(1.0, (tgt_b == 1.0).sum().item()) * 100.0
-                    f1 = 2 * prec * rec / max(1e-4, prec + rec)
+                    bound_f1 = 2 * prec * rec / max(1e-4, prec + rec)
 
                 print(
                     f"Step {step:5d}/{args.max_steps} | Loss: {total_loss.item():.4f} (Bound: {loss_boundary.item():.4f}, Char: {loss_char.item():.4f}) | "
-                    f"Bound F1: {f1:5.1f}% (P: {prec:4.1f}%, R: {rec:4.1f}%) | CharAcc: {char_acc:5.1f}% | LR: {scheduler.get_last_lr()[0]:.2e}"
+                    f"SpaceAcc: {space_acc:5.1f}% (Rec: {rec:4.1f}%, Prec: {prec:4.1f}%) | Bound F1: {bound_f1:5.1f}% | CharAcc: {char_acc:5.1f}% | LR: {scheduler.get_last_lr()[0]:.2e}"
                 )
+
+            # Visual Sample Inspection
+            if step % args.sample_every == 0 or step == 1:
+                segmenter_m2.eval()
+                with torch.no_grad():
+                    sample_z, sample_spans = segmenter_m2.segment_and_encode_stream(
+                        phoneme_ids=cont_ph[0:1], threshold=0.5
+                    )
+                    if sample_z.shape[1] > 0:
+                        pred_word_tokens = beam_search_character_rollout(
+                            model_m3=model_m3,
+                            z_words=sample_z,
+                            rom_tok=rom_tok,
+                            trie=None,
+                            beam_width=1,
+                            device=device,
+                        )
+                        pred_words = [rom_tok.decode(w) for w in pred_word_tokens]
+                        pred_text = " ".join([w for w in pred_words if w.strip()])
+                    else:
+                        pred_text = ""
+                    gt_text = batch["raw_texts"][0]
+                    lang_code = batch["languages"][0]
+                    flag_map = {"en": "🇬🇧 EN", "fr": "🇫🇷 FR", "es": "🇪🇸 ES", "it": "🇮🇹 IT"}
+                    sample_wer = compute_wer([pred_text], [gt_text]) * 100.0 if pred_text else 100.0
+                    sample_cer = compute_cer([pred_text], [gt_text]) * 100.0 if pred_text else 100.0
+
+                    cur_spans = sample_spans[0]
+                    sliced_strs = [
+                        "".join([ph_tok.id_to_token.get(int(cont_ph[0, idx]), "") for idx in range(s, e)])
+                        for s, e in cur_spans
+                    ]
+                    slices_preview = " ".join([f"/{s}/" for s in sliced_strs[:10]])
+                    if len(sliced_strs) > 10:
+                        slices_preview += f" ... (+{len(sliced_strs) - 10} words)"
+
+                    gt_words_count = len(batch["word_spans"][0])
+                    print("\n" + "═" * 80)
+                    print(
+                        f"🔍 [Step {step:5d} Sample Inspection ({flag_map.get(lang_code, lang_code.upper())})] | "
+                        f"WER: {sample_wer:5.1f}% | CER: {sample_cer:5.1f}% | SpaceAcc: {space_acc:5.1f}%"
+                    )
+                    print(f"   • GT Text      : {gt_text}")
+                    print(f"   • Pred Text    : {pred_text}")
+                    print(f"   • Sliced Words : {slices_preview} (Detected: {len(cur_spans)} words | GT: {gt_words_count} words)")
+                    print("═" * 80 + "\n")
+                segmenter_m2.train()
 
             # Periodic Validation
             if step % args.eval_every == 0:
                 print(f"\n⏳ Running Multilingual Evaluation @ Step {step}...")
                 segmenter_m2.eval()
-                model_m3.eval()
                 val_f1s = []
+                val_space_accs = []
+                val_wers = []
+                val_cers = []
 
                 with torch.no_grad():
                     for v_idx, v_batch in enumerate(val_loader):
@@ -448,21 +530,44 @@ def main():
                         r = tp / max(1.0, (v_tb == 1.0).sum().item())
                         f = (2 * p * r / max(1e-4, p + r)) * 100.0
                         val_f1s.append(f)
+                        val_space_accs.append((v_pred_b == v_tb).float().mean().item() * 100.0)
 
-                        # End-to-end stream decode on sample 0
-                        if v_idx == 0:
+                        # End-to-end stream decode on sample 0 of first 5 batches
+                        if v_idx < 5:
                             sample_z, sample_spans = segmenter_m2.segment_and_encode_stream(
                                 phoneme_ids=v_cont[0:1], threshold=0.5
                             )
-                            dec_out = model_m3.decoder.decode_greedy(sample_z)
-                            pred_tokens = dec_out["pred_byte_tokens"][0]
-                            pred_words = [rom_tok.decode_bytes(w_toks) for w_toks in pred_tokens]
-                            print(f"  🔍 [Stream Decode Sample 0 ({v_batch['languages'][0].upper()})]:")
-                            print(f"     • GT Text  : {v_batch['raw_texts'][0]}")
-                            print(f"     • Seg Words: {' '.join(pred_words)}")
+                            if sample_z.shape[1] > 0:
+                                pred_word_tokens = beam_search_character_rollout(
+                                    model_m3=model_m3,
+                                    z_words=sample_z,
+                                    rom_tok=rom_tok,
+                                    trie=None,
+                                    beam_width=1,
+                                    device=device,
+                                )
+                                pred_words = [rom_tok.decode(w) for w in pred_word_tokens]
+                                pred_text = " ".join([w for w in pred_words if w.strip()])
+                            else:
+                                pred_text = ""
+                            v_gt = v_batch["raw_texts"][0]
+                            val_wers.append(compute_wer([pred_text], [v_gt]) * 100.0)
+                            val_cers.append(compute_cer([pred_text], [v_gt]) * 100.0)
+                            if v_idx == 0:
+                                v_lang = v_batch["languages"][0]
+                                flag_map = {"en": "🇬🇧 EN", "fr": "🇫🇷 FR", "es": "🇪🇸 ES", "it": "🇮🇹 IT"}
+                                print(f"  🔍 [Stream Decode Sample 0 ({flag_map.get(v_lang, v_lang.upper())})]:")
+                                print(f"     • GT Text  : {v_gt}")
+                                print(f"     • Seg Words: {pred_text}")
 
                 avg_f1 = sum(val_f1s) / max(1, len(val_f1s))
-                print(f"  📊 Val Evaluation: Boundary F1: {avg_f1:5.1f}%\n")
+                avg_space_acc = sum(val_space_accs) / max(1, len(val_space_accs))
+                avg_wer = sum(val_wers) / max(1, len(val_wers))
+                avg_cer = sum(val_cers) / max(1, len(val_cers))
+                print(
+                    f"  📊 Val Evaluation: Boundary F1: {avg_f1:5.1f}% | SpaceAcc: {avg_space_acc:5.1f}% | "
+                    f"Stream WER: {avg_wer:5.1f}% | CER: {avg_cer:5.1f}%\n"
+                )
 
                 # Save Checkpoints
                 save_data = {
@@ -480,7 +585,10 @@ def main():
                     print(f"  💾 Saved New Best Continuous P2G -> {best_pt}\n")
 
                 segmenter_m2.train()
-                model_m3.train()
+                if args.freeze_decoder:
+                    model_m3.decoder.eval()
+                else:
+                    model_m3.train()
 
     print(f"\n🎉 Space-Free Continuous Multilingual Training Completed across {args.max_steps} steps!")
 

@@ -44,6 +44,57 @@ from src.models.phono_v8_acoustic import (
     warm_start_phono_v8_from_v75,
 )
 from src.models.phono_v7_3_speech_model import decode_calibrated_phonemes
+from src.models.text_phoneme_encoder import FastTextPhonemeWordEncoder
+from src.models.phono_v7_5_speech_model import PhonoV75SpeechConfig, OverlappingLengthMoEDecoder
+from src.inference.character_beam_search import beam_search_character_rollout
+
+
+class M3DecoderWrapper:
+    def __init__(self, decoder):
+        self.decoder = decoder
+
+
+@torch.no_grad()
+def decode_e2e_text(
+    p_toks: List[int],
+    encoder_m2: FastTextPhonemeWordEncoder,
+    decoder_m3_wrapper: Any,
+    rom_tokenizer: RomanCharTokenizer,
+    device: torch.device,
+    space_token: int = 8,
+) -> str:
+    """Decodes discrete phoneme token IDs with space tokens into orthographic text using Models 2 & 3."""
+    words_ph_ids: List[List[int]] = []
+    curr_w: List[int] = []
+    for tid in p_toks:
+        if tid == space_token:
+            if curr_w:
+                words_ph_ids.append(curr_w)
+                curr_w = []
+        else:
+            curr_w.append(tid)
+    if curr_w:
+        words_ph_ids.append(curr_w)
+
+    if not words_ph_ids:
+        return ""
+
+    L = len(words_ph_ids)
+    max_k = min(24, max(1, max(len(w) for w in words_ph_ids)))
+    input_ph = torch.zeros(1, L, max_k, dtype=torch.long, device=device)
+    for w_i, ids in enumerate(words_ph_ids):
+        w_len = min(len(ids), max_k)
+        input_ph[0, w_i, :w_len] = torch.tensor(ids[:w_len], dtype=torch.long, device=device)
+    flat_ph = input_ph.reshape(L, max_k)
+    z_words = encoder_m2(phoneme_ids=flat_ph).view(1, L, -1)
+    pred_words = beam_search_character_rollout(
+        model_m3=decoder_m3_wrapper,
+        z_words=z_words,
+        rom_tok=rom_tokenizer,
+        beam_width=1,
+        device=device,
+    )
+    return rom_tokenizer.decode_words(pred_words)
 
 
 def decode_ctc_phoneme_ids(logits: torch.Tensor, blank_id: int = 1, pad_id: int = 0) -> List[int]:
@@ -146,6 +197,10 @@ def evaluate_acoustic(
     token_to_macro: torch.Tensor,
     max_eval_batches: int = 30,
     chunk_eval: bool = False,
+    encoder_m2: Optional[FastTextPhonemeWordEncoder] = None,
+    decoder_m3: Optional[Any] = None,
+    rom_tokenizer: Optional[RomanCharTokenizer] = None,
+    e2e_device: Optional[torch.device] = None,
 ) -> Dict[str, Any]:
     model.eval()
     total_ed = 0
@@ -165,7 +220,19 @@ def evaluate_acoustic(
     per_lang_ac_len: Dict[str, int] = {}
     per_lang_wer_ed: Dict[str, int] = {}
     per_lang_wer_len: Dict[str, int] = {}
+
+    total_e2e_wer_ed = 0
+    total_e2e_wer_ref_len = 0
+    total_e2e_cer_ed = 0
+    total_e2e_cer_ref_len = 0
+    per_lang_e2e_wer_ed: Dict[str, int] = {}
+    per_lang_e2e_wer_ref_len: Dict[str, int] = {}
+    per_lang_e2e_cer_ed: Dict[str, int] = {}
+    per_lang_e2e_cer_ref_len: Dict[str, int] = {}
+
     val_sample_records: Dict[str, Dict[str, Any]] = {}
+    has_e2e = (encoder_m2 is not None and decoder_m3 is not None and rom_tokenizer is not None)
+    eval_m2_m3_dev = e2e_device if e2e_device is not None else torch.device("cpu")
 
     for b_idx, batch in enumerate(val_loader):
         if b_idx >= max_eval_batches:
@@ -226,11 +293,51 @@ def evaluate_acoustic(
             per_lang_wer_ed[l_i] = per_lang_wer_ed.get(l_i, 0) + wer_ed_i
             per_lang_wer_len[l_i] = per_lang_wer_len.get(l_i, 0) + wer_ref_i
 
+            # Full End-to-End Decoding (Model 1 -> Model 2 -> Model 3)
+            pred_text = ""
+            e2e_wer_val = 0.0
+            e2e_cer_val = 0.0
+            if has_e2e:
+                pred_text = decode_e2e_text(
+                    p_toks=p_toks,
+                    encoder_m2=encoder_m2,
+                    decoder_m3_wrapper=decoder_m3,
+                    rom_tokenizer=rom_tokenizer,
+                    device=eval_m2_m3_dev,
+                    space_token=8,
+                )
+                ref_text = batch["transcripts"][i]
+                pw = [w for w in pred_text.strip().split() if w]
+                rw = [w for w in ref_text.strip().split() if w]
+                d_w = editdistance.eval(pw, rw)
+                n_w = max(1, len(rw))
+
+                pc = list(pred_text.strip())
+                rc = list(ref_text.strip())
+                d_c = editdistance.eval(pc, rc)
+                n_c = max(1, len(rc))
+
+                total_e2e_wer_ed += d_w
+                total_e2e_wer_ref_len += n_w
+                total_e2e_cer_ed += d_c
+                total_e2e_cer_ref_len += n_c
+
+                per_lang_e2e_wer_ed[l_i] = per_lang_e2e_wer_ed.get(l_i, 0) + d_w
+                per_lang_e2e_wer_ref_len[l_i] = per_lang_e2e_wer_ref_len.get(l_i, 0) + n_w
+                per_lang_e2e_cer_ed[l_i] = per_lang_e2e_cer_ed.get(l_i, 0) + d_c
+                per_lang_e2e_cer_ref_len[l_i] = per_lang_e2e_cer_ref_len.get(l_i, 0) + n_c
+
+                e2e_wer_val = (d_w / n_w) * 100.0
+                e2e_cer_val = (d_c / n_c) * 100.0
+
             if l_i not in val_sample_records:
                 top3_info = model.decode_topk_phonemes(logits[i], k=3, tokenizer=ph_tokenizer)[0]
                 val_sample_records[l_i] = {
                     "lang": l_i,
                     "text": batch["transcripts"][i],
+                    "pred_text": pred_text,
+                    "e2e_wer": e2e_wer_val,
+                    "e2e_cer": e2e_cer_val,
                     "gt": gt_ph,
                     "pred_greedy": pred_ph,
                     "per_greedy": (ed_i / ref_i) * 100.0,
@@ -249,6 +356,11 @@ def evaluate_acoustic(
     val_ac_per_by_lang = {l: (per_lang_ac_ed[l] / max(1, per_lang_ac_len[l])) * 100.0 for l in per_lang_ac_ed}
     val_wer_by_lang = {l: (per_lang_wer_ed[l] / max(1, per_lang_wer_len[l])) * 100.0 for l in per_lang_wer_ed}
 
+    e2e_wer_total = (total_e2e_wer_ed / max(1, total_e2e_wer_ref_len)) * 100.0 if total_e2e_wer_ref_len > 0 else 0.0
+    e2e_cer_total = (total_e2e_cer_ed / max(1, total_e2e_cer_ref_len)) * 100.0 if total_e2e_cer_ref_len > 0 else 0.0
+    e2e_wer_by_lang = {l: (per_lang_e2e_wer_ed[l] / max(1, per_lang_e2e_wer_ref_len[l])) * 100.0 for l in per_lang_e2e_wer_ed}
+    e2e_cer_by_lang = {l: (per_lang_e2e_cer_ed[l] / max(1, per_lang_e2e_cer_ref_len[l])) * 100.0 for l in per_lang_e2e_cer_ed}
+
     return {
         "val_per": val_per,
         "val_acoustic_per": val_acoustic_per,
@@ -258,6 +370,11 @@ def evaluate_acoustic(
         "val_per_by_lang": val_per_by_lang,
         "val_ac_per_by_lang": val_ac_per_by_lang,
         "val_wer_by_lang": val_wer_by_lang,
+        "has_e2e": has_e2e,
+        "e2e_wer": e2e_wer_total,
+        "e2e_cer": e2e_cer_total,
+        "e2e_wer_by_lang": e2e_wer_by_lang,
+        "e2e_cer_by_lang": e2e_cer_by_lang,
         "samples": val_sample_records,
     }
 
@@ -295,6 +412,11 @@ def main():
     parser.add_argument("--resume", action="store_true", default=True)
     parser.add_argument("--space_free", dest="space_free", action="store_true", default=True, help="Extract space-free phonetic CTC sequence targets (pure acoustic sound stream)")
     parser.add_argument("--no_space_free", dest="space_free", action="store_false", help="Include spaces in phonetic CTC targets")
+    parser.add_argument("--eval_full_pipeline", action="store_true", default=True, help="Evaluate full tripartite pipeline (Model 1 + Model 2 + Model 3) during validation")
+    parser.add_argument("--no_eval_full_pipeline", dest="eval_full_pipeline", action="store_false", help="Disable full tripartite pipeline evaluation")
+    parser.add_argument("--p2g_ckpt", type=str, default="checkpoints/phono_v8_robust_p2g/best_robust_p2g.pt", help="Path to pretrained Models 2 & 3 weights")
+    parser.add_argument("--e2e_eval_device", type=str, default="cpu", help="Device for Models 2 & 3 evaluation (default: cpu)")
+    parser.add_argument("--max_e2e_batches", type=int, default=30, help="Max validation batches evaluated end-to-end")
     args = parser.parse_args()
 
     torch.manual_seed(args.seed)
@@ -312,6 +434,7 @@ def main():
     print(f"🌌 Continuous Space-Free : {'ENABLED (100% sound-only phoneme stream)' if args.space_free else 'DISABLED (with space token 8)'}")
     print(f"🔥 Micro-Batch / Accum   : {args.batch_size} / {args.grad_accum} (Effective BS = {args.batch_size * args.grad_accum})")
     print(f"📈 Learning Rate         : {args.lr} -> {args.min_lr}")
+    print(f"🌟 Full Tripartite E2E   : {'ENABLED on ' + args.e2e_eval_device.upper() + ' (M1 + M2 + M3)' if args.eval_full_pipeline else 'DISABLED'}")
     print(f"📝 Logging Mode          : Live step log every {args.log_every} st | Rich Top-3 inspection every {args.sample_every} st")
 
     print("\n📚 Loading Gold-Standard Verbatim Datasets...", flush=True)
@@ -470,9 +593,48 @@ def main():
     latest_train_samples: Dict[str, Dict[str, Any]] = {}
     log_cycle_idx = 0
 
+    encoder_m2 = None
+    decoder_m3_wrapper = None
+    e2e_dev = torch.device(args.e2e_eval_device)
+    if args.eval_full_pipeline:
+        if os.path.isfile(args.p2g_ckpt):
+            print(f"🔄 Initializing Models 2 & 3 for E2E Validation from {args.p2g_ckpt} on {args.e2e_eval_device}...", flush=True)
+            p2g_cfg = PhonoV75SpeechConfig.medium()
+            encoder_m2 = FastTextPhonemeWordEncoder(
+                d_macro=p2g_cfg.decoder_config.macro_dim,
+                d_model=256,
+                nhead=4,
+                num_layers=2,
+                phoneme_vocab_size=128,
+            ).to(e2e_dev)
+            decoder_m3 = OverlappingLengthMoEDecoder(
+                config=p2g_cfg.decoder_config,
+                num_experts=p2g_cfg.num_overlapping_experts,
+            ).to(e2e_dev)
+
+            p2g_ckpt = torch.load(args.p2g_ckpt, map_location=e2e_dev, weights_only=False)
+            encoder_m2.load_state_dict(p2g_ckpt["phoneme_encoder_state_dict"])
+            decoder_m3.load_state_dict(p2g_ckpt["decoder_state_dict"])
+            encoder_m2.eval()
+            decoder_m3.eval()
+            decoder_m3_wrapper = M3DecoderWrapper(decoder_m3)
+            print(f"  • Models 2 & 3 loaded successfully on {args.e2e_eval_device} (CharAcc: {p2g_ckpt.get('val_char_acc', 0.0):.1f}%)\n", flush=True)
+        else:
+            print(f"⚠️ Warning: P2G checkpoint not found at {args.p2g_ckpt}. E2E decoding will be skipped.\n", flush=True)
+
     print(f"🔬 Running clean validation baseline audit before training (resuming at step {start_step})...")
     init_val = evaluate_acoustic(
-        acoustic_model, val_loader, ph_tokenizer, device, token_to_macro, max_eval_batches=25, chunk_eval=args.chunk_eval
+        acoustic_model,
+        val_loader,
+        ph_tokenizer,
+        device,
+        token_to_macro,
+        max_eval_batches=args.max_e2e_batches if args.eval_full_pipeline else 25,
+        chunk_eval=args.chunk_eval,
+        encoder_m2=encoder_m2,
+        decoder_m3=decoder_m3_wrapper,
+        rom_tokenizer=roman_tok,
+        e2e_device=e2e_dev,
     )
     best_val_per = min(init_val["val_per"], saved_val_per) if saved_val_per is not None else init_val["val_per"]
     if args.space_free:
@@ -486,13 +648,22 @@ def main():
         )
     else:
         init_bd = " | ".join([
-            f"{flag_map.get(l, l.upper())}: PER {p:4.1f}% (Ac: {init_val.get('val_ac_per_by_lang', {}).get(l, p):4.1f}%, WER: {init_val.get('val_wer_by_lang', {}).get(l, 0.0):4.1f}%)"
+            f"{flag_map.get(l, l.upper())}: PER {p:4.1f}% (Ac: {init_val.get('val_ac_per_by_lang', {}).get(l, p):4.1f}%, P-WER: {init_val.get('val_wer_by_lang', {}).get(l, 0.0):4.1f}%)"
             for l, p in init_val.get("val_per_by_lang", {}).items()
         ])
         print(
             f"  📊 Step {start_step} Baseline | Val PER: \033[1;31m{init_val['val_per']:5.2f}%\033[0m (Acoustic PER: \033[1;32m{init_val['val_acoustic_per']:5.2f}%\033[0m) | "
-            f"P-WER: {init_val['val_wer']:5.2f}% | Space Acc: {init_val['val_spc_acc']:5.2f}% | Val Loss: {init_val['val_loss']:.4f} | Best Record: {best_val_per:.2f}%"
+            f"P-WER (Est): {init_val['val_wer']:5.2f}% | Space Acc: {init_val['val_spc_acc']:5.2f}% | Val Loss: {init_val['val_loss']:.4f} | Best Record: {best_val_per:.2f}%"
         )
+        if init_val.get("has_e2e"):
+            e2e_init_bd = " | ".join([
+                f"{flag_map.get(l, l.upper())}: Text WER {init_val.get('e2e_wer_by_lang', {}).get(l, 0.0):4.1f}% (CER: {init_val.get('e2e_cer_by_lang', {}).get(l, 0.0):4.1f}%)"
+                for l in init_val.get("val_per_by_lang", {}).keys()
+            ])
+            print(
+                f"  🌟 \033[1;36mFULL PIPELINE E2E: Text WER: {init_val['e2e_wer']:5.2f}% | Text CER: {init_val['e2e_cer']:5.2f}%\033[0m\n"
+                f"     🌍 E2E Text Breakdown: {e2e_init_bd}"
+            )
     if init_bd:
         print(f"     🌍 Multilingual Baseline: {init_bd}\n", flush=True)
 
@@ -704,8 +875,12 @@ def main():
                 ph_tokenizer,
                 device,
                 token_to_macro,
-                max_eval_batches=30,
+                max_eval_batches=args.max_e2e_batches if args.eval_full_pipeline else 30,
                 chunk_eval=args.chunk_eval,
+                encoder_m2=encoder_m2,
+                decoder_m3=decoder_m3_wrapper,
+                rom_tokenizer=roman_tok,
+                e2e_device=e2e_dev,
             )
 
             is_best = val_res["val_per"] < best_val_per
@@ -743,14 +918,23 @@ def main():
                 print("─" * 80 + "\n")
             else:
                 bd_str = " | ".join([
-                    f"{flag_map.get(l, l.upper())}: PER {p:4.1f}% (Ac: {val_res.get('val_ac_per_by_lang', {}).get(l, p):4.1f}%, WER: {val_res.get('val_wer_by_lang', {}).get(l, 0.0):4.1f}%)"
+                    f"{flag_map.get(l, l.upper())}: PER {p:4.1f}% (Ac: {val_res.get('val_ac_per_by_lang', {}).get(l, p):4.1f}%, P-WER: {val_res.get('val_wer_by_lang', {}).get(l, 0.0):4.1f}%)"
                     for l, p in val_res.get("val_per_by_lang", {}).items()
                 ])
                 print(
                     f"  📊 Val Results: PER: \033[1;31m{val_res['val_per']:5.2f}%\033[0m (Acoustic PER: \033[1;32m{val_res['val_acoustic_per']:5.2f}%\033[0m) | "
-                    f"P-WER: {val_res['val_wer']:5.2f}% | Space Acc: {val_res['val_spc_acc']:5.2f}% | Loss: {val_res['val_loss']:.4f}{record_str}\n"
-                    f"     🌍 Multilingual Metrics: {bd_str}"
+                    f"P-WER (Est): {val_res['val_wer']:5.2f}% | Space Acc: {val_res['val_spc_acc']:5.2f}% | Loss: {val_res['val_loss']:.4f}{record_str}\n"
+                    f"     🌍 Acoustic Breakdown: {bd_str}"
                 )
+                if val_res.get("has_e2e"):
+                    e2e_bd_str = " | ".join([
+                        f"{flag_map.get(l, l.upper())}: Text WER {val_res.get('e2e_wer_by_lang', {}).get(l, 0.0):4.1f}% (CER: {val_res.get('e2e_cer_by_lang', {}).get(l, 0.0):4.1f}%)"
+                        for l in val_res.get("val_per_by_lang", {}).keys()
+                    ])
+                    print(
+                        f"  🌟 \033[1;36mFULL PIPELINE E2E: Text WER: {val_res['e2e_wer']:5.2f}% | Text CER: {val_res['e2e_cer']:5.2f}%\033[0m\n"
+                        f"     🌍 E2E Text Breakdown: {e2e_bd_str}"
+                    )
                 print("─" * 80)
 
                 for l_k, s_v in val_res["samples"].items():
@@ -760,11 +944,17 @@ def main():
                         cand_strs = " | ".join([f"{cand}: {prob:.2f}" for cand, prob in e["topk"]])
                         top3_lines.append(f"        {e['phoneme']:<4} -> [{cand_strs}]")
                     top3_str = "\n".join(top3_lines) if top3_lines else "        (none)"
+                    e2e_str = ""
+                    if s_v.get("pred_text"):
+                        e2e_str = (
+                            f"    • GT Text (Target)   : {s_v['text'][:140]}\n"
+                            f"    • E2E Predicted Text : \033[1;33m{s_v['pred_text'][:140]}\033[0m [WER: {s_v.get('e2e_wer', 0.0):.1f}% | CER: {s_v.get('e2e_cer', 0.0):.1f}%]\n"
+                        )
                     print(
                         f"  🔍 [Val {s_flag}] | PER: {s_v['per_greedy']:4.1f}% | Acoustic PER: {s_v['acoustic_per']:4.1f}% | P-WER: {s_v['pwer']:4.1f}% | Spc Acc: {s_v['spc_acc']:4.1f}%\n"
-                        f"    • GT Text      : {s_v['text'][:140]}\n"
-                        f"    • GT Phonemes  : {s_v['gt'][:140]}\n"
-                        f"    • Pred Phonemes: {s_v['pred_greedy'][:140]}\n"
+                        f"{e2e_str}"
+                        f"    • GT Phonemes        : {s_v['gt'][:140]}\n"
+                        f"    • Pred Phonemes (M1) : {s_v['pred_greedy'][:140]}\n"
                         f"    • Top-3 Candidates Snippet:\n"
                         f"{top3_str}"
                     )
@@ -778,6 +968,8 @@ def main():
                 "val_acoustic_per": val_res["val_acoustic_per"],
                 "val_wer": val_res["val_wer"],
                 "best_val_per": best_val_per,
+                "e2e_wer": val_res.get("e2e_wer", None),
+                "e2e_cer": val_res.get("e2e_cer", None),
                 "args": vars(args),
             }
             torch.save(save_payload, latest_v8_path)

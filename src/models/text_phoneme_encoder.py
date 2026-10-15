@@ -321,14 +321,37 @@ class ContinuousPhonemeWordSegmenter(FastTextPhonemeWordEncoder):
             z_words = torch.zeros((1, 0, self.d_macro), device=h.device)
             return z_words, [spans]
 
-        # Pool each word span into z_word [L, d_macro]
-        word_latents = []
-        for s_idx, e_idx in spans:
-            span_h = h[0, s_idx:e_idx].unsqueeze(0)  # [1, span_len, d_model]
-            pooled_w = self.pooling(span_h)           # [1, d_model]
-            z_w = self.proj(pooled_w)                 # [1, d_macro]
-            word_latents.append(z_w)
+        # Robust Intra-Word Phoneme Encoding into canonical z_word [1, L, d_macro]
+        max_span = max(e - s for s, e in spans)
+        device = h.device
 
-        z_words = torch.cat(word_latents, dim=0).unsqueeze(0)  # [1, L, d_macro]
+        if top_k_ids is not None:
+            K_cand = top_k_ids.shape[-1]
+            batch_top_ids = torch.full((len(spans), max_span, K_cand), pad_id, dtype=torch.long, device=device)
+            batch_top_probs = (
+                torch.zeros((len(spans), max_span, K_cand), dtype=torch.float32, device=device)
+                if top_k_probs is not None
+                else None
+            )
+            for i, (s, e) in enumerate(spans):
+                span_len = e - s
+                batch_top_ids[i, :span_len] = top_k_ids[0, s:e]
+                if top_k_probs is not None:
+                    batch_top_probs[i, :span_len] = top_k_probs[0, s:e]
+            z_words = self.forward(
+                top_k_ids=batch_top_ids,
+                top_k_probs=batch_top_probs,
+                pad_id=pad_id,
+            ).unsqueeze(0)  # [1, L, d_macro]
+        else:
+            batch_ph = torch.full((len(spans), max_span), pad_id, dtype=torch.long, device=device)
+            for i, (s, e) in enumerate(spans):
+                span_len = e - s
+                batch_ph[i, :span_len] = toks[s:e]
+            z_words = self.forward(
+                phoneme_ids=batch_ph,
+                pad_id=pad_id,
+            ).unsqueeze(0)  # [1, L, d_macro]
+
         return z_words, [spans]
 
