@@ -22,12 +22,12 @@ from transformers import get_cosine_schedule_with_warmup
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, ROOT_DIR)
 
-from clean_model_src.model_config import ModelConfig, ModelA2PConfig
-from clean_model_src.model1_a2p import Model_A2P
-from clean_model_src.weights_manager import WeightsManager
-from clean_model_src.training.train_logger import TrainLogger
-from clean_model_src.training.dataset import NaVoxAudioDataset, NaVoxCollator
-from clean_model_src.tokenizers import PhonemeTokenizer, RomanCharTokenizer
+from src.model_config import ModelConfig, ModelA2PConfig
+from src.model1_a2p import Model_A2P
+from src.weights_manager import WeightsManager
+from src.training.train_logger import TrainLogger
+from src.training.dataset import NaVoxAudioDataset, NaVoxCollator
+from src.tokenizers import PhonemeTokenizer, RomanCharTokenizer
 
 
 class NaVoxAcousticTrainer:

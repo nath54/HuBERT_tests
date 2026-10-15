@@ -18,13 +18,13 @@ import torch
 from torch import Tensor
 import numpy as np
 
-# Ensure clean_model_src is in path
+# Ensure src is in path
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, ".."))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from clean_model_src import (
+from src import (
     ModelConfig,
     Model_A2P,
     Model_PE,

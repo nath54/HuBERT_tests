@@ -91,8 +91,20 @@ class NaVoxAudioDataset(Dataset):
             resampler = torchaudio.transforms.Resample(sr, self.sample_rate)
             waveform = resampler(waveform)
 
+        wav = waveform.squeeze(0)
+
+        # Ambient Noise & Silence Augmentation for Live Mic Robustness:
+        # Prepend 0.1s to 0.4s of low-level ambient noise/silence to teach the model not to hallucinate on pauses
+        if random.random() < 0.4:
+            lead_silence_len = int(self.sample_rate * random.uniform(0.1, 0.4))
+            trail_silence_len = int(self.sample_rate * random.uniform(0.1, 0.3))
+            noise_scale = random.uniform(1e-5, 3e-3)
+            lead_noise = torch.randn(lead_silence_len) * noise_scale
+            trail_noise = torch.randn(trail_silence_len) * noise_scale
+            wav = torch.cat([lead_noise, wav, trail_noise], dim=0)
+
         return {
-            "waveform": waveform.squeeze(0),  # [T_samples]
+            "waveform": wav,  # [T_samples]
             "text": utt.text,
             "phonemes": utt.phonemes,
             "language": utt.language,

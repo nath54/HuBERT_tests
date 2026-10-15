@@ -17,7 +17,7 @@ def get_class(path: str) -> Type[T]:
     Get a class from a module path.
 
     Args:
-        path (str): Module path and class name, separated by dots (e.g. 'clean_model_src.model1_a2p.Model_A2P').
+        path (str): Module path and class name, separated by dots (e.g. 'src.model1_a2p.Model_A2P').
 
     Returns:
         Type[T]: The resolved class object.
@@ -26,7 +26,7 @@ def get_class(path: str) -> Type[T]:
     parts: List[str] = path.split(".")
     if len(parts) == 1:
         # Local module within package
-        module_path: str = f"clean_model_src.{parts[0]}"
+        module_path: str = f"src.{parts[0]}"
         class_name: str = parts[0]
     else:
         module_path = ".".join(parts[:-1])
@@ -37,7 +37,7 @@ def get_class(path: str) -> Type[T]:
         mod = importlib.import_module(module_path)
     except ModuleNotFoundError:
         # Fallback to local import if called from within package
-        mod = importlib.import_module(f".{module_path.split('.')[-1]}", package="clean_model_src")
+        mod = importlib.import_module(f".{module_path.split('.')[-1]}", package="src")
 
     cls: Type[T] = getattr(mod, class_name)
     return cls
@@ -138,9 +138,9 @@ class ModelConfig:
     """
 
     # --- Dynamic Class Loading Paths ---
-    class_model_a2p: str = "clean_model_src.model1_a2p.Model_A2P"
-    class_model_pe: str = "clean_model_src.model2_pe.Model_PE"
-    class_model_wd: str = "clean_model_src.model3_wd.Model_WD"
+    class_model_a2p: str = "src.model1_a2p.Model_A2P"
+    class_model_pe: str = "src.model2_pe.Model_PE"
+    class_model_wd: str = "src.model3_wd.Model_WD"
 
     # Aliases for flexible access
     @property

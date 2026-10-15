@@ -225,6 +225,17 @@ class DualThreadStreamingASR:
             if audio_raw.shape[0] < 400:
                 continue
 
+            # --- Energy-Based Voice Activity Detection (VAD) / Silence Gate ---
+            # Suppresses false phoneme hallucinations during microphone silence/pauses
+            rms_energy: float = float(torch.sqrt(torch.mean(audio_raw ** 2)).item())
+            if rms_energy < 0.003:  # Silence noise threshold
+                # If we were tracking a word and silence occurs, finalize that word
+                if len(current_word_phonemes) >= self.min_phonemes_per_word:
+                    clipped: List[int] = current_word_phonemes[: self.max_phonemes_per_word]
+                    self.word_queue.push_word(list(clipped))
+                current_word_phonemes.clear()
+                continue
+
             # Audio tensor: Tensor [1, T_samples], Role: batched audio for Model 1, Rationale: batch dimension
             audio_tensor: Tensor = audio_raw.unsqueeze(0).to(dev_a2p)
 

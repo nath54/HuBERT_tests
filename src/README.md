@@ -1,4 +1,4 @@
-# Tripartite End-to-End Speech Recognition Architecture (`clean_model_src`)
+# Tripartite End-to-End Speech Recognition Architecture (`src`)
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![PyTorch 2.5+](https://img.shields.io/badge/pytorch-2.5+-ee4c2c.svg)](https://pytorch.org/)
@@ -53,7 +53,7 @@ Final Orthographic Text ("hello world ...")
 ## 2. Directory Structure
 
 ```
-clean_model_src/
+src/
 ├── __init__.py                  # Public exports (Model, ModelConfig, Quantizer, Streamer, Exporter)
 ├── model_config.py              # Modular dataclasses and per-part device routing (CUDA/CPU)
 ├── model_part.py                # Abstract Base Class Model_Part(nn.Module, ABC)
@@ -111,10 +111,10 @@ The model relies on three modular checkpoint assets that can be uploaded to a Gi
 - **`large`**: 24-layer Conformer MoE (~600M params) for cloud cluster inference.
 
 ### Automatic Checkpoint Downloading
-The [`clean_model_src/weights_manager.py`](file:///home/nathan/github/audiolearn/clean_model_src/weights_manager.py) engine automatically discovers local files or downloads missing weights directly from GitHub Release URLs:
+The [`src/weights_manager.py`](file:///home/nathan/github/audiolearn/src/weights_manager.py) engine automatically discovers local files or downloads missing weights directly from GitHub Release URLs:
 
 ```python
-from clean_model_src import WeightsManager
+from src import WeightsManager
 
 wm = WeightsManager()
 # Check local status or download from registered URL:
@@ -133,15 +133,15 @@ export PHONO_URL_P2G_BASE="https://github.com/USER/REPO/releases/download/v8.0/p
 
 ## 4. CLI Application Usage
 
-The command-line streaming app [`clean_model_src/scripts/run_streaming_cli.py`](file:///home/nathan/github/audiolearn/clean_model_src/scripts/run_streaming_cli.py) provides live microphone streaming, audio file streaming simulation, and offline deep diagnostic profiling.
+The command-line streaming app [`src/scripts/run_streaming_cli.py`](file:///home/nathan/github/audiolearn/src/scripts/run_streaming_cli.py) provides live microphone streaming, audio file streaming simulation, and offline deep diagnostic profiling.
 
 ### 4.1. Fast Offline Audio File Transcription
 ```bash
 # Basic transcription
-python clean_model_src/scripts/run_streaming_cli.py path/to/audio.flac
+python src/scripts/run_streaming_cli.py path/to/audio.flac
 
 # Offline transcription with deep diagnostic Markdown report
-python clean_model_src/scripts/run_streaming_cli.py path/to/audio.flac \
+python src/scripts/run_streaming_cli.py path/to/audio.flac \
   --verbose \
   --verbose_log diagnostic_report.md \
   --output_file transcript.txt
@@ -150,7 +150,7 @@ python clean_model_src/scripts/run_streaming_cli.py path/to/audio.flac \
 ### 4.2. Dual-Threaded Streaming Simulation
 Simulates real-time chunk-by-chunk streaming over pre-recorded files:
 ```bash
-python clean_model_src/scripts/run_streaming_cli.py \
+python src/scripts/run_streaming_cli.py \
   --mode streaming \
   --input_audio path/to/audio.wav \
   --chunk_duration_sec 0.25 \
@@ -162,10 +162,10 @@ python clean_model_src/scripts/run_streaming_cli.py \
 ### 4.3. Live Microphone Streaming
 ```bash
 # 1. List detected hardware audio devices
-python clean_model_src/scripts/run_streaming_cli.py --list_devices
+python src/scripts/run_streaming_cli.py --list_devices
 
 # 2. Stream live from selected microphone
-python clean_model_src/scripts/run_streaming_cli.py \
+python src/scripts/run_streaming_cli.py \
   --mode mic \
   --device_name pulse \
   --chunk_duration_sec 0.3
@@ -198,10 +198,10 @@ When invoked with `--verbose` or `--verbose_log <report.md>`, the system logs de
 
 ## 6. Granular Quantization
 
-The [`ModelPartQuantizer`](file:///home/nathan/github/audiolearn/clean_model_src/quantization/quantizer.py) enables precision reduction per model part or per layer type:
+The [`ModelPartQuantizer`](file:///home/nathan/github/audiolearn/src/quantization/quantizer.py) enables precision reduction per model part or per layer type:
 
 ```python
-from clean_model_src import Model, ModelPartQuantizer, QuantizationConfig
+from src import Model, ModelPartQuantizer, QuantizationConfig
 
 model = Model()
 quantizer = ModelPartQuantizer()
@@ -229,7 +229,7 @@ For on-device deployment on the Google Pixel 10 smartphone:
 - Generates automated TFLite conversion scripts with INT8 Post-Training Quantization (PTQ) flags.
 
 ```python
-from clean_model_src import Model, TFLiteExporter, Pixel10MobileRunner
+from src import Model, TFLiteExporter, Pixel10MobileRunner
 
 model = Model()
 exporter = TFLiteExporter(output_dir="exported_pixel10")
@@ -254,7 +254,7 @@ print(f"Latency: {res['latency_ms']['total_ms']} ms | RTF: {res['rtf']}")
 
 Run the comprehensive 8-stage verification test suite:
 ```bash
-python clean_model_src/test_clean_model.py
+python src/test_clean_model.py
 ```
 Validates:
 - [x] **TEST 1**: Configuration dataclasses & dynamic device routing

@@ -377,7 +377,7 @@ class Model_WD(Model_Part):
                 break
 
         # 4. Decode orthographic character strings via RomanCharTokenizer vocabulary
-        from clean_model_src.tokenizers.roman_tokenizer import RomanCharTokenizer
+        from src.tokenizers.roman_tokenizer import RomanCharTokenizer
         _tokenizer = RomanCharTokenizer()
 
         decoded_words: List[str] = []

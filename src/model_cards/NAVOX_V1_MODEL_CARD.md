@@ -55,10 +55,10 @@ By decoupling the pipeline into **Acoustic Phonemes** (Model 1), **Continuous Wo
 
 ## 3. Dynamic Model Architecture & Loading
 
-Every sub-model inherits from `Model_Part(nn.Module, ABC)` and can be dynamically instantiated via classpaths in [`clean_model_src/model_config.py`](file:///home/nathan/github/audiolearn/clean_model_src/model_config.py):
+Every sub-model inherits from `Model_Part(nn.Module, ABC)` and can be dynamically instantiated via classpaths in [`src/model_config.py`](file:///home/nathan/github/audiolearn/src/model_config.py):
 
 ```python
-from clean_model_src import Model, ModelConfig
+from src import Model, ModelConfig
 
 # 1. Load an official tier
 config = ModelConfig.ultra()
@@ -66,9 +66,9 @@ config = ModelConfig.ultra()
 # 2. Or create a custom asymmetric composition:
 #    (Small Model 1 on Mobile GPU + Large Model 2 on CPU)
 config = ModelConfig(
-    class_model_a2p="clean_model_src.model1_a2p.Model_A2P",
-    class_model_pe="clean_model_src.model2_pe.Model_PE",
-    class_model_wd="clean_model_src.model3_wd.Model_WD",
+    class_model_a2p="src.model1_a2p.Model_A2P",
+    class_model_pe="src.model2_pe.Model_PE",
+    class_model_wd="src.model3_wd.Model_WD",
     device_model_a2p="CUDA",
     device_model_pe="CPU",
     device_model_wd="CPU",
@@ -84,7 +84,7 @@ model = Model(config)
 The acoustic encoder (Model 1) and word decoder (Model 3) can be converted directly to INT8 quantized TFLite models:
 
 ```bash
-python -m clean_model_src.export.tflite_exporter \
+python -m src.export.tflite_exporter \
     --tier small \
     --quantize int8 \
     --output_dir export/pixel10_models

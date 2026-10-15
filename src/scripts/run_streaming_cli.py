@@ -35,14 +35,14 @@ PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, "..", ".."))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from clean_model_src import (
+from src import (
     ModelConfig,
     Model,
     ModelPartQuantizer,
     QuantizationConfig,
     DualThreadStreamingASR,
 )
-from clean_model_src.layers.heads import LENGTH_INTERVALS
+from src.layers.heads import LENGTH_INTERVALS
 
 # Phoneme Vocabulary Inventory (112 tokens matching Phono-V8 vocabulary)
 PHONEME_VOCAB: List[str] = [
@@ -608,6 +608,15 @@ class StreamingCLIApp:
                 samples_16k = resampler(samples_t.unsqueeze(0)).squeeze(0)
             else:
                 samples_16k = samples_t
+
+            # Dynamic Microphone Auto-Gain:
+            # USB headsets often record at peak amplitude ~0.01 (-40 dB).
+            # Scales speech frames into nominal acoustic range without blowing out noise.
+            peak_val = float(torch.max(torch.abs(samples_16k)).item())
+            if peak_val > 0.003:  # Only boost if active signal above noise floor
+                scale = min(15.0, 0.45 / peak_val)
+                samples_16k = samples_16k * scale
+
             streamer.push_audio(samples_16k)
 
         blocksize = int(native_sr * 0.05)
@@ -872,7 +881,7 @@ def main() -> None:
     if mode == "offline":
         if not target_audio:
             print("[Error] Offline mode requires an audio file argument. Example:")
-            print("  python clean_model_src/scripts/run_streaming_cli.py path/to/speech.wav --verbose")
+            print("  python src/scripts/run_streaming_cli.py path/to/speech.wav --verbose")
             sys.exit(1)
         app.run_offline_file(target_audio)
     elif mode == "streaming":
