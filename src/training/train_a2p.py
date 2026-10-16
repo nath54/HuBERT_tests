@@ -26,7 +26,7 @@ from src.model_config import ModelConfig, ModelA2PConfig
 from src.model1_a2p import Model_A2P
 from src.weights_manager import WeightsManager
 from src.training.train_logger import TrainLogger
-from src.training.dataset import NaVoxAudioDataset, NaVoxCollator
+from src.training.dataset import NaVoxAudioDataset, NaVoxCollator, MultilingualWeightedSampler
 from src.tokenizers import PhonemeTokenizer, RomanCharTokenizer
 
 
@@ -94,10 +94,25 @@ class NaVoxAcousticTrainer:
             space_id=self.model_config.a2p.space_id,
         )
 
+        # Balanced Multilingual Samplers (35% French, 25% English, 20% Spanish, 20% Italian)
+        lang_weights = {"FR": 0.35, "EN": 0.25, "ES": 0.20, "IT": 0.20}
+        self.sampler: MultilingualWeightedSampler = MultilingualWeightedSampler(
+            samples=self.train_dataset.samples,
+            language_weights=lang_weights,
+            seed=42,
+        )
+        self.logger.log(f"   • Balanced Multilingual Training Sampler Active: {lang_weights}")
+
+        val_sampler: MultilingualWeightedSampler = MultilingualWeightedSampler(
+            samples=self.val_dataset.samples,
+            language_weights={"FR": 0.25, "EN": 0.25, "ES": 0.25, "IT": 0.25},
+            seed=42,
+        )
+
         self.train_loader: DataLoader = DataLoader(
             self.train_dataset,
             batch_size=args.batch_size,
-            shuffle=True,
+            sampler=self.sampler,
             num_workers=args.num_workers,
             collate_fn=self.collator,
             pin_memory=True,
@@ -105,24 +120,59 @@ class NaVoxAcousticTrainer:
         self.val_loader: DataLoader = DataLoader(
             self.val_dataset,
             batch_size=args.batch_size,
-            shuffle=False,
+            sampler=val_sampler,
             num_workers=args.num_workers,
             collate_fn=self.collator,
         )
 
         # 6. Optimizer & LR Scheduler
-        self.optimizer: torch.optim.AdamW = torch.optim.AdamW(
-            self.model.parameters(),
-            lr=args.lr,
-            weight_decay=args.weight_decay,
-            betas=(0.9, 0.98),
-            eps=1e-8,
-        )
+        if getattr(args, "optimizer", "adafactor").lower() == "adafactor":
+            from transformers.optimization import Adafactor
+            self.logger.log("⚡ Optimizer: Adafactor (Factored 2nd moments, < 0.5 GB state memory)")
+            self.optimizer = Adafactor(
+                self.model.parameters(),
+                lr=args.lr,
+                eps=(1e-30, 1e-3),
+                clip_threshold=args.max_grad_norm,
+                decay_rate=-0.8,
+                beta1=None,
+                weight_decay=args.weight_decay,
+                relative_step=False,
+                scale_parameter=False,
+                warmup_init=False,
+            )
+        else:
+            self.logger.log("⚡ Optimizer: AdamW")
+            self.optimizer = torch.optim.AdamW(
+                self.model.parameters(),
+                lr=args.lr,
+                weight_decay=args.weight_decay,
+                betas=(0.9, 0.98),
+                eps=1e-8,
+            )
+
+        total_opt_steps = max(1, args.max_steps // args.grad_accum)
+        warmup_opt_steps = max(1, args.warmup_steps // args.grad_accum)
         self.scheduler = get_cosine_schedule_with_warmup(
             self.optimizer,
-            num_warmup_steps=args.warmup_steps,
-            num_training_steps=args.max_steps,
+            num_warmup_steps=warmup_opt_steps,
+            num_training_steps=total_opt_steps,
         )
+
+        # Stop time handling
+        self.stop_timestamp: Optional[float] = None
+        if getattr(args, "max_hours", None) is not None and args.max_hours > 0:
+            self.stop_timestamp = time.time() + args.max_hours * 3600.0
+            self.logger.log(f"⏰ Auto-stop enabled: will stop in {args.max_hours:.2f} hours")
+        elif getattr(args, "stop_time", None) is not None:
+            now = datetime.datetime.now()
+            target_hour, target_min = map(int, args.stop_time.split(":"))
+            target_dt = now.replace(hour=target_hour, minute=target_min, second=0, microsecond=0)
+            if target_dt <= now:
+                target_dt += datetime.timedelta(days=1)
+            self.stop_timestamp = target_dt.timestamp()
+            hours_remaining = (self.stop_timestamp - time.time()) / 3600.0
+            self.logger.log(f"⏰ Target stop time configured: {target_dt.strftime('%Y-%m-%d %H:%M:%S')} ({hours_remaining:.2f} hours from now)")
 
         # Best metrics tracking
         self.best_per: float = 999.0
@@ -137,7 +187,7 @@ class NaVoxAcousticTrainer:
 
         self.logger.log(f"🔄 Warm-starting from: `{ckpt_path}`")
         ckpt = torch.load(ckpt_path, map_location=self.device, weights_only=False)
-        sd = ckpt.get("model_state_dict", ckpt.get("state_dict", ckpt))
+        sd = ckpt.get("acoustic_state_dict", ckpt.get("model_state_dict", ckpt.get("state_dict", ckpt)))
 
         # Filter out mismatched tensor sizes
         model_sd = self.model.state_dict()
@@ -164,6 +214,13 @@ class NaVoxAcousticTrainer:
         train_iter = iter(self.train_loader)
 
         while self.step < self.args.max_steps:
+            if self.stop_timestamp is not None and time.time() >= self.stop_timestamp:
+                self.logger.log(
+                    f"⏰ Target stop time reached ({datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')})! "
+                    f"Wrapping up pilot training cleanly at step {self.step}..."
+                )
+                break
+
             self.step += 1
 
             # Fetch next batch (cycle endlessly)
@@ -222,11 +279,14 @@ class NaVoxAcousticTrainer:
                 })
 
             # Validation Step
-            if self.step % self.args.eval_every == 0 or self.step == self.args.max_steps:
+            if self.step % self.args.eval_every == 0:
                 self.evaluate()
                 self.model.train()
 
-        self.logger.log("🎉 Training Completed Successfully!")
+        # Run final evaluation after training finishes or reaches stop_time
+        if self.step % self.args.eval_every != 0:
+            self.evaluate()
+        self.logger.log("🎉 Pilot Training Completed Successfully!")
         self.logger.close()
 
     @torch.no_grad()
@@ -348,25 +408,28 @@ class NaVoxAcousticTrainer:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Official NaVox A2P Acoustic Training Suite")
     parser.add_argument("--tier", type=str, default="ultra", choices=["tiny", "small", "base", "large", "ultra"])
+    parser.add_argument("--optimizer", type=str, default="adafactor", choices=["adafactor", "adamw"], help="Optimizer type")
     parser.add_argument("--train_manifest", type=str, default="data/full_multilingual_train_400k.json")
     parser.add_argument("--val_manifest", type=str, default="data/full_multilingual_val_4k.json")
-    parser.add_argument("--output_dir", type=str, default="checkpoints/navox_v1.0_ultra")
-    parser.add_argument("--log_dir", type=str, default="logs/navox_training")
+    parser.add_argument("--output_dir", type=str, default="checkpoints/navox_ultra_full")
+    parser.add_argument("--log_dir", type=str, default="logs/navox_ultra_full")
     parser.add_argument("--run_name", type=str, default=None)
-    parser.add_argument("--warm_start", type=str, default=None)
-    parser.add_argument("--batch_size", type=int, default=4)
-    parser.add_argument("--grad_accum", type=int, default=8)
-    parser.add_argument("--lr", type=float, default=1.5e-4)
+    parser.add_argument("--warm_start", type=str, default="checkpoints/navox_ultra_pilot/best_navox_ultra_a2p.pt")
+    parser.add_argument("--batch_size", type=int, default=2)
+    parser.add_argument("--grad_accum", type=int, default=4)
+    parser.add_argument("--lr", type=float, default=8.0e-5)
     parser.add_argument("--weight_decay", type=float, default=1e-4)
-    parser.add_argument("--warmup_steps", type=int, default=1000)
-    parser.add_argument("--max_steps", type=int, default=50000)
+    parser.add_argument("--warmup_steps", type=int, default=500)
+    parser.add_argument("--max_steps", type=int, default=80000)
     parser.add_argument("--max_duration", type=float, default=14.0)
     parser.add_argument("--max_grad_norm", type=float, default=1.0)
     parser.add_argument("--num_workers", type=int, default=4)
-    parser.add_argument("--log_every", type=int, default=10)
+    parser.add_argument("--log_every", type=int, default=20)
     parser.add_argument("--eval_every", type=int, default=1000)
-    parser.add_argument("--max_val_batches", type=int, default=50)
+    parser.add_argument("--max_val_batches", type=int, default=60)
     parser.add_argument("--gradient_checkpointing", action="store_true", default=True)
+    parser.add_argument("--stop_time", type=str, default=None, help="Target stop time in HH:MM (e.g. '10:00'). Gracefully finishes at that time.")
+    parser.add_argument("--max_hours", type=float, default=None, help="Maximum training wall-clock hours before stopping cleanly.")
 
     args = parser.parse_args()
     trainer = NaVoxAcousticTrainer(args)

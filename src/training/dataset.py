@@ -26,6 +26,40 @@ class AudioUtterance:
     dataset_name: str = "generic"
 
 
+_GLOBAL_PHONEME_CACHE: Dict[str, str] = {}
+_GLOBAL_ESPEAK_PHONEMIZER = None
+
+def get_cached_phonemes(text: str, lang: str = "en") -> str:
+    """Fast in-memory cached multilingual text-to-phoneme extraction."""
+    global _GLOBAL_ESPEAK_PHONEMIZER
+    if not text:
+        return ""
+    key = f"{lang.lower()}:{text}"
+    if key in _GLOBAL_PHONEME_CACHE:
+        return _GLOBAL_PHONEME_CACHE[key]
+
+    if _GLOBAL_ESPEAK_PHONEMIZER is None:
+        try:
+            from piper.voice import EspeakPhonemizer
+            _GLOBAL_ESPEAK_PHONEMIZER = EspeakPhonemizer()
+        except Exception:
+            _GLOBAL_ESPEAK_PHONEMIZER = False
+
+    if _GLOBAL_ESPEAK_PHONEMIZER:
+        try:
+            espeak_lang = {"en": "en-us", "fr": "fr", "es": "es", "it": "it", "de": "de"}.get(lang.lower(), "en-us")
+            sentences = _GLOBAL_ESPEAK_PHONEMIZER.phonemize(espeak_lang, text)
+            phonemes = "".join("".join(s) for s in sentences)
+        except Exception:
+            phonemes = text
+    else:
+        phonemes = text
+
+    if len(_GLOBAL_PHONEME_CACHE) < 100000:
+        _GLOBAL_PHONEME_CACHE[key] = phonemes
+    return phonemes
+
+
 class NaVoxAudioDataset(Dataset):
     """
     Multilingual speech dataset reading paired audio files, phoneme strings, and text transcripts.
@@ -62,9 +96,9 @@ class NaVoxAudioDataset(Dataset):
 
         for item in data:
             dur = float(item.get("duration", 0.0))
-            if dur < min_duration or dur > max_duration:
+            if dur > 0.0 and (dur < min_duration or dur > max_duration):
                 continue
-            
+
             # Extract utterance fields
             utt = AudioUtterance(
                 audio_filepath=item.get("audio_filepath", item.get("audio_path", "")),
@@ -93,6 +127,16 @@ class NaVoxAudioDataset(Dataset):
 
         wav = waveform.squeeze(0)
 
+        # Enforce max duration cutoff to prevent OOM
+        max_samples = int(self.max_duration * self.sample_rate)
+        if wav.shape[0] > max_samples:
+            wav = wav[:max_samples]
+
+        # On-the-fly phonemization if phonemes are not pre-stored
+        ph_str = utt.phonemes
+        if not ph_str and utt.text:
+            ph_str = get_cached_phonemes(utt.text, utt.language)
+
         # Ambient Noise & Silence Augmentation for Live Mic Robustness:
         # Prepend 0.1s to 0.4s of low-level ambient noise/silence to teach the model not to hallucinate on pauses
         if random.random() < 0.4:
@@ -106,7 +150,7 @@ class NaVoxAudioDataset(Dataset):
         return {
             "waveform": wav,  # [T_samples]
             "text": utt.text,
-            "phonemes": utt.phonemes,
+            "phonemes": ph_str,
             "language": utt.language,
             "duration": utt.duration,
         }
@@ -166,3 +210,51 @@ class NaVoxCollator:
             "phoneme_strings": [item["phonemes"] for item in batch],
             "languages": [item["language"] for item in batch],
         }
+
+
+class MultilingualWeightedSampler(Sampler[int]):
+    """
+    Balanced / Weighted Sampler across multilingual speech datasets.
+    Draws sample indices according to specified target language weights (e.g. FR: 0.35, EN: 0.25, ES: 0.20, IT: 0.20).
+    """
+
+    def __init__(
+        self,
+        samples: List[AudioUtterance],
+        language_weights: Optional[Dict[str, float]] = None,
+        num_samples: Optional[int] = None,
+        seed: int = 42,
+    ) -> None:
+        super().__init__(None)
+        self.samples = samples
+        self.seed = seed
+        self.rng = random.Random(seed)
+
+        # Map indices by language (case-insensitive)
+        self.lang_indices: Dict[str, List[int]] = {}
+        for idx, utt in enumerate(samples):
+            lang = utt.language.upper()
+            if lang not in self.lang_indices:
+                self.lang_indices[lang] = []
+            self.lang_indices[lang].append(idx)
+
+        # Default weights: 35% French, 25% English, 20% Spanish, 20% Italian
+        default_weights = {"FR": 0.35, "EN": 0.25, "ES": 0.20, "IT": 0.20}
+        weights_in = language_weights or default_weights
+
+        self.langs: List[str] = [l for l in weights_in.keys() if l in self.lang_indices and len(self.lang_indices[l]) > 0]
+        raw_weights = [weights_in[l] for l in self.langs]
+        sum_w = sum(raw_weights)
+        self.probs = [w / sum_w for w in raw_weights]
+
+        self.num_samples = num_samples or len(samples)
+
+    def __iter__(self):
+        # Generate stream of language choices
+        sampled_langs = self.rng.choices(self.langs, weights=self.probs, k=self.num_samples)
+        for lang in sampled_langs:
+            idx = self.rng.choice(self.lang_indices[lang])
+            yield idx
+
+    def __len__(self) -> int:
+        return self.num_samples
