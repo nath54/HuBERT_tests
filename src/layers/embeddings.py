@@ -58,7 +58,7 @@ class ConvolutionalPositionalEmbedding(nn.Module):
         )
 
         # Weight normalization for numerical training stability
-        self.conv = nn.utils.weight_norm(self.conv, name="weight", dim=2)
+        self.conv = nn.utils.parametrizations.weight_norm(self.conv, name="weight", dim=2)
 
     def forward(self, x: Tensor) -> Tensor:
         """

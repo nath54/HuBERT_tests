@@ -75,11 +75,9 @@ class TFLiteExporter:
                 self.core = core_model
 
             def forward(self, x: Tensor) -> Tensor:
-                # Forward acoustic backbone: Tensor [1, T_frames, D_model]
-                enc_out = self.core.forward_encoder(x)
-                # Compute phoneme logits: Tensor [1, T_frames, 112]
-                logits = self.core.ctc_head(enc_out)
-                return logits
+                # Forward acoustic backbone to obtain composite phoneme logits: Tensor [1, T_frames, vocab_size]
+                out = self.core(x)
+                return out["logits"]
 
         wrapper = Model1A2PExportWrapper(model_a2p).to(model_a2p.get_device())
         wrapper.eval()

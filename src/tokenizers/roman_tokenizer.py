@@ -192,6 +192,11 @@ class RomanCharTokenizer:
 
         return "".join(chars).strip()
 
+    def decode_word(self, token_ids: List[int]) -> str:
+        """Decode a single word's token IDs into a clean character string."""
+        clean = [t for t in token_ids if t not in (self.pad_id, self.bos_id, self.eos_id, self.blank_id, self.eow_id)]
+        return "".join(self.id2char.get(t, "") for t in clean if t in self.id2char).strip()
+
     def decode_words(self, word_token_lists: List[List[int]]) -> str:
         """Decode word token sequences into cleanly spaced text, stripping whitespace per word."""
         decoded_words = []

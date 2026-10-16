@@ -31,4 +31,5 @@ results/librispeech_*.json
 *.onnx
 *.tflite
 clean_model_src/test_export_pixel10/
-
+diagnostic_report.md
+transcript.txt

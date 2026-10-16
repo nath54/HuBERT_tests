@@ -1,11 +1,12 @@
 """
 Dual-Threaded Streaming Speech Recognition Engine.
 Implements asynchronous parallel inference:
-- Thread 1 (Acoustic Worker): Consumes audio chunks, executes Model_A2P (Audio -> Phonemes),
+- Thread 1 (Acoustic Worker): Consumes audio chunks, executes Model_A2P (Audio -> Phonemes)
+  with sliding acoustic context and energy-based VAD, emits recognized phonemes in real-time,
   and pushes word-segmented phonemes across space boundaries (token 8) into a thread-safe queue.
 - Thread 2 (Decoder Worker): Consumes phoneme-sliced words from the queue, executes
-  Model_PE (Phonemes -> Word Latents z_word) and Model_WD (Word Latents -> Orthographic Text),
-  emitting real-time word tokens with minimal latency.
+  Model_PE (Phonemes -> Word Latents z_word) and Model_WD (Word Latents -> Orthographic Text)
+  with Trie dictionary constraints, emitting real-time word tokens with minimal latency.
 """
 
 # Import Modules
@@ -13,11 +14,13 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 import threading
 import time
 import torch
+import torch.nn.functional as F
 from torch import Tensor
 
 from ..model1_a2p import Model_A2P
 from ..model2_pe import Model_PE
 from ..model3_wd import Model_WD
+from ..tokenizers.phoneme_tokenizer import PhonemeTokenizer
 from .stream_buffer import AudioCircularBuffer, PhonemeWordQueue
 
 
@@ -33,12 +36,20 @@ class DualThreadStreamingASR:
         model_pe: Model_PE,
         model_wd: Model_WD,
         chunk_duration_sec: float = 0.5,
+        context_duration_sec: float = 1.0,
         sample_rate: int = 16000,
         word_callback: Optional[Callable[[str], None]] = None,
+        phoneme_callback: Optional[Callable[[str], None]] = None,
+        trie: Optional[Any] = None,
+        beam_width: int = 1,
+        vad_threshold: float = 0.005,
         min_phonemes_per_word: int = 1,
         max_phonemes_per_word: int = 32,
         space_id: int = 8,
-        blank_id: int = 0,
+        blank_id: int = 1,
+        pad_id: int = 0,
+        blank_penalty: float = 2.6,
+        space_bonus: float = 0.35,
         allowed_phoneme_range: Optional[Tuple[int, int]] = (1, 111),
         max_queue_size: int = 500,
     ) -> None:
@@ -49,13 +60,21 @@ class DualThreadStreamingASR:
             model_a2p (Model_A2P): Part 1 Acoustic-to-Phoneme model.
             model_pe (Model_PE): Part 2 Phoneme-to-Embedding encoder.
             model_wd (Model_WD): Part 3 Word Decoder.
-            chunk_duration_sec (float): Duration in seconds of audio chunks processed per acoustic step.
+            chunk_duration_sec (float): Duration in seconds of audio chunks processed per acoustic step (default: 0.5s).
+            context_duration_sec (float): Duration in seconds of past audio context kept for Conformer receptive field (default: 1.0s).
             sample_rate (int): Input audio sampling rate (default: 16000 Hz).
-            word_callback (Optional[Callable[[str], None]]): Optional callback invoked when a word is decoded.
+            word_callback (Optional[Callable[[str], None]]): Callback invoked when an orthographic word is decoded.
+            phoneme_callback (Optional[Callable[[str], None]]): Callback invoked when phoneme tokens or boundaries are recognized.
+            trie (Optional[Any]): Vocabulary Trie prefix tree for dictionary-constrained decoding.
+            beam_width (int): Beam width for character decoder (1 = greedy rollout).
+            vad_threshold (float): Baseline RMS energy threshold for Voice Activity Detection silence gating.
             min_phonemes_per_word (int): Minimum phonemes required to emit a word (default: 1).
             max_phonemes_per_word (int): Maximum phoneme length passed to Model 2 (default: 32).
             space_id (int): Phoneme token ID representing acoustic word boundaries (default: 8).
-            blank_id (int): CTC blank token ID to ignore (default: 0).
+            blank_id (int): CTC blank token ID (default: 1).
+            pad_id (int): Batch padding token ID (default: 0).
+            blank_penalty (float): CTC blank penalty for acoustic decoding.
+            space_bonus (float): CTC space token bonus for acoustic decoding.
             allowed_phoneme_range (Optional[Tuple[int, int]]): Valid phoneme token range [min, max] (default: (1, 111)).
             max_queue_size (int): Max queued words before blocking acoustic thread (default: 500).
         """
@@ -64,24 +83,34 @@ class DualThreadStreamingASR:
         self.model_pe: Model_PE = model_pe
         self.model_wd: Model_WD = model_wd
 
+        # Tokenizers & Vocabulary Trie
+        self.phoneme_tokenizer: PhonemeTokenizer = PhonemeTokenizer()
+        self.trie: Optional[Any] = trie
+        self.beam_width: int = max(1, beam_width)
+
         # Audio stream settings
         self.sample_rate: int = sample_rate
-        # Chunk size in samples: int, Role: acoustic window length, Rationale: 0.5s chunk at 16kHz = 8000 samples
         self.chunk_size_samples: int = int(chunk_duration_sec * sample_rate)
+        self.context_size_samples: int = int(context_duration_sec * sample_rate)
+        self.vad_threshold: float = vad_threshold
 
         # Phoneme segmentation parametrization
         self.min_phonemes_per_word: int = min_phonemes_per_word
         self.max_phonemes_per_word: int = max_phonemes_per_word
         self.space_id: int = space_id
         self.blank_id: int = blank_id
+        self.pad_id: int = pad_id
+        self.blank_penalty: float = blank_penalty
+        self.space_bonus: float = space_bonus
         self.allowed_phoneme_range: Optional[Tuple[int, int]] = allowed_phoneme_range
 
         # Thread-safe inter-thread communication buffers
         self.audio_buffer: AudioCircularBuffer = AudioCircularBuffer(capacity_samples=sample_rate * 60)
         self.word_queue: PhonemeWordQueue = PhonemeWordQueue(maxsize=max_queue_size)
 
-        # Callback for real-time word streaming
+        # Callbacks for real-time live streaming
         self.word_callback: Optional[Callable[[str], None]] = word_callback
+        self.phoneme_callback: Optional[Callable[[str], None]] = phoneme_callback
 
         # Internal state
         self._running: bool = False
@@ -98,6 +127,25 @@ class DualThreadStreamingASR:
         # Accumulated decoded transcription tokens
         self._decoded_words: List[str] = []
         self._words_lock: threading.Lock = threading.Lock()
+
+    def calibrate_noise_floor(self, calibration_samples: Tensor) -> float:
+        """
+        Calibrates the ambient noise floor and adjusts the dynamic VAD threshold.
+
+        Args:
+            calibration_samples (Tensor): 1D float tensor of ambient silence samples.
+
+        Returns:
+            float: Calibrated VAD threshold.
+        """
+        if calibration_samples.numel() == 0:
+            return self.vad_threshold
+
+        clean_samples = calibration_samples - torch.mean(calibration_samples)
+        noise_rms = float(torch.sqrt(torch.mean(clean_samples ** 2)).item())
+        # Set dynamic threshold at 2.8x ambient noise RMS with safe baseline of 0.005
+        self.vad_threshold = max(0.005, noise_rms * 2.8)
+        return self.vad_threshold
 
     def start(self) -> None:
         """
@@ -188,18 +236,25 @@ class DualThreadStreamingASR:
         return self._running
 
     # -------------------------------------------------------------------------
-    # Worker Thread 1: Model 1 Acoustic Processing
+    # Worker Thread 1: Model 1 Acoustic Processing with Sliding Context
     # -------------------------------------------------------------------------
     def _acoustic_thread_loop(self) -> None:
         """
         Acoustic worker thread executing Model_A2P on audio stream chunks.
-        Slices phonemes into words at space token (token 8) and forwards to queue.
+        Applies past sliding window context for Conformer receptive field,
+        segments phonemes at space boundaries, and pushes to word queue.
         """
         self.model_a2p.eval()
         dev_a2p: torch.device = self.model_a2p.get_device()
 
+        # Acoustic past context buffer: Tensor [T_context]
+        past_context: Tensor = torch.zeros(0, dtype=torch.float32)
+
         # Accumulated intra-word phoneme tokens waiting for space delimiter: List[int]
         current_word_phonemes: List[int] = []
+
+        # CTC state: last emitted token ID to prevent duplicate collapse across chunk boundaries
+        last_ctc_token_id: int = self.blank_id
 
         while self._running:
             # Check available audio in buffer
@@ -225,60 +280,117 @@ class DualThreadStreamingASR:
             if audio_raw.shape[0] < 400:
                 continue
 
+            # Remove DC bias
+            audio_clean = audio_raw - torch.mean(audio_raw)
+
             # --- Energy-Based Voice Activity Detection (VAD) / Silence Gate ---
             # Suppresses false phoneme hallucinations during microphone silence/pauses
-            rms_energy: float = float(torch.sqrt(torch.mean(audio_raw ** 2)).item())
-            if rms_energy < 0.003:  # Silence noise threshold
-                # If we were tracking a word and silence occurs, finalize that word
+            rms_energy: float = float(torch.sqrt(torch.mean(audio_clean ** 2)).item())
+            if rms_energy < self.vad_threshold:
+                # Silence frame: if we had an ongoing word, finalize and push to decoder
                 if len(current_word_phonemes) >= self.min_phonemes_per_word:
                     clipped: List[int] = current_word_phonemes[: self.max_phonemes_per_word]
                     self.word_queue.push_word(list(clipped))
+                    if self.phoneme_callback is not None:
+                        try:
+                            self.phoneme_callback(" | ")
+                        except Exception:
+                            pass
                 current_word_phonemes.clear()
+                last_ctc_token_id = self.blank_id
+                # Update past context with silence window to preserve smooth transitions
+                if self.context_size_samples > 0:
+                    past_context = torch.cat([past_context, audio_clean], dim=0)[-self.context_size_samples:]
                 continue
 
-            # Audio tensor: Tensor [1, T_samples], Role: batched audio for Model 1, Rationale: batch dimension
-            audio_tensor: Tensor = audio_raw.unsqueeze(0).to(dev_a2p)
+            # Assemble sliding context window: [past_context + new_audio]
+            if self.context_size_samples > 0:
+                window_audio: Tensor = torch.cat([past_context, audio_clean], dim=0)
+                past_context = window_audio[-self.context_size_samples:]
+                past_samples_count: int = window_audio.shape[0] - audio_clean.shape[0]
+            else:
+                window_audio = audio_clean
+                past_samples_count = 0
+
+            # Forward through Model 1 on target device
+            audio_tensor: Tensor = window_audio.unsqueeze(0).to(dev_a2p)
 
             t_a2p_start = time.perf_counter()
             with torch.no_grad():
-                # Inference through Model 1
-                a2p_out = self.model_a2p.forward_inference(audio_tensor)
-                # Predicted collapsed phoneme token IDs: List[int]
-                pred_tokens: List[int] = a2p_out["pred_tokens"][0] if a2p_out["pred_tokens"] else []
+                a2p_out = self.model_a2p.forward(audio_tensor)
+                logits = a2p_out["logits"][0]  # [T_frames, 112]
+
+                # Slicing: only process newly arrived frames corresponding to the new chunk
+                # CNN stride is 320 samples per frame
+                past_frames: int = past_samples_count // 320
+                new_logits = logits[past_frames:].clone()
+
+                # Apply calibration adjustments
+                if self.blank_penalty > 0.0:
+                    new_logits[:, self.blank_id] -= self.blank_penalty
+                if self.space_bonus != 0.0:
+                    new_logits[:, self.space_id] += self.space_bonus
+
+                # Frame-by-frame CTC argmax
+                frame_preds: List[int] = new_logits.argmax(dim=-1).cpu().tolist()
+
             self._total_acoustic_time += (time.perf_counter() - t_a2p_start)
             self._chunks_processed += 1
 
-            # Segment phoneme tokens into words at space token
-            for tok in pred_tokens:
+            # Process frame predictions with cross-chunk CTC collapse
+            for tok in frame_preds:
+                if tok == last_ctc_token_id:
+                    continue
+                last_ctc_token_id = tok
+
+                if tok in (self.blank_id, self.pad_id):
+                    continue
+
                 if tok == self.space_id:
-                    # Space boundary encountered: push completed word to queue if valid length
+                    # Space boundary: push completed word to queue
                     if len(current_word_phonemes) >= self.min_phonemes_per_word:
-                        clipped: List[int] = current_word_phonemes[: self.max_phonemes_per_word]
-                        self.word_queue.push_word(list(clipped))
+                        clipped_word: List[int] = current_word_phonemes[: self.max_phonemes_per_word]
+                        self.word_queue.push_word(list(clipped_word))
                     current_word_phonemes.clear()
-                elif tok != self.blank_id:
-                    # Verify phoneme is within allowed range
-                    if self.allowed_phoneme_range is None or (
-                        self.allowed_phoneme_range[0] <= tok <= self.allowed_phoneme_range[1]
-                    ):
-                        current_word_phonemes.append(tok)
-                        # Avoid unbounded phoneme buffers
-                        if len(current_word_phonemes) >= self.max_phonemes_per_word:
-                            self.word_queue.push_word(list(current_word_phonemes))
-                            current_word_phonemes.clear()
+
+                    # Trigger phoneme callback for space boundary
+                    if self.phoneme_callback is not None:
+                        try:
+                            self.phoneme_callback(" | ")
+                        except Exception as e:
+                            pass
+
+                elif self.allowed_phoneme_range is None or (
+                    self.allowed_phoneme_range[0] <= tok <= self.allowed_phoneme_range[1]
+                ):
+                    current_word_phonemes.append(tok)
+
+                    # Trigger phoneme callback for recognized IPA symbol
+                    if self.phoneme_callback is not None:
+                        try:
+                            ph_sym: str = self.phoneme_tokenizer.id_to_token.get(tok, str(tok))
+                            self.phoneme_callback(f"{ph_sym} ")
+                        except Exception as e:
+                            pass
+
+                    # Prevent unbounded intra-word buffers
+                    if len(current_word_phonemes) >= self.max_phonemes_per_word:
+                        self.word_queue.push_word(list(current_word_phonemes))
+                        current_word_phonemes.clear()
 
         # Flush any trailing phoneme word upon stream completion
         if len(current_word_phonemes) >= self.min_phonemes_per_word:
-            clipped = current_word_phonemes[: self.max_phonemes_per_word]
-            self.word_queue.push_word(list(clipped))
+            clipped_trailing: List[int] = current_word_phonemes[: self.max_phonemes_per_word]
+            self.word_queue.push_word(list(clipped_trailing))
             current_word_phonemes.clear()
 
     # -------------------------------------------------------------------------
-    # Worker Thread 2: Models 2 & 3 Linguistic Decoding
+    # Worker Thread 2: Models 2 & 3 Linguistic Decoding with Trie
     # -------------------------------------------------------------------------
     def _decoder_thread_loop(self) -> None:
         """
         Decoder worker thread consuming phoneme words and executing Model_PE + Model_WD.
+        Applies optional Trie dictionary constraint and beam search.
         """
         self.model_pe.eval()
         self.model_wd.eval()
@@ -302,22 +414,27 @@ class DualThreadStreamingASR:
                 z_word: Tensor = self.model_pe.forward_inference([word_phonemes]).to(dev_wd)
 
                 # Model 3 expects z_words [B, L, 512] -> returns List[str] of decoded words
-                decoded_words: List[str] = self.model_wd.forward_inference(z_word)
+                decoded_words: List[str] = self.model_wd.forward_inference(
+                    z_word,
+                    trie=self.trie,
+                    beam_width=self.beam_width,
+                )
 
             self._total_decoder_time += (time.perf_counter() - t_dec_start)
             self._words_decoded += 1
 
             if decoded_words:
-                emitted_word: str = decoded_words[0]
-                with self._words_lock:
-                    self._decoded_words.append(emitted_word)
+                emitted_word: str = decoded_words[0].strip()
+                if emitted_word:
+                    with self._words_lock:
+                        self._decoded_words.append(emitted_word)
 
-                # Trigger user callback if provided
-                if self.word_callback is not None:
-                    try:
-                        self.word_callback(emitted_word)
-                    except Exception as e:
-                        print(f"[DualThreadStreamingASR] Callback exception: {e}")
+                    # Trigger user callback if provided
+                    if self.word_callback is not None:
+                        try:
+                            self.word_callback(emitted_word)
+                        except Exception as e:
+                            print(f"[DualThreadStreamingASR] Callback exception: {e}")
 
     def get_performance_metrics(self) -> Dict[str, Any]:
         """

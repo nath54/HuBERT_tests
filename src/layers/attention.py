@@ -253,7 +253,7 @@ class AttentionPooling(nn.Module):
 
         # Learned Query Projection: projects D -> 1 score per token
         # Parameter: [D, 1], Type: torch.float32, Role: scores token importance
-        self.query_proj: nn.Linear = nn.Linear(embed_dim, 1, bias=False)
+        self.query: nn.Linear = nn.Linear(embed_dim, 1, bias=False)
 
     def forward(self, x: Tensor, pad_mask: Optional[Tensor] = None) -> Tensor:
         """
@@ -274,7 +274,7 @@ class AttentionPooling(nn.Module):
                     Role: Unified word latent vector z_word.
         """
         # Compute raw alignment scores: [B, K, 1] -> [B, K]
-        scores: Tensor = self.query_proj(x).squeeze(-1)
+        scores: Tensor = self.query(x).squeeze(-1)
 
         # Mask padding tokens with large negative value
         if pad_mask is not None:

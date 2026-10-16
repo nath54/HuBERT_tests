@@ -152,6 +152,11 @@ class Model(nn.Module):
         self,
         audio: Tensor,
         audio_lengths: Optional[Tensor] = None,
+        trie: Optional[Any] = None,
+        beam_width: int = 1,
+        blank_penalty: float = 2.6,
+        space_bonus: float = 0.35,
+        **kwargs,
     ) -> Dict[str, Any]:
         """
         Clean, Synchronous End-to-End Inference Forward Pass.
@@ -160,6 +165,10 @@ class Model(nn.Module):
         Args:
             audio (Tensor): Raw 16kHz speech waveform [B, T_samples] or [1, T_samples].
             audio_lengths (Optional[Tensor]): Unpadded audio sample lengths.
+            trie (Optional[Any]): Vocabulary Trie prefix tree for dictionary-constrained decoding.
+            beam_width (int): Beam search width for Model 3 character decoder (1 = greedy).
+            blank_penalty (float): Model 1 CTC blank penalty (default: 2.6).
+            space_bonus (float): Model 1 CTC space token bonus (default: 0.35).
 
         Returns:
             Dict[str, Any]:
@@ -174,7 +183,11 @@ class Model(nn.Module):
         audio_dev: Tensor = audio.to(dev_a2p)
 
         # 1. Model 1 (Audio -> Phonemes with spaces)
-        a2p_out = self.model_a2p.forward_inference(audio_dev, audio_lengths)
+        a2p_out = self.model_a2p.forward_inference(
+            audio_dev,
+            blank_penalty=blank_penalty,
+            space_bonus=space_bonus,
+        )
         batch_word_slices = a2p_out["word_slices"]
 
         # 2 & 3. Models 2 & 3 per utterance
@@ -192,7 +205,11 @@ class Model(nn.Module):
             z_words_wd = z_words.to(dev_wd)
 
             # Model 3: z_words -> Reconstructed text words
-            decoded_words: List[str] = self.model_wd.forward_inference(z_words_wd)
+            decoded_words: List[str] = self.model_wd.forward_inference(
+                z_words_wd,
+                trie=trie,
+                beam_width=beam_width,
+            )
             full_text: str = " ".join(decoded_words).strip()
             transcripts.append(full_text)
 
@@ -202,12 +219,24 @@ class Model(nn.Module):
             "word_slices": batch_word_slices,
         }
 
-    def transcribe(self, audio_input: Union[str, Tensor]) -> str:
+    def transcribe(
+        self,
+        audio_input: Union[str, Tensor],
+        trie: Optional[Any] = None,
+        beam_width: int = 1,
+        blank_penalty: float = 2.6,
+        space_bonus: float = 0.35,
+        **kwargs,
+    ) -> str:
         """
         Convenient, high-level speech-to-text transcription function.
 
         Args:
             audio_input (Union[str, Tensor]): File path to audio (wav/flac) or 1D/2D audio tensor.
+            trie (Optional[Any]): Vocabulary Trie prefix tree for dictionary constraint.
+            beam_width (int): Character beam search width (1 = greedy).
+            blank_penalty (float): Model 1 CTC blank penalty.
+            space_bonus (float): Model 1 CTC space token bonus.
 
         Returns:
             str: Decoded orthographic transcription text.
@@ -230,7 +259,14 @@ class Model(nn.Module):
             else:
                 audio_tensor = audio_input
 
-        res = self.forward_inference(audio_tensor)
+        res = self.forward_inference(
+            audio_tensor,
+            trie=trie,
+            beam_width=beam_width,
+            blank_penalty=blank_penalty,
+            space_bonus=space_bonus,
+            **kwargs,
+        )
         return res["transcripts"][0] if res["transcripts"] else ""
 
     def load_from_checkpoints(

@@ -21,6 +21,7 @@ import argparse
 import math
 import os
 import sys
+import threading
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 import numpy as np
@@ -43,6 +44,7 @@ from src import (
     DualThreadStreamingASR,
 )
 from src.layers.heads import LENGTH_INTERVALS
+from src.tokenizers.trie import WordTrie
 
 # Phoneme Vocabulary Inventory (112 tokens matching Phono-V8 vocabulary)
 PHONEME_VOCAB: List[str] = [
@@ -108,7 +110,15 @@ class InferenceDiagnosticAnalyzer:
         t_frames: int = probs.shape[0]
 
         macro_probs = F.softmax(macro_logits[0], dim=-1) if macro_logits is not None else None
-        b_probs = boundary_probs[0].squeeze(-1) if boundary_probs is not None else None
+        if boundary_probs is not None:
+            if boundary_probs.ndim == 3 and boundary_probs.shape[-1] == 3:
+                b_probs = F.softmax(boundary_probs[0], dim=-1)[:, 1]  # Space boundary probability
+            elif boundary_probs.ndim == 3 and boundary_probs.shape[-1] == 1:
+                b_probs = torch.sigmoid(boundary_probs[0].squeeze(-1))
+            else:
+                b_probs = boundary_probs[0].view(-1)
+        else:
+            b_probs = None
         draft_p = F.softmax(draft_logits[0], dim=-1) if draft_logits is not None else None
 
         records: List[Dict[str, Any]] = []
@@ -315,8 +325,25 @@ class StreamingCLIApp:
         self.unified_model: Optional[Model] = None
         self.streamer: Optional[DualThreadStreamingASR] = None
         self.analyzer: InferenceDiagnosticAnalyzer = InferenceDiagnosticAnalyzer()
+        self.trie: Optional[WordTrie] = None
 
-        self._words_printed: int = 0
+        # Load Vocabulary Trie if requested
+        trie_path = getattr(args, "trie_vocab", None)
+        if trie_path and os.path.isfile(trie_path):
+            try:
+                print(f"[Engine] Loading Vocabulary Trie from: {trie_path}...")
+                t_trie = time.perf_counter()
+                self.trie = WordTrie.from_vocab_file(trie_path)
+                print(f"  - Vocabulary Trie loaded successfully in {time.perf_counter() - t_trie:.2f}s.")
+            except Exception as e:
+                print(f"  - Warning: Failed to load Vocabulary Trie: {e}. Falling back to open rollout.")
+
+        # Real-time dual display tracking
+        self._live_phonemes: List[str] = []
+        self._live_words: List[str] = []
+        self._display_lock: threading.Lock = threading.Lock()
+        self._is_tty: bool = sys.stdout.isatty()
+        self._last_logged_word: Optional[str] = None
         self._start_time: float = 0.0
 
     @staticmethod
@@ -348,8 +375,12 @@ class StreamingCLIApp:
 
     def build_model(self) -> Model:
         """Builds, routes, loads checkpoints, and quantizes the unified Model."""
-        print("\n[Engine] Initializing Model Architecture & Routing...")
-        cfg = ModelConfig()
+        tier_name = getattr(self.args, "tier", "medium").lower()
+        print(f"\n[Engine] Initializing Model Architecture & Routing (Tier: {tier_name.upper()})...")
+        if hasattr(ModelConfig, tier_name):
+            cfg = getattr(ModelConfig, tier_name)()
+        else:
+            cfg = ModelConfig()
         cfg.device_model_a2p = self.args.device_a2p
         cfg.device_model_pe = self.args.device_pe
         cfg.device_model_wd = self.args.device_wd
@@ -389,17 +420,40 @@ class StreamingCLIApp:
         self.unified_model = model
         return model
 
+    def on_phoneme_emitted(self, phoneme_str: str) -> None:
+        """Callback for real-time phoneme streaming to terminal."""
+        with self._display_lock:
+            self._live_phonemes.append(phoneme_str)
+            self._render_live_display()
+
     def on_word_emitted(self, word: str) -> None:
         """Callback for real-time word streaming to terminal."""
         clean_word = word.strip()
         if not clean_word:
             return
-        if self._words_printed == 0:
-            sys.stdout.write(f"\r[Transcribing] » {clean_word}")
+        with self._display_lock:
+            self._live_words.append(clean_word)
+            self._render_live_display()
+
+    def _render_live_display(self) -> None:
+        """Renders simultaneous dual display: heard phonemes and transcribed words."""
+        ph_text = "".join(self._live_phonemes).strip()
+        wd_text = " ".join(self._live_words).strip()
+
+        # Display window capping to prevent awkward wrapping
+        max_width = 72
+        if len(ph_text) > max_width:
+            ph_text = "..." + ph_text[-(max_width - 3):]
+        if len(wd_text) > max_width:
+            wd_text = "..." + wd_text[-(max_width - 3):]
+
+        if self._is_tty:
+            sys.stdout.write(f"\r\033[K[Phonemes]     » {ph_text}\n\033[K[Transcribing] » {wd_text}\033[A")
+            sys.stdout.flush()
         else:
-            sys.stdout.write(f" {clean_word}")
-        sys.stdout.flush()
-        self._words_printed += 1
+            if self._live_words and self._live_words[-1] != self._last_logged_word:
+                self._last_logged_word = self._live_words[-1]
+                print(f"[Transcribing] » {' '.join(self._live_words)}", flush=True)
 
     def build_streamer(self) -> DualThreadStreamingASR:
         """Configures and returns the DualThreadStreamingASR runner."""
@@ -417,8 +471,15 @@ class StreamingCLIApp:
             model_pe=self.unified_model.model_pe,
             model_wd=self.unified_model.model_wd,
             chunk_duration_sec=self.args.chunk_duration_sec,
+            context_duration_sec=getattr(self.args, "context_duration_sec", 1.0),
             sample_rate=self.sample_rate,
             word_callback=self.on_word_emitted,
+            phoneme_callback=self.on_phoneme_emitted,
+            trie=self.trie,
+            beam_width=getattr(self.args, "beam_width", 1),
+            vad_threshold=getattr(self.args, "vad_threshold", 0.005),
+            blank_penalty=getattr(self.args, "blank_penalty", 2.6),
+            space_bonus=getattr(self.args, "space_bonus", 0.35),
             min_phonemes_per_word=self.args.min_phonemes_per_word,
             max_phonemes_per_word=self.args.max_phonemes_per_word,
             space_id=self.args.space_id,
@@ -462,7 +523,11 @@ class StreamingCLIApp:
         # One-pass forward inference with diagnostics
         t0 = time.perf_counter()
         with torch.no_grad():
-            a2p_out = self.unified_model.model_a2p.forward_inference(audio_tensor)
+            a2p_out = self.unified_model.model_a2p.forward_inference(
+                audio_tensor,
+                blank_penalty=getattr(self.args, "blank_penalty", 2.6),
+                space_bonus=getattr(self.args, "space_bonus", 0.35),
+            )
             word_slices = a2p_out["word_slices"][0] if a2p_out["word_slices"] else []
 
             t_a2p = time.perf_counter() - t0
@@ -472,7 +537,11 @@ class StreamingCLIApp:
             if word_slices:
                 z_words = self.unified_model.model_pe.forward_inference(word_slices)
                 z_words_wd = z_words.to(self.unified_model.model_wd.get_device())
-                decoded_words = self.unified_model.model_wd.forward_inference(z_words_wd)
+                decoded_words = self.unified_model.model_wd.forward_inference(
+                    z_words_wd,
+                    trie=self.trie,
+                    beam_width=getattr(self.args, "beam_width", 1),
+                )
             else:
                 decoded_words = []
             t_dec = time.perf_counter() - t_dec_start
@@ -548,6 +617,12 @@ class StreamingCLIApp:
         total_samples = audio_tensor.shape[0]
         total_sec = total_samples / float(self.sample_rate)
 
+        # Clear display states
+        with self._display_lock:
+            self._live_phonemes.clear()
+            self._live_words.clear()
+            self._last_logged_word = None
+
         streamer = self.build_streamer()
         streamer.start()
 
@@ -571,7 +646,7 @@ class StreamingCLIApp:
             self._finalize_stream()
 
     def run_microphone_stream(self) -> None:
-        """Captures audio live from microphone."""
+        """Captures audio live from microphone with ambient noise floor calibration."""
         try:
             import sounddevice as sd
         except ImportError:
@@ -592,15 +667,40 @@ class StreamingCLIApp:
         dev_info = sd.query_devices(dev_idx, kind="input")
         print(f"\n[Microphone] Device [{dev_idx if dev_idx is not None else 'DEFAULT'}]: {dev_info['name']}")
 
-        streamer = self.build_streamer()
-        streamer.start()
-
         native_sr = int(dev_info["default_samplerate"])
         needs_resample = native_sr != self.sample_rate
         resampler = None
         if needs_resample:
             import torchaudio.transforms as T
             resampler = T.Resample(orig_freq=native_sr, new_freq=self.sample_rate)
+
+        # Clear display states
+        with self._display_lock:
+            self._live_phonemes.clear()
+            self._live_words.clear()
+            self._last_logged_word = None
+
+        streamer = self.build_streamer()
+
+        # Ambient Room Noise Calibration
+        print("[Microphone] Calibrating ambient noise floor... Please keep quiet for 0.5s.")
+        cal_count = int(native_sr * 0.5)
+        cal_rec = sd.rec(cal_count, samplerate=native_sr, channels=1, device=dev_idx, dtype="float32")
+        sd.wait()
+        cal_t = torch.from_numpy(cal_rec[:, 0].copy()).float()
+        if needs_resample and resampler is not None:
+            cal_16k = resampler(cal_t.unsqueeze(0)).squeeze(0)
+        else:
+            cal_16k = cal_t
+
+        cal_clean = cal_16k - torch.mean(cal_16k)
+        noise_rms = float(torch.sqrt(torch.mean(cal_clean ** 2)).item())
+        noise_peak = float(torch.max(torch.abs(cal_clean)).item())
+        vad_thresh = streamer.calibrate_noise_floor(cal_clean)
+        print(f"[Microphone] Ambient Noise: RMS={noise_rms:.5f}, Peak={noise_peak:.5f} -> VAD Threshold={vad_thresh:.5f}")
+        print("[Microphone] Calibration complete. Ready!")
+
+        streamer.start()
 
         def audio_callback(indata: np.ndarray, frames: int, time_info: Any, status: Any) -> None:
             samples_t = torch.from_numpy(indata[:, 0].copy()).float()
@@ -609,15 +709,18 @@ class StreamingCLIApp:
             else:
                 samples_16k = samples_t
 
-            # Dynamic Microphone Auto-Gain:
-            # USB headsets often record at peak amplitude ~0.01 (-40 dB).
-            # Scales speech frames into nominal acoustic range without blowing out noise.
-            peak_val = float(torch.max(torch.abs(samples_16k)).item())
-            if peak_val > 0.003:  # Only boost if active signal above noise floor
-                scale = min(15.0, 0.45 / peak_val)
-                samples_16k = samples_16k * scale
+            # Remove DC offset
+            samples_clean = samples_16k - torch.mean(samples_16k)
+            block_rms = float(torch.sqrt(torch.mean(samples_clean ** 2)).item())
 
-            streamer.push_audio(samples_16k)
+            # Only apply speech auto-gain when signal energy is active speech
+            if block_rms >= vad_thresh:
+                peak_val = float(torch.max(torch.abs(samples_clean)).item())
+                if peak_val > 0.005:
+                    gain = min(10.0, 0.35 / peak_val)
+                    samples_clean = samples_clean * gain
+
+            streamer.push_audio(samples_clean)
 
         blocksize = int(native_sr * 0.05)
         print("\n" + "=" * 70)
@@ -644,6 +747,10 @@ class StreamingCLIApp:
         """Finalizes streaming inference."""
         if self.streamer is None:
             return
+
+        if self._is_tty:
+            sys.stdout.write("\n\n")
+            sys.stdout.flush()
 
         print("\n[Stream] Flushing remaining words...")
         final_text = self.streamer.finish_stream(timeout=5.0)
@@ -749,8 +856,44 @@ def build_arg_parser() -> argparse.ArgumentParser:
     inf_group.add_argument(
         "--chunk_duration_sec",
         type=float,
-        default=0.3,
+        default=0.5,
         help="Duration of streaming chunks in seconds (latency control)",
+    )
+    inf_group.add_argument(
+        "--context_duration_sec",
+        type=float,
+        default=1.0,
+        help="Duration of past audio context kept in seconds for acoustic receptive field",
+    )
+    inf_group.add_argument(
+        "--vad_threshold",
+        type=float,
+        default=0.005,
+        help="Base RMS energy threshold for Voice Activity Detection silence gating",
+    )
+    inf_group.add_argument(
+        "--blank_penalty",
+        type=float,
+        default=2.6,
+        help="Acoustic CTC blank penalty (suppresses non-emitting blank frames and surfaces fast monosyllables)",
+    )
+    inf_group.add_argument(
+        "--space_bonus",
+        type=float,
+        default=0.35,
+        help="Acoustic CTC space token bonus (encourages clean word boundaries)",
+    )
+    inf_group.add_argument(
+        "--trie_vocab",
+        type=str,
+        default=None,
+        help="Optional path to vocabulary JSON word list to build Trie prefix tree (default None for open multilingual vocabulary)",
+    )
+    inf_group.add_argument(
+        "--beam_width",
+        type=int,
+        default=1,
+        help="Character beam search width for Model 3 (1 = greedy argmax)",
     )
     inf_group.add_argument(
         "--min_phonemes_per_word",
@@ -785,8 +928,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     inf_group.add_argument(
         "--blank_id",
         type=int,
-        default=0,
-        help="CTC blank token ID to ignore",
+        default=1,
+        help="CTC blank token ID to ignore (default 1 for PhonemeTokenizer)",
     )
     inf_group.add_argument(
         "--queue_size",
@@ -797,6 +940,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     # 4. Hardware Device & Quantization Routing
     hw_group = parser.add_argument_group("Hardware & Quantization Routing")
+    hw_group.add_argument(
+        "--tier",
+        type=str,
+        default="medium",
+        choices=["tiny", "small", "base", "large", "ultra", "medium"],
+        help="Model architecture tier ('tiny', 'small', 'base', 'large', 'ultra', 'medium')",
+    )
     hw_group.add_argument(
         "--device_a2p",
         type=str,
